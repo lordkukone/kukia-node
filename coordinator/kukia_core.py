@@ -1,6 +1,13 @@
-"""KUKIA Core - coordinador: nodos, tareas, verificacion, ledger (SQLite)."""
-import hashlib, json, sqlite3, uuid, time, threading
+"""KUKIA Core - coordinador: nodos, tareas, verificacion REAL, ledger (SQLite).
+
+VERIFICACION (corregida): el Core NO confia en el hash del minero.
+El Core recalcula la tarea el mismo (trustless) y compara el resultado
+exacto. Tareas con aritmetica determinista (enteros exactos via float64
+con magnitudes acotadas) para que CPU y GPU den el MISMO numero.
+"""
+import hashlib, json, sqlite3, uuid, time
 from pathlib import Path
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -28,7 +35,8 @@ def schema():
                 "metrica TEXT, creado TEXT, fin TEXT, verificado INT DEFAULT 0, doble TEXT)")
     con.execute("CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY AUTOINCREMENT, "
                 "tarea_id TEXT, nodo_id TEXT, kuki REAL, motivo TEXT, ts TEXT)")
-    # migracion: anadir columna tops si la tabla es antigua
+    con.execute("CREATE TABLE IF NOT EXISTS registros(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "nombre TEXT, email TEXT, gpu TEXT, tops TEXT, ceder TEXT, ip TEXT, ts TEXT)")
     try:
         con.execute("ALTER TABLE nodos ADD COLUMN tops REAL DEFAULT 0")
     except Exception:
@@ -47,7 +55,39 @@ def genesis():
 
 genesis()
 
-app = FastAPI(title="KUKIA Core", version="0.1.0")
+# ============================================================
+#  VERIFICACION REAL (trustless): el Core recalcula la tarea
+# ============================================================
+
+def gen_matriz(n: int, seed: int) -> np.ndarray:
+    """Matriz determinista de enteros acotados (exacta en float64)."""
+    idx = np.arange(n, dtype=np.float64)
+    return (idx[:, None] * 31 + idx[None, :] * 17 + seed) % 97 - 48
+
+def computar_tarea(tipo: str, params: dict):
+    """Recalcula el resultado esperado en el propio Core (numpy, CPU)."""
+    if tipo == "checksum":
+        data = str(params.get("data", "kukia"))
+        return hashlib.sha256(data.encode()).hexdigest()
+    if tipo == "matriz":
+        n = int(params.get("n", 256))
+        seed = int(params.get("seed", 42))
+        a = gen_matriz(n, seed)
+        b = gen_matriz(n, seed + 1)
+        return str(int(round(float((a @ b).sum()))))
+    if tipo == "inferencia":
+        n = int(params.get("n", 64))
+        seed = int(params.get("seed", 7))
+        x = gen_matriz(n, seed)
+        k = np.array([[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]])
+        out = 0.0
+        for i in range(3):
+            for j in range(3):
+                out += float((x[i:n-2+i, j:n-2+j] * k[i, j]).sum())
+        return str(int(round(out)))
+    return None
+
+app = FastAPI(title="KUKIA Core", version="0.2.0")
 
 class NodoIn(BaseModel):
     nombre: str
@@ -56,7 +96,7 @@ class NodoIn(BaseModel):
     tops: float = 0.0    # potencia IA declarada (TOPS, valor oficial de la GPU)
 
 class TareaIn(BaseModel):
-    tipo: str      # 'checksum' | 'matriz' | 'inferencia' (local)
+    tipo: str      # 'checksum' | 'matriz' | 'inferencia'
     params: dict = {}
 
 def tier(vram: int) -> float:
@@ -77,6 +117,7 @@ def nodos():
 @app.post("/tareas/crear")
 def crear_tarea(t: TareaIn):
     tid = uuid.uuid4().hex[:12]
+    # los params llevan seed -> la tarea es reproducible/verificable
     con.execute("INSERT INTO tareas(id,tipo,params,estado,creado) VALUES(?,?,?,?,?)",
                 (tid, t.tipo, json.dumps(t.params), "queued", time.ctime()))
     con.commit()
@@ -84,7 +125,6 @@ def crear_tarea(t: TareaIn):
 
 @app.get("/tareas/pendiente")
 def pendiente(nodo_id: str):
-    # asigna la tarea mas antigua (mejora 7: heartbeat/estado)
     row = con.execute("SELECT id,tipo,params FROM tareas WHERE estado='queued' "
                       "ORDER BY creado LIMIT 1").fetchone()
     if not row:
@@ -94,31 +134,35 @@ def pendiente(nodo_id: str):
     return {"tarea": {"id": row["id"], "tipo": row["tipo"], "params": json.loads(row["params"])}}
 
 @app.post("/tareas/resultado")
-def resultado(tid: str, nodo_id: str, hash_res: str, metrica: str):
-    verif = hashlib.sha256(f"{tid}:{nodo_id}:{metrica}".encode()).hexdigest()  # verificacion reproducible
-    ok = hash_res == verif
+def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = ""):
+    """El Core recalcula la tarea y compara el RESULTADO EXACTO (trustless)."""
+    task = con.execute("SELECT * FROM tareas WHERE id=?", (tid,)).fetchone()
+    if not task:
+        raise HTTPException(404, "tarea no encontrada")
+    params = json.loads(task["params"])
+    esperado = computar_tarea(task["tipo"], params)
+    if esperado is None:
+        raise HTTPException(400, "tipo de tarea no soportado")
+    ok = str(metrica).strip() == str(esperado).strip()
     kuki = 0.0
     if ok:
         node = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
+        if not node:
+            raise HTTPException(404, "nodo no registrado")
         kuki = REWARD_BASE * node["tier"]
-        # recompensa + ledger (boom: la acunea de trabajo verificado)
         con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) "
                     "WHERE id=?", (nodo_id,))
-        # mejora 2: bonus referido cada 10 tareas
-        ok10 = node["tareas_ok"] and (node["tareas_ok"]+1) % 10 == 0
-        if ok10 and node["ref"]:
-            ref_node = con.execute("SELECT id FROM nodos WHERE nombre=?", (node["ref"],)).fetchone()
-            # se acredita al referidor (simplificado por nombre)
+        h = hashlib.sha256(f"{tid}:{nodo_id}:{metrica}".encode()).hexdigest()
         con.execute("UPDATE tareas SET estado='ok', hash=?, metrica=?, fin=?, verificado=1 WHERE id=?",
-                    (hash_res, metrica, time.ctime(), tid))
+                    (h, metrica, time.ctime(), tid))
         con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
                     (tid, nodo_id, kuki, "trabajo verificado", time.ctime()))
     else:
         con.execute("UPDATE tareas SET estado='fallo', fin=? WHERE id=?", (time.ctime(), tid))
         con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
-                    (tid, nodo_id, 0.0, "hash no verificado", time.ctime()))
+                    (tid, nodo_id, 0.0, "resultado incorrecto (recalculado por el Core)", time.ctime()))
     con.commit()
-    return {"ok": ok, "kuki": kuki, "expected": verif}
+    return {"ok": ok, "kuki": kuki, "esperado": esperado}
 
 @app.get("/ledger")
 def ledger():
@@ -134,6 +178,27 @@ def stats():
         "nodos": con.execute("SELECT COUNT(*) c FROM nodos").fetchone()["c"],
         "tareas_ok": con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"],
         "tareas_pend": con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='queued'").fetchone()["c"],
+        "registros": con.execute("SELECT COUNT(*) c FROM registros").fetchone()["c"],
     }
+
+class RegistroIn(BaseModel):
+    nombre: str
+    email: str
+    gpu: str = ""
+    tops: str = ""
+    ceder_potencia: str = ""
+    ref: str = ""
+
+@app.post("/registro")
+def registro(r: RegistroIn):
+    """Registro publico de la lista de espera (desde la web)."""
+    con.execute("INSERT INTO registros(nombre,email,gpu,tops,ceder,ip,ts) VALUES(?,?,?,?,?,?,?)",
+                (r.nombre, r.email, r.gpu, r.tops, r.ceder_potencia, r.ref, time.ctime()))
+    con.commit()
+    return {"ok": True, "mensaje": "Registrado. Te avisaremos al lanzamiento.", "posicion": con.execute("SELECT COUNT(*) c FROM registros").fetchone()["c"]}
+
+@app.get("/registros")
+def registros():
+    return [dict(x) for x in con.execute("SELECT * FROM registros ORDER BY id DESC LIMIT 500").fetchall()]
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300

@@ -30,9 +30,16 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras, se corrigen. Tambien puedes descargarlo empaquetado en
 <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>.</div>
 <h2>Coordinator (Core) - kukia_core.py</h2>
-<pre><code>&quot;&quot;&quot;KUKIA Core - coordinador: nodos, tareas, verificacion, ledger (SQLite).&quot;&quot;&quot;
-import hashlib, json, sqlite3, uuid, time, threading
+<pre><code>&quot;&quot;&quot;KUKIA Core - coordinador: nodos, tareas, verificacion REAL, ledger (SQLite).
+
+VERIFICACION (corregida): el Core NO confia en el hash del minero.
+El Core recalcula la tarea el mismo (trustless) y compara el resultado
+exacto. Tareas con aritmetica determinista (enteros exactos via float64
+con magnitudes acotadas) para que CPU y GPU den el MISMO numero.
+&quot;&quot;&quot;
+import hashlib, json, sqlite3, uuid, time
 from pathlib import Path
+import numpy as np
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -54,12 +61,18 @@ con.row_factory = sqlite3.Row
 def schema():
     con.execute(&quot;CREATE TABLE IF NOT EXISTS nodos(id TEXT PRIMARY KEY, nombre TEXT, vram_gb INT, &quot;
                 &quot;tier REAL, reputacion REAL DEFAULT 1.0, ref TEXT, tareas_ok INT DEFAULT 0, &quot;
-                &quot;creado TEXT)&quot;)
+                &quot;creado TEXT, tops REAL DEFAULT 0)&quot;)
     con.execute(&quot;CREATE TABLE IF NOT EXISTS tareas(id TEXT PRIMARY KEY, tipo TEXT, params TEXT, &quot;
                 &quot;estado TEXT DEFAULT &#x27;queued&#x27;, nodo_id TEXT, resultado TEXT, hash TEXT, &quot;
                 &quot;metrica TEXT, creado TEXT, fin TEXT, verificado INT DEFAULT 0, doble TEXT)&quot;)
     con.execute(&quot;CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY AUTOINCREMENT, &quot;
                 &quot;tarea_id TEXT, nodo_id TEXT, kuki REAL, motivo TEXT, ts TEXT)&quot;)
+    con.execute(&quot;CREATE TABLE IF NOT EXISTS registros(id INTEGER PRIMARY KEY AUTOINCREMENT, &quot;
+                &quot;nombre TEXT, email TEXT, gpu TEXT, tops TEXT, ceder TEXT, ip TEXT, ts TEXT)&quot;)
+    try:
+        con.execute(&quot;ALTER TABLE nodos ADD COLUMN tops REAL DEFAULT 0&quot;)
+    except Exception:
+        pass
     con.commit()
 
 schema()
@@ -74,15 +87,48 @@ def genesis():
 
 genesis()
 
-app = FastAPI(title=&quot;KUKIA Core&quot;, version=&quot;0.1.0&quot;)
+# ============================================================
+#  VERIFICACION REAL (trustless): el Core recalcula la tarea
+# ============================================================
+
+def gen_matriz(n: int, seed: int) -&gt; np.ndarray:
+    &quot;&quot;&quot;Matriz determinista de enteros acotados (exacta en float64).&quot;&quot;&quot;
+    idx = np.arange(n, dtype=np.float64)
+    return (idx[:, None] * 31 + idx[None, :] * 17 + seed) % 97 - 48
+
+def computar_tarea(tipo: str, params: dict):
+    &quot;&quot;&quot;Recalcula el resultado esperado en el propio Core (numpy, CPU).&quot;&quot;&quot;
+    if tipo == &quot;checksum&quot;:
+        data = str(params.get(&quot;data&quot;, &quot;kukia&quot;))
+        return hashlib.sha256(data.encode()).hexdigest()
+    if tipo == &quot;matriz&quot;:
+        n = int(params.get(&quot;n&quot;, 256))
+        seed = int(params.get(&quot;seed&quot;, 42))
+        a = gen_matriz(n, seed)
+        b = gen_matriz(n, seed + 1)
+        return str(int(round(float((a @ b).sum()))))
+    if tipo == &quot;inferencia&quot;:
+        n = int(params.get(&quot;n&quot;, 64))
+        seed = int(params.get(&quot;seed&quot;, 7))
+        x = gen_matriz(n, seed)
+        k = np.array([[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]])
+        out = 0.0
+        for i in range(3):
+            for j in range(3):
+                out += float((x[i:n-2+i, j:n-2+j] * k[i, j]).sum())
+        return str(int(round(out)))
+    return None
+
+app = FastAPI(title=&quot;KUKIA Core&quot;, version=&quot;0.2.0&quot;)
 
 class NodoIn(BaseModel):
     nombre: str
     vram_gb: int
     ref: str = &quot;&quot;
+    tops: float = 0.0    # potencia IA declarada (TOPS, valor oficial de la GPU)
 
 class TareaIn(BaseModel):
-    tipo: str      # &#x27;checksum&#x27; | &#x27;matriz&#x27; | &#x27;inferencia&#x27; (local)
+    tipo: str      # &#x27;checksum&#x27; | &#x27;matriz&#x27; | &#x27;inferencia&#x27;
     params: dict = {}
 
 def tier(vram: int) -&gt; float:
@@ -91,10 +137,10 @@ def tier(vram: int) -&gt; float:
 @app.post(&quot;/nodos/registrar&quot;)
 def registrar(n: NodoIn):
     nid = uuid.uuid4().hex[:12]
-    con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado) VALUES(?,?,?,?,?,?,?)&quot;,
-                (nid, n.nombre, n.vram_gb, tier(n.vram_gb), 1.0, n.ref, time.ctime()))
+    con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops) VALUES(?,?,?,?,?,?,?,?)&quot;,
+                (nid, n.nombre, n.vram_gb, tier(n.vram_gb), 1.0, n.ref, time.ctime(), n.tops))
     con.commit()
-    return {&quot;id&quot;: nid, &quot;tier&quot;: tier(n.vram_gb), &quot;max_supply&quot;: MAX_SUPPLY}
+    return {&quot;id&quot;: nid, &quot;tier&quot;: tier(n.vram_gb), &quot;max_supply&quot;: MAX_SUPPLY, &quot;tops_registrados&quot;: n.tops}
 
 @app.get(&quot;/nodos&quot;)
 def nodos():
@@ -103,6 +149,7 @@ def nodos():
 @app.post(&quot;/tareas/crear&quot;)
 def crear_tarea(t: TareaIn):
     tid = uuid.uuid4().hex[:12]
+    # los params llevan seed -&gt; la tarea es reproducible/verificable
     con.execute(&quot;INSERT INTO tareas(id,tipo,params,estado,creado) VALUES(?,?,?,?,?)&quot;,
                 (tid, t.tipo, json.dumps(t.params), &quot;queued&quot;, time.ctime()))
     con.commit()
@@ -110,7 +157,6 @@ def crear_tarea(t: TareaIn):
 
 @app.get(&quot;/tareas/pendiente&quot;)
 def pendiente(nodo_id: str):
-    # asigna la tarea mas antigua (mejora 7: heartbeat/estado)
     row = con.execute(&quot;SELECT id,tipo,params FROM tareas WHERE estado=&#x27;queued&#x27; &quot;
                       &quot;ORDER BY creado LIMIT 1&quot;).fetchone()
     if not row:
@@ -120,31 +166,35 @@ def pendiente(nodo_id: str):
     return {&quot;tarea&quot;: {&quot;id&quot;: row[&quot;id&quot;], &quot;tipo&quot;: row[&quot;tipo&quot;], &quot;params&quot;: json.loads(row[&quot;params&quot;])}}
 
 @app.post(&quot;/tareas/resultado&quot;)
-def resultado(tid: str, nodo_id: str, hash_res: str, metrica: str):
-    verif = hashlib.sha256(f&quot;{tid}:{nodo_id}:{metrica}&quot;.encode()).hexdigest()  # verificacion reproducible
-    ok = hash_res == verif
+def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;):
+    &quot;&quot;&quot;El Core recalcula la tarea y compara el RESULTADO EXACTO (trustless).&quot;&quot;&quot;
+    task = con.execute(&quot;SELECT * FROM tareas WHERE id=?&quot;, (tid,)).fetchone()
+    if not task:
+        raise HTTPException(404, &quot;tarea no encontrada&quot;)
+    params = json.loads(task[&quot;params&quot;])
+    esperado = computar_tarea(task[&quot;tipo&quot;], params)
+    if esperado is None:
+        raise HTTPException(400, &quot;tipo de tarea no soportado&quot;)
+    ok = str(metrica).strip() == str(esperado).strip()
     kuki = 0.0
     if ok:
         node = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
+        if not node:
+            raise HTTPException(404, &quot;nodo no registrado&quot;)
         kuki = REWARD_BASE * node[&quot;tier&quot;]
-        # recompensa + ledger (boom: la acunea de trabajo verificado)
         con.execute(&quot;UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) &quot;
                     &quot;WHERE id=?&quot;, (nodo_id,))
-        # mejora 2: bonus referido cada 10 tareas
-        ok10 = node[&quot;tareas_ok&quot;] and (node[&quot;tareas_ok&quot;]+1) % 10 == 0
-        if ok10 and node[&quot;ref&quot;]:
-            ref_node = con.execute(&quot;SELECT id FROM nodos WHERE nombre=?&quot;, (node[&quot;ref&quot;],)).fetchone()
-            # se acredita al referidor (simplificado por nombre)
+        h = hashlib.sha256(f&quot;{tid}:{nodo_id}:{metrica}&quot;.encode()).hexdigest()
         con.execute(&quot;UPDATE tareas SET estado=&#x27;ok&#x27;, hash=?, metrica=?, fin=?, verificado=1 WHERE id=?&quot;,
-                    (hash_res, metrica, time.ctime(), tid))
+                    (h, metrica, time.ctime(), tid))
         con.execute(&quot;INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)&quot;,
                     (tid, nodo_id, kuki, &quot;trabajo verificado&quot;, time.ctime()))
     else:
         con.execute(&quot;UPDATE tareas SET estado=&#x27;fallo&#x27;, fin=? WHERE id=?&quot;, (time.ctime(), tid))
         con.execute(&quot;INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)&quot;,
-                    (tid, nodo_id, 0.0, &quot;hash no verificado&quot;, time.ctime()))
+                    (tid, nodo_id, 0.0, &quot;resultado incorrecto (recalculado por el Core)&quot;, time.ctime()))
     con.commit()
-    return {&quot;ok&quot;: ok, &quot;kuki&quot;: kuki, &quot;expected&quot;: verif}
+    return {&quot;ok&quot;: ok, &quot;kuki&quot;: kuki, &quot;esperado&quot;: esperado}
 
 @app.get(&quot;/ledger&quot;)
 def ledger():
@@ -160,82 +210,206 @@ def stats():
         &quot;nodos&quot;: con.execute(&quot;SELECT COUNT(*) c FROM nodos&quot;).fetchone()[&quot;c&quot;],
         &quot;tareas_ok&quot;: con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;ok&#x27;&quot;).fetchone()[&quot;c&quot;],
         &quot;tareas_pend&quot;: con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;queued&#x27;&quot;).fetchone()[&quot;c&quot;],
+        &quot;registros&quot;: con.execute(&quot;SELECT COUNT(*) c FROM registros&quot;).fetchone()[&quot;c&quot;],
     }
 
-# el coordinador corre: uvicorn kukia_core:app --port 8300</code></pre>
+class RegistroIn(BaseModel):
+    nombre: str
+    email: str
+    gpu: str = &quot;&quot;
+    tops: str = &quot;&quot;
+    ceder_potencia: str = &quot;&quot;
+    ref: str = &quot;&quot;
+
+@app.post(&quot;/registro&quot;)
+def registro(r: RegistroIn):
+    &quot;&quot;&quot;Registro publico de la lista de espera (desde la web).&quot;&quot;&quot;
+    con.execute(&quot;INSERT INTO registros(nombre,email,gpu,tops,ceder,ip,ts) VALUES(?,?,?,?,?,?,?)&quot;,
+                (r.nombre, r.email, r.gpu, r.tops, r.ceder_potencia, r.ref, time.ctime()))
+    con.commit()
+    return {&quot;ok&quot;: True, &quot;mensaje&quot;: &quot;Registrado. Te avisaremos al lanzamiento.&quot;, &quot;posicion&quot;: con.execute(&quot;SELECT COUNT(*) c FROM registros&quot;).fetchone()[&quot;c&quot;]}
+
+@app.get(&quot;/registros&quot;)
+def registros():
+    return [dict(x) for x in con.execute(&quot;SELECT * FROM registros ORDER BY id DESC LIMIT 500&quot;).fetchall()]
+
+# el coordinador corre: uvicorn kukia_core:app --port 8300
+</code></pre>
 <h2>Worker (Minero) - kukia_worker.py</h2>
-<pre><code>&quot;&quot;&quot;KUKIA Worker - se registra, pide trabajo a Core, ejecuta en GPU, devuelve hash verificado.&quot;&quot;&quot;
-import hashlib, json, sys, time, random, requests, torch
+<pre><code>&quot;&quot;&quot;KUKIA Worker - minero multi-GPU: se registra, pide trabajo, ejecuta en GPU.
+
+VERIFICACION REAL: el worker calcula el resultado (no un hash propio) y el
+Core lo recalcula y compara. El worker NO puede falsificar: si el numero no
+coincide exactamente con el recalculado por el Core, no cobra.
+
+MULTI-GPU: usa TODAS las GPUs disponibles a la vez (una cola por GPU).
+&quot;&quot;&quot;
+import hashlib, json, sys, time, threading, socket
+import requests
 
 CORE = &quot;http://127.0.0.1:8300&quot;
 
-def trabajo_local(tipo: str, params: dict) -&gt; str:
-    &quot;&quot;&quot;Tarea reproducible con carga GPU real (matriz torch o checksum).&quot;&quot;&quot;
+def trabajo_local(tipo: str, params: dict, device: str = &quot;cuda:0&quot;) -&gt; str:
+    &quot;&quot;&quot;Calcula la tarea EXACTAMENTE como el Core (determinista).&quot;&quot;&quot;
     if tipo == &quot;matriz&quot;:
-        n = int(params.get(&quot;n&quot;, 512))
-        a = torch.randn(n, n, device=&quot;cuda&quot;)
-        b = torch.randn(n, n, device=&quot;cuda&quot;)
-        c = (a @ b).sum().item()
-        return f&quot;{c:.6f}&quot;
+        import torch
+        n = int(params.get(&quot;n&quot;, 256))
+        seed = int(params.get(&quot;seed&quot;, 42))
+        idx = torch.arange(n, device=device, dtype=torch.float64)
+        a = ((idx[:, None] * 31 + idx[None, :] * 17 + seed) % 97) - 48
+        b = ((idx[:, None] * 31 + idx[None, :] * 17 + (seed + 1)) % 97) - 48
+        c = float((a @ b).sum().item())
+        return str(int(round(c)))
     if tipo == &quot;checksum&quot;:
-        data = params.get(&quot;data&quot;, &quot;kukia&quot;)
+        data = str(params.get(&quot;data&quot;, &quot;kukia&quot;))
         return hashlib.sha256(data.encode()).hexdigest()
     if tipo == &quot;inferencia&quot;:
-        x = torch.randn(1, 3, 64, 64, device=&quot;cuda&quot;)
-        # conv 3x3 sin clasificador: carga GPU verificable
-        conv = torch.nn.Conv2d(3, 8, 3, padding=1).to(&quot;cuda&quot;)
-        out = conv(x).sum().item()
-        return f&quot;{out:.6f}&quot;
+        import torch
+        n = int(params.get(&quot;n&quot;, 64))
+        seed = int(params.get(&quot;seed&quot;, 7))
+        idx = torch.arange(n, device=device, dtype=torch.float64)
+        x = ((idx[:, None] * 31 + idx[None, :] * 17 + seed) % 97) - 48
+        k = torch.tensor([[1.0, 2.0, 1.0], [2.0, 4.0, 1.0 * 2], [1.0, 2.0, 1.0]],
+                         device=device, dtype=torch.float64)
+        out = 0.0
+        for i in range(3):
+            for j in range(3):
+                out += float((x[i:n-2+i, j:n-2+j] * k[i, j]).sum().item())
+        return str(int(round(out)))
     return &quot;tarea_no_soportada&quot;
+
+def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
+    &quot;&quot;&quot;Un hilo por GPU: registra su nodo y mina en bucle.&quot;&quot;&quot;
+    etiqueta = f&quot;{nombre}[{device}]&quot;
+    try:
+        r = requests.post(f&quot;{CORE}/nodos/registrar&quot;,
+                          json={&quot;nombre&quot;: etiqueta, &quot;vram_gb&quot;: vram_gb, &quot;tops&quot;: tops}, timeout=30)
+        nid = r.json()[&quot;id&quot;]
+        print(f&quot;[KUKIA] nodo {nid} ({etiqueta}) vram={vram_gb}GB listo&quot;)
+    except Exception as e:
+        print(f&quot;[KUKIA] {etiqueta} error registro: {e}&quot;)
+        return
+    while True:
+        try:
+            pend = requests.get(f&quot;{CORE}/tareas/pendiente&quot;, params={&quot;nodo_id&quot;: nid}, timeout=30).json()[&quot;tarea&quot;]
+            if not pend:
+                time.sleep(3)
+                continue
+            metrica = trabajo_local(pend[&quot;tipo&quot;], pend[&quot;params&quot;], device)
+            res = requests.post(f&quot;{CORE}/tareas/resultado&quot;,
+                                params={&quot;tid&quot;: pend[&quot;id&quot;], &quot;nodo_id&quot;: nid, &quot;metrica&quot;: metrica},
+                                timeout=60).json()
+            estado = f&quot;OK +{res[&#x27;kuki&#x27;]} KIA&quot; if res.get(&quot;ok&quot;) else f&quot;RECHAZADO (esperado {res.get(&#x27;esperado&#x27;)})&quot;
+            print(f&quot;[KUKIA] {etiqueta} tarea {pend[&#x27;id&#x27;][:8]} -&gt; {estado}&quot;)
+        except Exception as e:
+            print(f&quot;[KUKIA] {etiqueta} err: {e}&quot;)
+            time.sleep(5)
 
 def main():
     nombre = sys.argv[1] if len(sys.argv) &gt; 1 else &quot;worker_&quot; + socket.gethostname()
-    vram = torch.cuda.get_device_properties(0).total_memory // (1024**3)
-    r = requests.post(f&quot;{CORE}/nodos/registrar&quot;, json={&quot;nombre&quot;: nombre, &quot;vram_gb&quot;: int(vram)})
-    nid = r.json()[&quot;id&quot;]
-    print(f&quot;[KUKIA] nodo {nid} ({nombre}) vram={vram}GB tier=OK&quot;)
-    while True:
+    try:
+        import torch
+        n_gpus = torch.cuda.device_count()
+    except Exception:
+        n_gpus = 0
+
+    if n_gpus == 0:
+        print(&quot;[KUKIA] Sin GPUs CUDA - usando CPU (mas lento)&quot;)
+        ciclo_worker(nombre, &quot;cpu&quot;, 0, 0.0)
+        return
+
+    print(f&quot;[KUKIA] {n_gpus} GPU(s) detectada(s) - minando en TODAS a la vez&quot;)
+    hilos = []
+    for g in range(n_gpus):
         try:
-            pend = requests.get(f&quot;{CORE}/tareas/pendiente&quot;, params={&quot;nodo_id&quot;: nid}).json()[&quot;tarea&quot;]
-            if not pend:
-                time.sleep(3); continue
-            metrica = trabajo_local(pend[&quot;tipo&quot;], pend[&quot;params&quot;])
-            esperado = hashlib.sha256(f&quot;{pend[&#x27;id&#x27;]}:{nid}:{metrica}&quot;.encode()).hexdigest()
-            res = requests.post(f&quot;{CORE}/tareas/resultado&quot;,
-                                params={&quot;tid&quot;: pend[&quot;id&quot;], &quot;nodo_id&quot;: nid,
-                                        &quot;hash_res&quot;: esperado, &quot;metrica&quot;: metrica}).json()
-            print(f&quot;[KUKIA] tarea {pend[&#x27;id&#x27;][:8]} -&gt; {&#x27;OK &#x27; + str(res[&#x27;kuki&#x27;]) + &#x27; KUKI&#x27; if res[&#x27;ok&#x27;] else &#x27;FALLO&#x27;}&quot;)
-        except Exception as e:
-            print(&quot;[KUKIA] err:&quot;, e); time.sleep(5)
+            props = torch.cuda.get_device_properties(g)
+            vram = props.total_memory // (1024**3)
+            # TOPS aproximados por clase de GPU (referencia NVIDIA)
+            tops_est = {8: 60.0, 12: 300.0, 16: 760.0, 24: 1300.0}.get(int(vram), 100.0)
+        except Exception:
+            vram, tops_est = 0, 0.0
+        t = threading.Thread(target=ciclo_worker, args=(nombre, f&quot;cuda:{g}&quot;, vram, tops_est), daemon=True)
+        t.start()
+        hilos.append(t)
+    for t in hilos:
+        t.join()
 
 if __name__ == &quot;__main__&quot;:
-    import socket
-    main()</code></pre>
+    main()
+</code></pre>
 <h2>Billetera - kukia_wallet.py</h2>
-<pre><code>&quot;&quot;&quot;KUKIA Wallet - billetera local del nodo: claves, saldo, historial, firma.&quot;&quot;&quot;
-import json, hashlib, os, sqlite3, time
+<pre><code>&quot;&quot;&quot;KUKIA Wallet - billetera con criptografia REAL (Ed25519).
+
+- Clave privada Ed25519 (256 bits) generada con secrets (CSPRNG del sistema)
+- Direccion derivada de la clave PUBLICA (no de la privada)
+- Firma digital Ed25519 verificable (no HMAC simplificado)
+- La clave privada nunca sale del equipo del usuario
+&quot;&quot;&quot;
+import json, hashlib, os, secrets, time
 from pathlib import Path
 
 WALLET_DIR = Path(__file__).parent.parent / &quot;ledger&quot; / &quot;wallet&quot;
 WALLET_DIR.mkdir(parents=True, exist_ok=True)
 
+try:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+    from cryptography.hazmat.primitives import serialization
+    CRYPTO_REAL = True
+except ImportError:
+    CRYPTO_REAL = False
+
 def crear_billetera(nombre):
-    &quot;&quot;&quot;Crea o devuelve la billetera del nodo (clave + saldo local).&quot;&quot;&quot;
+    &quot;&quot;&quot;Crea o devuelve la billetera del nodo (Ed25519 + saldo local).&quot;&quot;&quot;
     f = WALLET_DIR / f&quot;{nombre}.json&quot;
     if f.exists():
         d = json.loads(f.read_text(encoding=&quot;utf-8&quot;))
         return d
-    # clave de firma (simplificada con hash; en production: ed25519/PQC)
-    clave_secreta = hashlib.sha256(f&quot;{nombre}:{time.time()}&quot;.encode()).hexdigest()
-    direccion = &quot;KUK&quot; + hashlib.sha256(clave_secreta.encode()).hexdigest()[:38].upper()
-    d = {&quot;nombre&quot;: nombre, &quot;direccion&quot;: direccion, &quot;clave&quot;: clave_secreta,
+
+    if CRYPTO_REAL:
+        # clave privada Ed25519 real (CSPRNG del sistema)
+        priv = Ed25519PrivateKey.generate()
+        priv_bytes = priv.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption())
+        pub_bytes = priv.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw)
+        clave_secreta = priv_bytes.hex()
+        clave_publica = pub_bytes.hex()
+        # direccion = hash de la clave PUBLICA (estandar cripto)
+        direccion = &quot;KUK&quot; + hashlib.sha256(pub_bytes).hexdigest()[:38].upper()
+        esquema = &quot;ed25519&quot;
+    else:
+        # fallback (no deberia ocurrir: cryptography esta instalado)
+        clave_secreta = secrets.token_hex(32)
+        clave_publica = &quot;&quot;
+        direccion = &quot;KUK&quot; + hashlib.sha256(clave_secreta.encode()).hexdigest()[:38].upper()
+        esquema = &quot;sha256-fallback&quot;
+
+    d = {&quot;nombre&quot;: nombre, &quot;direccion&quot;: direccion, &quot;esquema&quot;: esquema,
+         &quot;clave_privada&quot;: clave_secreta, &quot;clave_publica&quot;: clave_publica,
          &quot;saldo&quot;: 0.0, &quot;creada&quot;: time.ctime()}
     f.write_text(json.dumps(d, indent=2), encoding=&quot;utf-8&quot;)
     return d
 
-def firmar(datos, clave):
-    &quot;&quot;&quot;Firma un mensaje con la clave del nodo (hash HMAC simple; en prod PQC).&quot;&quot;&quot;
-    return hashlib.sha256(f&quot;{datos}:{clave}&quot;.encode()).hexdigest()
+def firmar(datos, clave_privada_hex):
+    &quot;&quot;&quot;Firma un mensaje con la clave privada Ed25519 (firma digital real).&quot;&quot;&quot;
+    if not CRYPTO_REAL:
+        return hashlib.sha256(f&quot;{datos}:{clave_privada_hex}&quot;.encode()).hexdigest()
+    priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(clave_privada_hex))
+    return priv.sign(datos.encode()).hex()
+
+def verificar_firma(datos, firma_hex, clave_publica_hex):
+    &quot;&quot;&quot;Verifica una firma Ed25519 contra la clave publica (True/False).&quot;&quot;&quot;
+    if not CRYPTO_REAL:
+        return False
+    try:
+        pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(clave_publica_hex))
+        pub.verify(bytes.fromhex(firma_hex), datos.encode())
+        return True
+    except Exception:
+        return False
 
 def ver_saldo(nombre):
     d = crear_billetera(nombre)
@@ -246,7 +420,6 @@ def abonar(nombre, monto, motivo):
     d[&quot;saldo&quot;] = round(d[&quot;saldo&quot;] + monto, 4)
     f = WALLET_DIR / f&quot;{nombre}.json&quot;
     f.write_text(json.dumps(d, indent=2), encoding=&quot;utf-8&quot;)
-    # historial local
     hist = WALLET_DIR / f&quot;{nombre}_hist.json&quot;
     h = json.loads(hist.read_text(encoding=&quot;utf-8&quot;)) if hist.exists() else []
     h.append({&quot;ts&quot;: time.ctime(), &quot;monto&quot;: monto, &quot;motivo&quot;: motivo})
@@ -258,7 +431,14 @@ if __name__ == &quot;__main__&quot;:
     nombre = sys.argv[1] if len(sys.argv) &gt; 1 else &quot;nodo_fundador&quot;
     w = crear_billetera(nombre)
     print(f&quot;[KUKIA Wallet] {w[&#x27;direccion&#x27;]}&quot;)
-    print(f&quot;  saldo: {w[&#x27;saldo&#x27;]} KUKI inicial&quot;)</code></pre>
+    print(f&quot;  esquema: {w[&#x27;esquema&#x27;]}&quot;)
+    print(f&quot;  saldo: {w[&#x27;saldo&#x27;]} KIA&quot;)
+    # prueba de firma/verificacion
+    if CRYPTO_REAL:
+        firma = firmar(&quot;prueba-kukia&quot;, w[&quot;clave_privada&quot;])
+        ok = verificar_firma(&quot;prueba-kukia&quot;, firma, w[&quot;clave_publica&quot;])
+        print(f&quot;  firma Ed25519 verificada: {ok}&quot;)
+</code></pre>
 <h2>Dashboard - kukia_dash.py</h2>
 <pre><code>&quot;&quot;&quot;KUKIA Dashboard - estado de la red en vivo (heartbeat, mejora 7).&quot;&quot;&quot;
 import sqlite3
