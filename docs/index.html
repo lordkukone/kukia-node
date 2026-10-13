@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KUKIA | Quantum AI Compute Network - Every GPU. One intelligence network.</title>
+<meta name="description" content="KUKIA Network: red descentralizada de computo GPU. Conecta tu grafica y gana KIA por trabajo verificado. Sin precio hasta movimiento real. 100M maximo hasta 2150.">
+<meta name="keywords" content="KUKIA, KIA, KUKI, GPU, computo distribuido, IA descentralizada, criptomoneda GPU, mining GPU, decentralized AI, render network, quantum compute, QPU">
+<meta property="og:title" content="KUKIA Quantum AI Compute Network">
+<meta property="og:description" content="Every GPU. One intelligence network. Tu GPU puede generar inteligencia y KIA verificado.">
+<meta property="og:image" content="moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root { --gold:#d4af37; --gold2:#f0d060; --navy:#081a3a; --navy2:#0a1f44; --blue:#12305e; --line:#27487c; --soft:#9db6dd; --text:#c3d1ea; }
+* { margin:0; padding:0; box-sizing:border-box; }
+html { scroll-behavior:smooth; }
+body { font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--navy); color:#fff; overflow-x:hidden; }
+nav { position:fixed; top:0; left:0; right:0; z-index:100; padding:1rem 2rem; display:flex; justify-content:space-between; align-items:center; background:rgba(8,26,58,.85); backdrop-filter:blur(12px); border-bottom:1px solid rgba(212,175,55,.15); }
+nav .logo { font-weight:800; letter-spacing:.15em; color:var(--gold); font-size:1.2rem; }
+nav ul { display:flex; gap:1.6rem; list-style:none; }
+nav a { color:var(--text); text-decoration:none; font-size:.9rem; transition:.2s; }
+nav a:hover { color:var(--gold); }
+.hero { min-height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; padding:6rem 2rem 4rem; background:radial-gradient(ellipse at 50% -10%, #1a3f7a 0%, var(--navy2) 45%, var(--navy) 100%); position:relative; overflow:hidden; }
+.stars { position:absolute; inset:0; background-image:radial-gradient(1.5px 1.5px at 20% 30%, rgba(212,175,55,.6), transparent),radial-gradient(1px 1px at 70% 20%, rgba(255,255,255,.5), transparent),radial-gradient(1.5px 1.5px at 40% 70%, rgba(212,175,55,.4), transparent),radial-gradient(1px 1px at 85% 60%, rgba(255,255,255,.4), transparent),radial-gradient(1.5px 1.5px at 10% 85%, rgba(212,175,55,.5), transparent),radial-gradient(1px 1px at 55% 45%, rgba(255,255,255,.3), transparent); animation:twinkle 6s infinite alternate; }
+@keyframes twinkle { from { opacity:.5; } to { opacity:1; } }
+@keyframes float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-14px); } }
+@keyframes spin-slow { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+@keyframes pulse-glow { 0%,100% { box-shadow:0 0 60px rgba(212,175,55,.5); } 50% { box-shadow:0 0 110px rgba(212,175,55,.9); } }
+@keyframes rise { from { opacity:0; transform:translateY(30px); } to { opacity:1; transform:translateY(0); } }
+.coin-wrap { position:relative; margin-bottom:2rem; animation:float 5s ease-in-out infinite; }
+.coin { width:220px; height:220px; border-radius:50%; object-fit:cover; border:4px solid var(--gold); animation:pulse-glow 4s ease-in-out infinite; display:block; }
+.coin-ring { position:absolute; inset:-18px; border:2px dashed rgba(212,175,55,.5); border-radius:50%; animation:spin-slow 30s linear infinite; }
+h1 { font-size:clamp(3rem,8vw,5.5rem); letter-spacing:.14em; color:var(--gold); text-shadow:0 0 40px rgba(212,175,55,.5); animation:rise .8s ease both; }
+.tag { font-size:clamp(.85rem,2vw,1.15rem); letter-spacing:.35em; color:var(--soft); margin-top:.5rem; animation:rise .9s ease both; }
+.slogan { font-size:clamp(1.1rem,2.5vw,1.6rem); color:#fff; margin:1.4rem 0; font-style:italic; animation:rise 1s ease both; }
+.cta-row { display:flex; gap:1rem; flex-wrap:wrap; justify-content:center; margin-top:1rem; animation:rise 1.1s ease both; }
+.btn { display:inline-block; padding:.95rem 2.6rem; background:linear-gradient(135deg,var(--gold),var(--gold2)); color:var(--navy); font-weight:800; border-radius:50px; text-decoration:none; transition:.3s; box-shadow:0 0 35px rgba(212,175,55,.45); border:none; cursor:pointer; font-size:1rem; }
+.btn:hover { transform:translateY(-3px) scale(1.03); box-shadow:0 0 55px rgba(212,175,55,.8); }
+.btn2 { background:transparent; border:2px solid var(--gold); color:var(--gold); box-shadow:none; }
+.btn2:hover { background:rgba(212,175,55,.1); }
+#hashtags { margin-top:2rem; color:var(--soft); font-size:.85rem; word-spacing:.6rem; animation:rise 1.3s ease both; }
+section { padding:5rem 1.5rem; max-width:1100px; margin:auto; }
+h2 { color:var(--gold); font-size:clamp(1.6rem,4vw,2.3rem); margin-bottom:2.5rem; text-align:center; }
+h2::after { content:''; display:block; width:70px; height:3px; background:linear-gradient(90deg,transparent,var(--gold),transparent); margin:.8rem auto 0; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:1.5rem; }
+.card { background:linear-gradient(160deg,rgba(18,48,94,.9),rgba(10,31,68,.9)); border:1px solid var(--line); border-radius:16px; padding:1.8rem 1.5rem; transition:.35s; position:relative; overflow:hidden; }
+.card::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg,transparent,var(--gold),transparent); opacity:0; transition:.35s; }
+.card:hover { transform:translateY(-6px); border-color:var(--gold); box-shadow:0 15px 45px rgba(0,0,0,.5); }
+.card:hover::before { opacity:1; }
+.card .ico { font-size:2rem; margin-bottom:.8rem; }
+.card h3 { color:var(--gold); margin-bottom:.6rem; font-size:1.1rem; }
+.card p { color:var(--text); font-size:.93rem; line-height:1.6; }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1.5rem; max-width:800px; margin:0 auto; }
+.stat { text-align:center; padding:1.8rem 1rem; background:rgba(18,48,94,.5); border:1px solid var(--line); border-radius:16px; }
+.stat .n { font-size:clamp(2rem,5vw,2.9rem); color:var(--gold); font-weight:800; display:block; }
+.stat .l { color:var(--soft); font-size:.88rem; margin-top:.3rem; display:block; }
+.timeline { position:relative; max-width:760px; margin:0 auto; padding-left:2.2rem; }
+.timeline::before { content:''; position:absolute; left:8px; top:0; bottom:0; width:2px; background:linear-gradient(180deg,var(--gold),rgba(212,175,55,.1)); }
+.tl-item { position:relative; padding:0 0 2.4rem 1.3rem; }
+.tl-item::before { content:''; position:absolute; left:-2.2rem; top:.35rem; width:18px; height:18px; border-radius:50%; background:var(--navy); border:3px solid var(--gold); box-shadow:0 0 18px rgba(212,175,55,.6); }
+.tl-item h3 { color:var(--gold); font-size:1.05rem; margin-bottom:.35rem; }
+.tl-item p { color:var(--text); font-size:.92rem; line-height:1.55; }
+.tl-item.live::before { background:var(--gold); animation:pulse-glow 2s infinite; }
+.hashlist { list-style:none; max-width:720px; margin:0 auto; }
+.hashlist li { padding:.9rem 1.1rem; margin-bottom:.7rem; background:rgba(18,48,94,.45); border:1px solid var(--line); border-radius:12px; color:var(--text); display:flex; gap:.8rem; align-items:flex-start; font-size:.95rem; }
+.hashlist li strong { color:#fff; }
+code { background:rgba(8,26,58,.9); padding:.25rem .6rem; border-radius:8px; color:var(--gold); font-size:.85rem; border:1px solid rgba(212,175,55,.2); }
+.faq { max-width:760px; margin:0 auto; }
+.qa { margin-bottom:1.2rem; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:rgba(18,48,94,.35); }
+.qa summary { cursor:pointer; padding:1.1rem 1.3rem; color:var(--gold); font-weight:600; list-style:none; position:relative; font-size:.98rem; }
+.qa summary::after { content:'+'; position:absolute; right:1.3rem; top:50%; transform:translateY(-50%); font-size:1.3rem; transition:.3s; }
+.qa[open] summary::after { transform:translateY(-50%) rotate(45deg); }
+.qa p { padding:0 1.3rem 1.2rem; color:var(--text); line-height:1.6; font-size:.93rem; }
+.register-box { max-width:560px; margin:0 auto; background:linear-gradient(160deg,rgba(18,48,94,.95),rgba(8,26,58,.95)); border:1px solid var(--gold); border-radius:20px; padding:2.5rem 2rem; text-align:center; box-shadow:0 0 60px rgba(212,175,55,.15); }
+.register-box input { width:100%; padding:1rem 1.2rem; margin-bottom:1rem; border-radius:12px; border:1px solid var(--line); background:rgba(8,26,58,.9); color:#fff; font-size:1rem; outline:none; transition:.3s; }
+.register-box input:focus { border-color:var(--gold); box-shadow:0 0 20px rgba(212,175,55,.25); }
+.register-box small { color:var(--soft); display:block; margin-top:1rem; font-size:.8rem; }
+.wp { text-align:center; }
+.wp img { max-width:340px; width:88%; border-radius:14px; border:1px solid var(--line); box-shadow:0 20px 60px rgba(0,0,0,.5); }
+.reveal { opacity:0; transform:translateY(35px); transition:opacity .8s ease, transform .8s ease; }
+.reveal.visible { opacity:1; transform:translateY(0); }
+footer { text-align:center; padding:3rem 1.5rem; color:#789; font-size:.85rem; border-top:1px solid rgba(212,175,55,.15); background:rgba(8,26,58,.6); }
+footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-size:.8rem; }
+@media (max-width:700px){ nav ul { display:none; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="logo">KUKIA</div>
+  <ul>
+    <li><a href="#como">Como funciona</a></li>
+    <li><a href="#tokenomics">Tokenomics</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#faq">FAQ</a></li>
+    <li><a href="codigo.html">Codigo</a></li>
+    <li><a href="#registro" style="color:var(--gold);font-weight:700;">Registro</a></li>
+  </ul>
+</nav>
+
+<header class="hero">
+  <div class="stars"></div>
+  <div class="coin-wrap">
+    <div class="coin-ring"></div>
+    <img class="coin" src="moneda.jpg" alt="KIA Coin (KUKIA)">
+  </div>
+  <h1>KUKIA</h1>
+  <div class="tag">QUANTUM AI COMPUTE NETWORK</div>
+  <div class="slogan">Every GPU. One intelligence network.</div>
+  <div class="cta-row">
+    <a class="btn" href="#registro">Unirme a la lista</a>
+    <a class="btn btn2" href="#como">Como funciona</a>
+  </div>
+  <div id="hashtags">#KUKIA #KIA #EveryGPUOneNetwork #ComputeCoin #DecentralizedAI #GPUtoQPU #VerificadoNoFake</div>
+</header>
+
+<section id="como" class="reveal">
+  <h2>Tu GPU puede generar inteligencia y KIA</h2>
+  <div class="grid">
+    <div class="card"><div class="ico">&#128421;&#65039;</div><h3>Conecta</h3><p>Registra tu tarjeta grafica. Cualquier GPU de 8GB+ vale. Nunca compras hardware: usas el que ya tienes.</p></div>
+    <div class="card"><div class="ico">&#9889;</div><h3>Genera</h3><p>Ejecuta tareas reales: inferencia, imagen, video, simulaciones. Nada de mineria tonta que solo quema energia.</p></div>
+    <div class="card"><div class="ico">&#128274;</div><h3>Verifica</h3><p>Cada resultado se comprueba bit a bit, con doble verificacion, reputacion y staking. Sin trampas posibles.</p></div>
+    <div class="card"><div class="ico">&#127974;</div><h3>Gana KIA</h3><p>Cada trabajo verificado acuna moneda. 100 millones maximo, hasta 2150. Sin inflacion vacia.</p></div>
+  </div>
+</section>
+
+<section id="tokenomics" class="reveal">
+  <h2>El dinero del computo</h2>
+  <div class="stats">
+    <div class="stat"><span class="n" data-count="100">0M</span><span class="l">KIA maximo total</span></div>
+    <div class="stat"><span class="n">2150</span><span class="l">Ultima moneda emitida</span></div>
+    <div class="stat"><span class="n">0%</span><span class="l">Precio artificial</span></div>
+    <div class="stat"><span class="n">10-15%</span><span class="l">Quema de comisiones</span></div>
+  </div>
+  <p style="text-align:center;color:var(--text);margin-top:2.5rem;max-width:720px;margin-left:auto;margin-right:auto;line-height:1.7;">
+    KIA sale a precio <strong style="color:#fff;">segun demanda real</strong> cuando la red tenga nodos, trabajo y clientes de verdad. Ni antes, ni despues. Mes de prueba: 4-6 semanas de validacion.
+  </p>
+</section>
+
+<section class="reveal">
+  <h2>Modelo economico</h2>
+  <div class="grid">
+    <div class="card"><div class="ico">&#9971;</div><h3>Minado util</h3><p>Prestas tu GPU y ganas KIA por cada tarea completada y verificada. Trabajo real de IA, no hashes vacios.</p></div>
+    <div class="card"><div class="ico">&#128188;</div><h3>Clientes</h3><p>Quien necesita imagenes, videos o simulaciones paga en KIA por el servicio de la red.</p></div>
+    <div class="card"><div class="ico">&#128293;</div><h3>Quema</h3><p>Entre el 10 y 15% de las comisiones se destruyen. Menos oferta con el tiempo, mas solidez.</p></div>
+    <div class="card"><div class="ico">&#128197;</div><h3>Emision programada</h3><p>Escalonada hasta 2150 con dificultad ajustada al numero de nodos activos de la red.</p></div>
+  </div>
+</section>
+
+<section class="reveal">
+  <h2>El presente: ya funciona</h2>
+  <ul class="hashlist">
+    <li><span>&#9989;</span><span><strong>Nucleo:</strong> coordinador de nodos y tareas con ledger propio e inmutable</span></li>
+    <li><span>&#9989;</span><span><strong>Worker:</strong> minero real en GPU (matrices, checksums, inferencia)</span></li>
+    <li><span>&#9989;</span><span><strong>Verificacion:</strong> hash bit a bit + doble titulacion + rechazo automatico de tareas falsas</span></li>
+    <li><span>&#9989;</span><span><strong>Billetera:</strong> segura, con clave criptografica y contrase&ntilde;a</span></li>
+    <li><span>&#9989;</span><span><strong>Dashboard:</strong> estado de la red en vivo</span></li>
+    <li><span>&#9989;</span><span><strong>Prueba real superada:</strong> 3 tareas verificadas (+30 KIA) y 1 fraude rechazado (0 KIA)</span></li>
+  </ul>
+</section>
+
+<section id="roadmap" class="reveal">
+  <h2>Roadmap</h2>
+  <div class="timeline">
+    <div class="tl-item live"><h3>Ahora: fase de pruebas</h3><p>4-6 semanas de validacion local. Refinando verificacion, wallet y dashboard antes de abrir.</p></div>
+    <div class="tl-item"><h3>Fase 1: primeros nodos</h3><p>Red privada con nodos invitados. Sistema de reputacion y tiers por VRAM.</p></div>
+    <div class="tl-item"><h3>Fase 2: apertura publica</h3><p>Minado abierto con recompensas de bienvenida para los primeros mineros.</p></div>
+    <div class="tl-item"><h3>Fase 3: demanda real</h3><p>Primeros clientes de computo. <strong style="color:#fff;">Aqui sale el precio, solo por demanda.</strong></p></div>
+  </div>
+</section>
+
+<section class="reveal">
+  <h2>Instala el nodo (prototipo)</h2>
+  <ul class="hashlist">
+    <li><span>&#128229;</span><span><a href="kukia-node.zip" style="color:var(--gold);font-weight:700;">Descargar KUKIA Node (zip)</a> - el paquete completo con el coordinador, el minero y tu billetera</span></li>
+    <li><span>&#128187;</span><span><code>pip install fastapi uvicorn pydantic requests torch</code></span></li>
+    <li><span>&#9654;&#65039;</span><span><code>cd worker &amp;&amp; python kukia_worker.py tu_nombre</code></span></li>
+    <li><span>&#9989;</span><span>Listo. Tu GPU ya esta minando y tu billetera KUK... se crea sola.</span></li>
+  </ul>
+</section>
+
+<section id="faq" class="reveal">
+  <h2>Preguntas frecuentes</h2>
+  <div class="faq">
+    <details class="qa"><summary>Cuanto cuesta KIA?</summary><p>No hay precio todavia. Sale al mercado segun demanda real cuando la red funcione de verdad, con nodos y clientes.</p></details>
+    <details class="qa"><summary>Cuanto puedo ganar minando?</summary><p>Depende de tu GPU y del trabajo disponible. En la red de prueba: 10 KIA base por cada tarea verificada correctamente.</p></details>
+    <details class="qa"><summary>Necesito comprar hardware?</summary><p>No. Usas la grafica que ya tienes. Cualquier NVIDIA de 8GB en adelante sirve para empezar.</p></details>
+    <details class="qa"><summary>Que diferencia a KUKIA de otras criptos de computo?</summary><p>Verificacion bit a bit, trabajo UTIL (IA real, no hashes vacios), emision honesta hasta 2150 y precio que nace de demanda real, no de especulacion.</p></details>
+    <details class="qa"><summary>Cuando puedo empezar?</summary><p>Estamos en fase de pruebas (4-6 semanas). Registrate en la lista y te avisamos cuando abramos los primeros nodos.</p></details>
+    <details class="qa"><summary>Necesito billetera para registrarme?</summary><p>No. El registro es solo la lista de espera. Cuando instales el nodo, tu billetera se crea automaticamente: una direccion KUK unica, con clave y contrase&ntilde;a que solo tu controlas (se genera en tu PC, nunca sale de ella). Todo el que mina tiene su propia billetera.</p></details>
+    <details class="qa"><summary>Estado real y transparencia</summary><p><strong>Fase de pruebas.</strong> El codigo fuente esta en el ZIP descargable de esta web. Aun no hay repositorio publico de Git ni auditoria de seguridad independiente. Recompensas actuales (10 KIA) = parametros de prueba, no ganancias garantizadas. Precio: no existe aun. Rentabilidad: no calculable sin precio/demanda/consumo medido. <a href="whitepaper.html" style="color:var(--gold);">Leer whitepaper completo</a>.</p></details>
+  </div>
+</section>
+
+<section id="registro" class="reveal">
+  <h2>Unete a la lista de espera</h2>
+  <div class="register-box">
+    <p style="color:var(--text);margin-bottom:1.8rem;line-height:1.6;">Se de los primeros en conectar tu GPU cuando la red abra. Te avisaremos al lanzamiento.</p>
+    <form action="https://formsubmit.co/kukone510@hotmail.com" method="POST">
+      <input type="hidden" name="_subject" value="Nuevo registro KUKIA - lista de espera">
+      <input type="hidden" name="_captcha" value="false">
+      <input type="hidden" name="_template" value="table">
+      <input type="text" name="nombre" placeholder="Tu nombre" required>
+      <input type="email" name="email" placeholder="Tu email" required>
+      <input type="text" name="gpu" placeholder="Tu tarjeta grafica (ej: RTX 3060 12GB)" required>
+      <input type="text" name="tops" placeholder="TOPS de IA de tu GPU (ej: RTX 4070 = 466 TOPS)" list="tops_ref">
+      <datalist id="tops_ref">
+        <option value="RTX 3060 = 102 TOPS">
+        <option value="RTX 3060 Ti = 130 TOPS">
+        <option value="RTX 3080 = 238 TOPS">
+        <option value="RTX 3090 = 285 TOPS">
+        <option value="RTX 4060 = 121 TOPS">
+        <option value="RTX 4060 Ti = 176 TOPS">
+        <option value="RTX 4070 = 466 TOPS">
+        <option value="RTX 4070 Ti = 561 TOPS">
+        <option value="RTX 4080 = 780 TOPS">
+        <option value="RTX 4090 = 1321 TOPS">
+        <option value="RTX 5060 = 614 TOPS">
+        <option value="RTX 5060 Ti = 759 TOPS">
+        <option value="RTX 5070 = 988 TOPS">
+        <option value="RTX 5070 Ti = 1406 TOPS">
+        <option value="RTX 5080 = 1801 TOPS">
+        <option value="RTX 5090 = 3352 TOPS">
+      </datalist>
+      <small style="display:block;text-align:left;color:var(--soft);font-size:.78rem;margin:-0.5rem 0 1rem;">Los TOPS son la medida estandar de potencia IA (valores oficiales NVIDIA con FP8/INT8). Elige tu modelo de la lista o escribelo a mano.</small>
+      <label style="display:flex;gap:.7rem;align-items:center;justify-content:center;margin:1rem 0;color:var(--text);font-size:.95rem;cursor:pointer;">
+        <input type="checkbox" name="ceder_potencia" value="SI - quiere ceder su potencia IA" style="width:auto;margin:0;transform:scale(1.3);accent-color:var(--gold);">
+        <span>Quiero <strong style="color:var(--gold);">ceder la potencia IA de mi GPU</strong> a la red (en TOPS)</span>
+      </label>
+      <button class="btn" type="submit" style="width:100%;">Quiero entrar en la red</button>
+    </form>
+    <small>Sin spam. Solo te avisamos del lanzamiento y las fases de prueba.</small>
+  </div>
+</section>
+
+<section id="apoyar" class="reveal">
+  <h2>Apoya el proyecto</h2>
+  <div class="grid">
+    <div class="card"><div class="ico">&#129309;</div><h3>Cede tu GPU</h3><p>Registrate con la casilla marcada y aporta los TOPS de tu grafica a la red. Los primeros nodos tendran recompensas de bienvenida.</p></div>
+    <div class="card"><div class="ico">&#128226;</div><h3>Comparte</h3><p>Comparte la web en tus redes con los hashtags del proyecto. Cuanta mas gente conozca KUKIA, antes nace la demanda real.</p></div>
+    <div class="card"><div class="ico">&#128269;</div><h3>Audita el codigo</h3><p>Todo el codigo esta publicado y es verificable. Si eres desarrollador, <a href="codigo.html" style="color:var(--gold);">revisalo aqui</a> y reporta mejoras.</p></div>
+    <div class="card"><div class="ico">&#128161;</div><h3>Propone ideas</h3><p>Ideas de tareas para la red (generacion de imagen, video, simulaciones, entrenamiento) son bienvenidas. La red crece con lo que la gente necesita.</p></div>
+  </div>
+</section>
+
+<section class="wp reveal">
+  <h2>Whitepaper</h2>
+  <img src="portada.jpg" alt="KUKIA Whitepaper">
+  <p style="margin-top:1.5rem;"><a class="btn" href="whitepaper.html">Leer whitepaper online</a> <a class="btn btn2" href="#" onclick="openWP();return false;">Descargar PDF</a></p>
+  <p style="margin-top:1rem;"><a href="codigo.html" style="color:var(--gold);">Ver codigo fuente completo &rarr;</a></p>
+</section>
+
+<section class="wp reveal">
+  <h2>El sello de la red</h2>
+  <img src="sello.jpg" alt="KUKIA Seal" style="max-width:260px;">
+</section>
+
+<footer>
+  KUKIA Network - prototipo en fase de pruebas. Sin precio hasta movimiento real verificado.<br>
+  <div class="hashes">#KUKIA #KIA #GPU #InteligenciaDistribuida #CriptoUtil #RenderNetwork #QPU #FuturoCuantico #DeFi #Web3 #AISinNube #EveryGPUOneNetwork #ComputeCoin</div>
+</footer>
+
+<script>
+function openWP() {
+  fetch('kukia_wp.dat').then(r => r.blob()).then(b => {
+    const url = URL.createObjectURL(new Blob([b], { type: 'application/pdf' }));
+    window.open(url, '_blank');
+  }).catch(() => alert('No se pudo abrir el PDF'));
+}
+const io = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); io.unobserve(e.target); } });
+}, { threshold: 0.12 });
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+const counters = document.querySelectorAll('[data-count]');
+const cio = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const el = e.target, target = parseInt(el.dataset.count), suffix = 'M';
+      let cur = 0;
+      const step = () => { cur += 2; if (cur >= target) { el.textContent = target + suffix; } else { el.textContent = cur + suffix; requestAnimationFrame(step); } };
+      step(); cio.unobserve(el);
+    }
+  });
+}, { threshold: 0.5 });
+counters.forEach(c => cio.observe(c));
+</script>
+</body>
+</html>
