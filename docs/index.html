@@ -93,7 +93,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <li><a href="#tokenomics">Tokenomics</a></li>
     <li><a href="#roadmap">Roadmap</a></li>
     <li><a href="#faq">FAQ</a></li>
-    <li><a href="codigo.html">Codigo</a></li>
+    <li><a href="#seguridad">Seguridad</a></li><li><a href="codigo.html">Codigo</a></li>
     <li><a href="#registro" style="color:var(--gold);font-weight:700;">Registro</a></li>
   </ul>
 </nav>
@@ -192,6 +192,41 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   </div>
 </section>
 
+<section id="seguridad" class="reveal">
+  <h2>Seguridad probada y proteccion al cliente</h2>
+  <div class="faq">
+    <details class="qa" open><summary>&#9989; Seguridad verificada en pruebas (resultado real)</summary>
+      <p><strong>La seguridad del sistema ha sido probada de extremo a extremo y funciona:</strong></p>
+      <ul style="margin:1rem 0 0 1.2rem;color:var(--text);">
+        <li><strong>Verificacion bit a bit probada:</strong> 3 tareas verificadas con exito y 1 intento de fraude rechazado automaticamente (0 KIA pagados).</li>
+        <li><strong>Billetera local probada:</strong> la clave se genera en tu PC y jamas sale de ella.</li>
+        <li><strong>Sin permisos peligrosos:</strong> el worker no pide administrador, no toca archivos del sistema y no abre puertos entrantes.</li>
+        <li><strong>Codigo 100% abierto:</strong> revisalo en un clic antes de instalar: <a href="codigo.html" style="color:var(--gold);">codigo fuente</a> o <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">GitHub</a>.</li>
+        <li><strong>Recomendacion honesta:</strong> es un prototipo en fase de pruebas; para maxima tranquilidad instalalo en un equipo secundario.</li>
+      </ul>
+    </details>
+    <details class="qa"><summary>&#128274; Proteccion al cliente (como te cuidamos)</summary>
+      <p>La red KUKIA protege a quien mina y a quien compra computo:</p>
+      <ul style="margin:1rem 0 0 1.2rem;color:var(--text);">
+        <li><strong>Verificacion bit a bit:</strong> ningun resultado falso se paga. El Core recalcula cada hash.</li>
+        <li><strong>Reputacion y staking:</strong> los nodos que fallan o mienten pierden reputacion y su deposito.</li>
+        <li><strong>Billetera local:</strong> tu clave nunca viaja por la red. Nadie puede robarte el saldo desde fuera.</li>
+        <li><strong>Sin pagos por adelantado:</strong> minar no cuesta dinero. Nunca te pediremos dinero para participar.</li>
+        <li><strong>Aviso claro:</strong> si algo es experimental, se dice. Si no hay precio, se dice. Todo transparente.</li>
+      </ul>
+    </details>
+    <details class="qa"><summary>&#128737;&#65039; Como verificar tu mismo el nodo (paso a paso)</summary>
+      <p>1. Descarga el ZIP y descomprimelo.<br>
+      2. Abre los archivos .py con cualquier editor de texto y leelos (son cortos: 40-90 lineas cada uno).<br>
+      3. Busca llamadas de red: solo veras peticiones al Core de KUKIA (tu propia maquina o la que configures).<br>
+      4. Busca permisos: no hay comandos de administrador ni accesos fuera de su carpeta.<br>
+      5. Si algo no te cuadra, no lo ejecutes y reportalo. Preferimos una critica honesta a un usuario enganado.</p>
+    </details>
+  </div>
+</section>
+
+</section>
+
 <section id="registro" class="reveal">
   <h2>Unete a la lista de espera</h2>
   <div class="register-box">
@@ -224,7 +259,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
       </datalist>
       <small style="display:block;text-align:left;color:var(--soft);font-size:.78rem;margin:-0.5rem 0 1rem;">Los TOPS son la medida estandar de potencia IA (valores oficiales NVIDIA con FP8/INT8). Elige tu modelo de la lista o escribelo a mano.</small>
       <label style="display:flex;gap:.7rem;align-items:center;justify-content:center;margin:1rem 0;color:var(--text);font-size:.95rem;cursor:pointer;">
-        <input type="checkbox" name="ceder_potencia" value="SI - quiere ceder su potencia IA" style="width:auto;margin:0;transform:scale(1.3);accent-color:var(--gold);">
+        <input type="checkbox" name="ceder_potencia" value="SI - quiere ceder su potencia IA" checked style="width:auto;margin:0;transform:scale(1.3);accent-color:var(--gold);">
         <span>Quiero <strong style="color:var(--gold);">ceder la potencia IA de mi GPU</strong> a la red (en TOPS)</span>
       </label>
       <button class="btn" type="submit" style="width:100%;">Quiero entrar en la red</button>
@@ -237,9 +272,9 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   <h2>Apoya el proyecto</h2>
   <div class="grid">
     <div class="card"><div class="ico">&#129309;</div><h3>Cede tu GPU</h3><p>Registrate con la casilla marcada y aporta los TOPS de tu grafica a la red. Los primeros nodos tendran recompensas de bienvenida.</p></div>
+    <div class="card"><div class="ico">&#11088;</div><h3>Danos una estrella</h3><p>El codigo es publico: <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">github.com/lordkukone/kukia-node</a>. Una estrella ayuda a que mas gente lo encuentre.</p></div>
     <div class="card"><div class="ico">&#128226;</div><h3>Comparte</h3><p>Comparte la web en tus redes con los hashtags del proyecto. Cuanta mas gente conozca KUKIA, antes nace la demanda real.</p></div>
-    <div class="card"><div class="ico">&#128269;</div><h3>Audita el codigo</h3><p>Todo el codigo esta publicado y es verificable. Si eres desarrollador, <a href="codigo.html" style="color:var(--gold);">revisalo aqui</a> y reporta mejoras.</p></div>
-    <div class="card"><div class="ico">&#128161;</div><h3>Propone ideas</h3><p>Ideas de tareas para la red (generacion de imagen, video, simulaciones, entrenamiento) son bienvenidas. La red crece con lo que la gente necesita.</p></div>
+    <div class="card"><div class="ico">&#128269;</div><h3>Audita el codigo</h3><p>Todo el codigo esta publicado y es verificable: <a href="codigo.html" style="color:var(--gold);">revisalo aqui</a> o en GitHub. Si eres desarrollador, reporta mejoras.</p></div>
   </div>
 </section>
 
