@@ -51,8 +51,8 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
 <div id="p-crear" class="panel on">
   <div class="card">
     <h3>Crear billetera</h3>
-    <input id="c-pass" type="password" placeholder="Tu contraseña (guárdala bien)">
-    <button class="btn" onclick="crear()">Crear mis 20 palabras</button>
+    <p style="color:var(--text);font-size:.85rem;margin-bottom:1rem;">El sistema genera TODO aleatorio (como Bitcoin/MetaMask): tu eliges nada, asi es imposible que sea debil.</p>
+    <button class="btn" onclick="crear()">Generar mi billetera</button>
     <div id="c-out"></div>
   </div>
 </div>
@@ -105,9 +105,11 @@ async function sha256hex(data){
 }
 
 function crear(){
-  var pass = document.getElementById('c-pass').value;
-  if(!pass){ alert('Pon una contraseña primero'); return; }
-  if(!WORDS || WORDS.length < 2048){ alert('Cargando lista de palabras, espera...'); return; }
+  if(!WORDS || WORDS.length < 2048){ alert('Cargando lista de palabras, espera unos segundos...'); return; }
+  // Password ALEATORIA fuerte (24 hex = 96 bits) - el usuario NO la inventa
+  var pb = new Uint8Array(12);
+  crypto.getRandomValues(pb);
+  var pass = Array.from(pb).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
   var words = [];
   var rnd = new Uint32Array(20);
   crypto.getRandomValues(rnd);
@@ -120,7 +122,8 @@ function crear(){
     localStorage.setItem('kukia_addr', addr);
     localStorage.setItem('kukia_words', JSON.stringify(words));
     var html = '<div class="addr">' + addr + '</div>';
-    html += '<div class="warn"><strong>Escribe estas 20 palabras EN PAPEL y en orden.</strong> Sin tu contraseña + palabras no recuperas nada.</div>';
+    html += '<div class="warn"><strong>GUARDA ESTO EN PAPEL AHORA:</strong><br>Contrasena: <code>' + pass + '</code></div>';
+    html += '<div class="warn"><strong>Escribe estas 20 palabras EN PAPEL y en orden.</strong> Sin contrasena + palabras no recuperas nada.</div>';
     html += '<div class="words">' + words.map(function(w,i){ return '<span>'+(i+1)+'. '+w+'</span>'; }).join('') + '</div>';
     document.getElementById('c-out').innerHTML = html;
   });
