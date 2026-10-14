@@ -75,6 +75,11 @@ GENESIS_MONTO = 15_000_000.0      # 15M reservados al fundador dentro del techo 
 TIER_MULT = {12: 1.0, 16: 1.3, 24: 1.6}   # Rent-Tier por VRAM (mejora 1)
 REF_BONUS = 50.0                  # bonus referido al completar 10 tareas (mejora 2)
 BOUNTY = 1000.0                   # bounty anti-trampa (mejora 3)
+# --- Politica de firmas (migracion) ---
+# False = nodos viejos sin clave siguen cobrando (compatibilidad, fase pruebas).
+# True  = TODOS los nodos deben traer firma (rechaza sin clave_publica).
+# Pasar a True al abrir la red publica.
+EXIGIR_FIRMA_GLOBAL = False
 
 con = sqlite3.connect(str(DB), check_same_thread=False)
 con.row_factory = sqlite3.Row
@@ -245,13 +250,38 @@ def crear_tarea(t: TareaIn, _ok: None = Depends(exigir_admin)):
 
 @app.get(&quot;/tareas/pendiente&quot;)
 def pendiente(nodo_id: str):
-    row = con.execute(&quot;SELECT id,tipo,params FROM tareas WHERE estado=&#x27;queued&#x27; &quot;
-                      &quot;ORDER BY creado LIMIT 1&quot;).fetchone()
-    if not row:
-        return {&quot;tarea&quot;: None}
-    con.execute(&quot;UPDATE tareas SET estado=&#x27;ejecutando&#x27;, nodo_id=? WHERE id=?&quot;, (nodo_id, row[&quot;id&quot;]))
-    con.commit()
-    return {&quot;tarea&quot;: {&quot;id&quot;: row[&quot;id&quot;], &quot;tipo&quot;: row[&quot;tipo&quot;], &quot;params&quot;: json.loads(row[&quot;params&quot;])}}
+    &quot;&quot;&quot;Asignacion ATOMICA: SELECT + UPDATE en una transaccion con lock.
+
+    Dos workers simultaneos NO pueden llevarse la misma tarea: el segundo
+    espera al lock y re-verifica que siga en &#x27;queued&#x27; antes de asignarla.
+    &quot;&quot;&quot;
+    with _pago_lock:
+        try:
+            con.execute(&quot;BEGIN IMMEDIATE&quot;)
+        except Exception:
+            raise HTTPException(503, &quot;Core ocupado, reintentar&quot;)
+        try:
+            row = con.execute(&quot;SELECT id,tipo,params FROM tareas WHERE estado=&#x27;queued&#x27; &quot;
+                              &quot;ORDER BY creado LIMIT 1&quot;).fetchone()
+            if not row:
+                con.execute(&quot;ROLLBACK&quot;)
+                return {&quot;tarea&quot;: None}
+            # Re-verificar DENTRO del lock que nadie la cogio antes
+            chk = con.execute(&quot;SELECT estado FROM tareas WHERE id=?&quot;, (row[&quot;id&quot;],)).fetchone()
+            if not chk or chk[&quot;estado&quot;] != &quot;queued&quot;:
+                con.execute(&quot;ROLLBACK&quot;)
+                return {&quot;tarea&quot;: None}
+            con.execute(&quot;UPDATE tareas SET estado=&#x27;ejecutando&#x27;, nodo_id=? WHERE id=?&quot;, (nodo_id, row[&quot;id&quot;]))
+            con.commit()
+            return {&quot;tarea&quot;: {&quot;id&quot;: row[&quot;id&quot;], &quot;tipo&quot;: row[&quot;tipo&quot;], &quot;params&quot;: json.loads(row[&quot;params&quot;])}}
+        except HTTPException:
+            raise
+        except Exception as e:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            raise HTTPException(500, f&quot;error asignando tarea: {e}&quot;)
 
 @app.post(&quot;/tareas/resultado&quot;)
 def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;, firma: str = &quot;&quot;):
@@ -298,31 +328,36 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                 con.execute(&quot;ROLLBACK&quot;)
                 raise HTTPException(409, &quot;tarea asignada a otro nodo&quot;)
 
+            # AUTENTICACION PRIMERO (vale para correctos E incorrectos):
+            # nadie sin firma puede cerrar la tarea de otro (ni como fallo).
+            node = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
+            if not node:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(404, &quot;nodo no registrado&quot;)
+            pub = None
+            try:
+                pub = node[&quot;clave_publica&quot;]
+            except Exception:
+                pub = None
+            # Politica de migracion: si EXIGIR_FIRMA_GLOBAL, sin clave no hay cobro.
+            if EXIGIR_FIRMA_GLOBAL and not pub:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(401, &quot;nodo sin clave registrada (firma obligatoria)&quot;)
+            if pub:
+                if not firma:
+                    con.execute(&quot;ROLLBACK&quot;)
+                    raise HTTPException(401, &quot;falta firma del nodo (suplantacion bloqueada)&quot;)
+                try:
+                    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                    Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                        bytes.fromhex(firma), f&quot;{tid}:{metrica}&quot;.encode())
+                except Exception:
+                    con.execute(&quot;ROLLBACK&quot;)
+                    raise HTTPException(401, &quot;firma invalida (suplantacion bloqueada)&quot;)
+
             kuki = 0.0
             info_pago = {}
             if ok:
-                node = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
-                if not node:
-                    con.execute(&quot;ROLLBACK&quot;)
-                    raise HTTPException(404, &quot;nodo no registrado&quot;)
-                # AUTENTICACION: si el nodo tiene clave publica, exigir firma valida.
-                # Sin esto cualquiera podria cobrar haciendose pasar por otro nodo_id.
-                pub = None
-                try:
-                    pub = node[&quot;clave_publica&quot;]
-                except Exception:
-                    pub = None
-                if pub:
-                    if not firma:
-                        con.execute(&quot;ROLLBACK&quot;)
-                        raise HTTPException(401, &quot;falta firma del nodo (suplantacion bloqueada)&quot;)
-                    try:
-                        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-                        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
-                            bytes.fromhex(firma), f&quot;{tid}:{metrica}&quot;.encode())
-                    except Exception:
-                        con.execute(&quot;ROLLBACK&quot;)
-                        raise HTTPException(401, &quot;firma invalida (suplantacion bloqueada)&quot;)
                 # Tope calculado DENTRO de la transaccion (nadie mas puede mover el supply)
                 kuki, info_pago = recompensa_pago(node[&quot;tier&quot;])
                 con.execute(&quot;UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) &quot;
