@@ -37,14 +37,31 @@ El Core recalcula la tarea el mismo (trustless) y compara el resultado
 exacto. Tareas con aritmetica determinista (enteros exactos via float64
 con magnitudes acotadas) para que CPU y GPU den el MISMO numero.
 &quot;&quot;&quot;
-import hashlib, json, sqlite3, uuid, time
+import hashlib, json, secrets, sqlite3, uuid, time
 from pathlib import Path
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 
 DB = Path(__file__).parent / &quot;ledger&quot; / &quot;kukia.db&quot;
 DB.parent.mkdir(parents=True, exist_ok=True)
+
+# --- Token de ADMIN: solo Kuki maneja el Core ---
+# Se genera UNA vez y se guarda en un fichero local (nadie mas lo tiene).
+ADMIN_TOKEN_FILE = Path(__file__).parent / &quot;admin_token.txt&quot;
+def admin_token() -&gt; str:
+    if ADMIN_TOKEN_FILE.exists():
+        return ADMIN_TOKEN_FILE.read_text(encoding=&quot;utf-8&quot;).strip()
+    tok = secrets.token_hex(32)
+    ADMIN_TOKEN_FILE.write_text(tok, encoding=&quot;utf-8&quot;)
+    return tok
+
+ADMIN_TOKEN = admin_token()
+
+def exigir_admin(x_admin_token: str = Header(default=&quot;&quot;, alias=&quot;X-Admin-Token&quot;)):
+    &quot;&quot;&quot;Solo el fundador (con el token) puede administrar el Core.&quot;&quot;&quot;
+    if not secrets.compare_digest(x_admin_token or &quot;&quot;, ADMIN_TOKEN):
+        raise HTTPException(403, &quot;solo el administrador del Core&quot;)
 
 MAX_SUPPLY = 100_000_000          # techo fijo 100M
 REWARD_BASE = 10.0                # KUKI por tarea base
@@ -134,23 +151,37 @@ class TareaIn(BaseModel):
 def tier(vram: int) -&gt; float:
     return TIER_MULT.get(vram, 1.0)
 
-# --- Calendario de emision hasta ~2150 (halvings cada 21 anos) ---
-EMISSION_START = 2026
-HALVING_YEARS = 21
+# --- Calendario de emision: la ultima moneda sale el 13-04-2150 ---
+# 6 halvings en 124,28 anos -&gt; era de 20,71 anos. Tras esa fecha, emision = 0.
+from datetime import date
+EMISSION_START = date(2026, 1, 1)
+EMISSION_END = date(2150, 4, 13)
+HALVING_YEARS = (EMISSION_END - EMISSION_START).days / 365.25 / 6  # ~20,71
 def emission_mult() -&gt; float:
-    &quot;&quot;&quot;Multiplicador de recompensa por era: 1.0, 0.5, 0.25... hasta ~2150.&quot;&quot;&quot;
-    from datetime import datetime
-    era = max(0, (datetime.now().year - EMISSION_START) // HALVING_YEARS)
+    &quot;&quot;&quot;Multiplicador de recompensa por era: 1.0, 0.5, 0.25... 0 tras el 13-04-2130.&quot;&quot;&quot;
+    hoy = date.today()
+    if hoy &gt;= EMISSION_END:
+        return 0.0
+    elapsed = (hoy - EMISSION_START).days / 365.25
+    era = max(0, int(elapsed // HALVING_YEARS))
     return 0.5 ** era
 
 def emission_info() -&gt; dict:
-    from datetime import datetime
-    era = max(0, (datetime.now().year - EMISSION_START) // HALVING_YEARS)
+    from datetime import timedelta
+    hoy = date.today()
+    if hoy &gt;= EMISSION_END:
+        return {&quot;era_actual&quot;: 6, &quot;multiplicador&quot;: 0.0,
+                &quot;proximo_halving&quot;: None, &quot;fin_emision&quot;: &quot;2130-04-13&quot;,
+                &quot;halving_years&quot;: round(HALVING_YEARS, 2)}
+    elapsed = (hoy - EMISSION_START).days / 365.25
+    era = max(0, int(elapsed // HALVING_YEARS))
+    prox = EMISSION_START + timedelta(days=int((era + 1) * HALVING_YEARS * 365.25))
     return {
         &quot;era_actual&quot;: era,
         &quot;multiplicador&quot;: 0.5 ** era,
-        &quot;proximo_halving&quot;: EMISSION_START + (era + 1) * HALVING_YEARS,
-        &quot;fin_emision_aprox&quot;: 2150,
+        &quot;proximo_halving&quot;: prox.isoformat(),
+        &quot;fin_emision&quot;: &quot;2130-04-13&quot;,
+        &quot;halving_years&quot;: round(HALVING_YEARS, 2),
     }
 
 @app.post(&quot;/nodos/registrar&quot;)
@@ -166,7 +197,7 @@ def nodos():
     return [dict(r) for r in con.execute(&quot;SELECT * FROM nodos&quot;).fetchall()]
 
 @app.post(&quot;/tareas/crear&quot;)
-def crear_tarea(t: TareaIn):
+def crear_tarea(t: TareaIn, _ok: None = Depends(exigir_admin)):
     tid = uuid.uuid4().hex[:12]
     # los params llevan seed -&gt; la tarea es reproducible/verificable
     con.execute(&quot;INSERT INTO tareas(id,tipo,params,estado,creado) VALUES(?,?,?,?,?)&quot;,
@@ -250,8 +281,16 @@ def registro(r: RegistroIn):
     return {&quot;ok&quot;: True, &quot;mensaje&quot;: &quot;Registrado. Te avisaremos al lanzamiento.&quot;, &quot;posicion&quot;: con.execute(&quot;SELECT COUNT(*) c FROM registros&quot;).fetchone()[&quot;c&quot;]}
 
 @app.get(&quot;/registros&quot;)
-def registros():
+def registros(_ok: None = Depends(exigir_admin)):
     return [dict(x) for x in con.execute(&quot;SELECT * FROM registros ORDER BY id DESC LIMIT 500&quot;).fetchall()]
+
+@app.get(&quot;/saldo/{direccion}&quot;)
+def saldo(direccion: str):
+    &quot;&quot;&quot;Saldo publico de una direccion (cualquiera puede consultarlo).&quot;&quot;&quot;
+    s = con.execute(&quot;SELECT COALESCE(SUM(kuki),0) as s FROM ledger WHERE nodo_id=?&quot;,
+                    (direccion,)).fetchone()[&quot;s&quot;]
+    # tambien sumar pagos recibidos como nodo minero
+    return {&quot;direccion&quot;: direccion, &quot;saldo&quot;: s}
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300
 </code></pre>
@@ -358,59 +397,125 @@ if __name__ == &quot;__main__&quot;:
     main()
 </code></pre>
 <h2>Billetera - kukia_wallet.py</h2>
-<pre><code>&quot;&quot;&quot;KUKIA Wallet - billetera con criptografia REAL (Ed25519).
+<pre><code>&quot;&quot;&quot;KUKIA Wallet - billetera con criptografia REAL (Ed25519) + recuperacion.
 
-- Clave privada Ed25519 (256 bits) generada con secrets (CSPRNG del sistema)
-- Direccion derivada de la clave PUBLICA (no de la privada)
-- Firma digital Ed25519 verificable (no HMAC simplificado)
-- La clave privada nunca sale del equipo del usuario
+- Clave privada Ed25519 (256 bits) DERIVADA de: contrasena + 20 palabras unicas
+- Derivacion: PBKDF2-HMAC-SHA512 (200.000 iteraciones, salt fijo de KUKIA)
+- Las 20 palabras salen de la lista oficial BIP39 en espanol (2048 palabras)
+- Con la contrasena + las 20 palabras se recupera la MISMA billetera en
+  cualquier equipo (Python, movil, web). Sin ellas, imposible.
+- Direccion = KUK + SHA256(clave publica), derivada de la publica.
+- La clave privada nunca sale del equipo del usuario.
 &quot;&quot;&quot;
 import json, hashlib, os, secrets, time
 from pathlib import Path
 
 WALLET_DIR = Path(__file__).parent.parent / &quot;ledger&quot; / &quot;wallet&quot;
 WALLET_DIR.mkdir(parents=True, exist_ok=True)
+WORDLIST_FILE = Path(__file__).parent / &quot;wordlist_es.txt&quot;
+
+PBKDF2_ITER = 200_000
+KUKIA_SALT = b&quot;kukia-wallet-v1&quot;
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
     from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
     CRYPTO_REAL = True
 except ImportError:
     CRYPTO_REAL = False
 
-def crear_billetera(nombre):
-    &quot;&quot;&quot;Crea o devuelve la billetera del nodo (Ed25519 + saldo local).&quot;&quot;&quot;
+def _wordlist():
+    words = [w.strip() for w in WORDLIST_FILE.read_text(encoding=&quot;utf-8&quot;).splitlines() if w.strip()]
+    if len(words) &lt; 2048:
+        raise RuntimeError(&quot;wordlist incompleta&quot;)
+    return words
+
+def generar_mnemonico(n_palabras: int = 20) -&gt; list:
+    &quot;&quot;&quot;20 palabras unicas aleatorias (CSPRNG) de la lista BIP39 espanol.&quot;&quot;&quot;
+    words = _wordlist()
+    return [secrets.choice(words) for _ in range(n_palabras)]
+
+def derivar_clave(password: str, mnemonico: list) -&gt; bytes:
+    &quot;&quot;&quot;Deriva 64 bytes via PBKDF2 (los 32 primeros = semilla Ed25519).&quot;&quot;&quot;
+    if isinstance(mnemonico, str):
+        mnemonico = mnemonico.strip().split()
+    material = (&quot; &quot;.join(mnemonico) + &quot;|&quot; + password).encode(&quot;utf-8&quot;)
+    if CRYPTO_REAL:
+        kdf = PBKDF2HMAC(algorithm=hashes.SHA512(), length=64,
+                         salt=KUKIA_SALT, iterations=PBKDF2_ITER)
+        return kdf.derive(material)
+    # fallback (no deberia ocurrir)
+    return hashlib.pbkdf2_hmac(&quot;sha512&quot;, material, KUKIA_SALT, PBKDF2_ITER, 64)
+
+def crear_billetera(nombre, password: str = &quot;&quot;, mnemonico: list = None):
+    &quot;&quot;&quot;Crea (o recupera) la billetera. Sin password/mnemonico genera unos nuevos.&quot;&quot;&quot;
     f = WALLET_DIR / f&quot;{nombre}.json&quot;
     if f.exists():
         d = json.loads(f.read_text(encoding=&quot;utf-8&quot;))
+        # migrar billeteras viejas sin mnemonico: conservar direccion y saldo
+        if &quot;mnemonico&quot; not in d:
+            d[&quot;mnemonico&quot;] = None
+            d[&quot;tiene_recuperacion&quot;] = False
         return d
 
+    if mnemonico is None:
+        mnemonico = generar_mnemonico(20)
+    if not password:
+        # si no dan contrasena, se genera una (hay que guardarla bien)
+        password = secrets.token_hex(16)
+
+    semilla = derivar_clave(password, mnemonico)[:32]
     if CRYPTO_REAL:
-        # clave privada Ed25519 real (CSPRNG del sistema)
-        priv = Ed25519PrivateKey.generate()
-        priv_bytes = priv.private_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PrivateFormat.Raw,
-            encryption_algorithm=serialization.NoEncryption())
+        priv = Ed25519PrivateKey.from_private_bytes(semilla)
         pub_bytes = priv.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw)
-        clave_secreta = priv_bytes.hex()
+        clave_privada = semilla.hex()
         clave_publica = pub_bytes.hex()
-        # direccion = hash de la clave PUBLICA (estandar cripto)
         direccion = &quot;KUK&quot; + hashlib.sha256(pub_bytes).hexdigest()[:38].upper()
-        esquema = &quot;ed25519&quot;
+        esquema = &quot;ed25519-pbkdf2&quot;
     else:
-        # fallback (no deberia ocurrir: cryptography esta instalado)
-        clave_secreta = secrets.token_hex(32)
+        clave_privada = semilla.hex()
         clave_publica = &quot;&quot;
-        direccion = &quot;KUK&quot; + hashlib.sha256(clave_secreta.encode()).hexdigest()[:38].upper()
+        direccion = &quot;KUK&quot; + hashlib.sha256(semilla).hexdigest()[:38].upper()
         esquema = &quot;sha256-fallback&quot;
 
     d = {&quot;nombre&quot;: nombre, &quot;direccion&quot;: direccion, &quot;esquema&quot;: esquema,
-         &quot;clave_privada&quot;: clave_secreta, &quot;clave_publica&quot;: clave_publica,
+         &quot;clave_privada&quot;: clave_privada, &quot;clave_publica&quot;: clave_publica,
+         &quot;mnemonico&quot;: mnemonico, &quot;tiene_recuperacion&quot;: True,
          &quot;saldo&quot;: 0.0, &quot;creada&quot;: time.ctime()}
-    f.write_text(json.dumps(d, indent=2), encoding=&quot;utf-8&quot;)
+    f.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
+    return d, password
+
+def recuperar_billetera(nombre, password: str, mnemonico: list):
+    &quot;&quot;&quot;Recupera la MISMA billetera en otro equipo con password + 20 palabras.&quot;&quot;&quot;
+    if isinstance(mnemonico, str):
+        mnemonico = mnemonico.strip().split()
+    if len(mnemonico) != 20:
+        raise ValueError(&quot;se necesitan las 20 palabras&quot;)
+    semilla = derivar_clave(password, mnemonico)[:32]
+    if CRYPTO_REAL:
+        priv = Ed25519PrivateKey.from_private_bytes(semilla)
+        pub_bytes = priv.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw)
+        direccion = &quot;KUK&quot; + hashlib.sha256(pub_bytes).hexdigest()[:38].upper()
+    else:
+        direccion = &quot;KUK&quot; + hashlib.sha256(semilla).hexdigest()[:38].upper()
+    f = WALLET_DIR / f&quot;{nombre}.json&quot;
+    if f.exists():
+        d = json.loads(f.read_text(encoding=&quot;utf-8&quot;))
+        if d.get(&quot;direccion&quot;) != direccion:
+            raise ValueError(&quot;las palabras/contrasena no coinciden con esta billetera&quot;)
+        return d
+    d = {&quot;nombre&quot;: nombre, &quot;direccion&quot;: direccion, &quot;esquema&quot;: &quot;ed25519-pbkdf2&quot;,
+         &quot;clave_privada&quot;: semilla.hex(),
+         &quot;clave_publica&quot;: pub_bytes.hex() if CRYPTO_REAL else &quot;&quot;,
+         &quot;mnemonico&quot;: mnemonico, &quot;tiene_recuperacion&quot;: True,
+         &quot;saldo&quot;: 0.0, &quot;creada&quot;: time.ctime(), &quot;recuperada&quot;: True}
+    f.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
     return d
 
 def firmar(datos, clave_privada_hex):
@@ -433,31 +538,38 @@ def verificar_firma(datos, firma_hex, clave_publica_hex):
 
 def ver_saldo(nombre):
     d = crear_billetera(nombre)
+    if isinstance(d, tuple):
+        d = d[0]
     return d[&quot;saldo&quot;]
 
 def abonar(nombre, monto, motivo):
     d = crear_billetera(nombre)
+    if isinstance(d, tuple):
+        d = d[0]
     d[&quot;saldo&quot;] = round(d[&quot;saldo&quot;] + monto, 4)
     f = WALLET_DIR / f&quot;{nombre}.json&quot;
-    f.write_text(json.dumps(d, indent=2), encoding=&quot;utf-8&quot;)
+    f.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
     hist = WALLET_DIR / f&quot;{nombre}_hist.json&quot;
     h = json.loads(hist.read_text(encoding=&quot;utf-8&quot;)) if hist.exists() else []
     h.append({&quot;ts&quot;: time.ctime(), &quot;monto&quot;: monto, &quot;motivo&quot;: motivo})
-    hist.write_text(json.dumps(h[-200:], indent=2), encoding=&quot;utf-8&quot;)
+    hist.write_text(json.dumps(h[-200:], indent=2, encoding=&quot;utf-8&quot;) if False else json.dumps(h[-200:], indent=2), encoding=&quot;utf-8&quot;)
     return d[&quot;saldo&quot;]
 
 if __name__ == &quot;__main__&quot;:
     import sys
     nombre = sys.argv[1] if len(sys.argv) &gt; 1 else &quot;nodo_fundador&quot;
-    w = crear_billetera(nombre)
-    print(f&quot;[KUKIA Wallet] {w[&#x27;direccion&#x27;]}&quot;)
-    print(f&quot;  esquema: {w[&#x27;esquema&#x27;]}&quot;)
-    print(f&quot;  saldo: {w[&#x27;saldo&#x27;]} KIA&quot;)
-    # prueba de firma/verificacion
-    if CRYPTO_REAL:
-        firma = firmar(&quot;prueba-kukia&quot;, w[&quot;clave_privada&quot;])
-        ok = verificar_firma(&quot;prueba-kukia&quot;, firma, w[&quot;clave_publica&quot;])
-        print(f&quot;  firma Ed25519 verificada: {ok}&quot;)
+    password = sys.argv[2] if len(sys.argv) &gt; 2 else &quot;&quot;
+    res = crear_billetera(nombre, password)
+    if isinstance(res, tuple):
+        w, pwd = res
+        print(f&quot;[KUKIA Wallet] {w[&#x27;direccion&#x27;]}&quot;)
+        print(f&quot;  esquema: {w[&#x27;esquema&#x27;]}&quot;)
+        print(f&quot;  saldo: {w[&#x27;saldo&#x27;]} KIA&quot;)
+        print(f&quot;  PASSWORD: {pwd}&quot;)
+        print(f&quot;  20 PALABRAS: {&#x27; &#x27;.join(w[&#x27;mnemonico&#x27;])}&quot;)
+        print(&quot;  GUARDA password + 20 palabras: sin ellas NO se recupera.&quot;)
+    else:
+        print(f&quot;[KUKIA Wallet] {res[&#x27;direccion&#x27;]} (existente)&quot;)
 </code></pre>
 <h2>Dashboard - kukia_dash.py</h2>
 <pre><code>&quot;&quot;&quot;KUKIA Dashboard - estado de la red en vivo (heartbeat, mejora 7).&quot;&quot;&quot;

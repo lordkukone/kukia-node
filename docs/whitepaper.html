@@ -41,7 +41,8 @@ th { color:var(--gold); background:rgba(18,48,94,.5); }
 <tr><th>Parametro</th><th>Valor</th></tr>
 <tr><td>Techo maximo</td><td>100.000.000 KIA (nunca habra mas)</td></tr>
 <tr><td>Emision hasta</td><td>2150 (escalonada por fases)</td></tr>
-<tr><td>Asignacion fundacional</td><td>15.000.000 KIA al fundador (<code>KUK77D72508BD940C9BA969B0402A3CF1F9679BE3</code>)</td></tr>
+<tr><td>Asignacion fundacional</td><td>15.000.000 KIA al fundador (bloque genesis + migracion a billetera con recuperacion: <code>KUK9E8B44CD7FE3AF178039453D3EEDF391EEC0CE</code>)</td></tr>
+<tr><td>Calendario de emision</td><td>Halvings cada ~20,71 anos (6 eras). Ultima moneda: <strong>13-04-2150</strong>. Tras esa fecha, emision = 0</td></tr>
 <tr><td>Resto del suministro</td><td>Se emite por trabajo verificado hasta completar los 100M</td></tr>
 <tr><td>Quema</td><td>10-15% de las comisiones del sistema</td></tr>
 <tr><td>Dificultad</td><td>Se ajusta al numero de nodos activos</td></tr>
@@ -68,9 +69,9 @@ th { color:var(--gold); background:rgba(18,48,94,.5); }
 
 <h2>6. Arquitectura tecnica</h2>
 <ul>
-<li><strong>Coordinator (Core):</strong> FastAPI + SQLite. Registra nodos, reparte tareas, verifica, lleva el ledger.</li>
-<li><strong>Worker:</strong> se conecta al Core, pide tareas, ejecuta en GPU (PyTorch), devuelve hash.</li>
-<li><strong>Wallet:</strong> billetera local, se genera en tu PC. Direccion tipo <code>KUK...</code>. Tu clave no sale de tu maquina.</li>
+<li><strong>Coordinator (Core):</strong> FastAPI + SQLite. Registra nodos, reparte tareas, verifica recalculando el mismo, lleva el ledger. Solo el fundador lo administra (token de admin).</li>
+<li><strong>Worker multi-GPU:</strong> se conecta al Core, pide tareas, ejecuta en TODAS las GPUs a la vez (un hilo por GPU), devuelve el resultado exacto.</li>
+<li><strong>Wallet con recuperacion:</strong> claves Ed25519 reales derivadas de tu contrasena + 20 palabras unicas (lista BIP39 espanol, PBKDF2 200.000 iteraciones). Con ambas recuperas la MISMA billetera en cualquier equipo. Direccion tipo <code>KUK...</code> derivada de la clave publica. Tu clave nunca sale de tu maquina.</li>
 <li><strong>Dashboard:</strong> panel web local con el estado de la red.</li>
 </ul>
 

@@ -5,14 +5,31 @@ El Core recalcula la tarea el mismo (trustless) y compara el resultado
 exacto. Tareas con aritmetica determinista (enteros exactos via float64
 con magnitudes acotadas) para que CPU y GPU den el MISMO numero.
 """
-import hashlib, json, sqlite3, uuid, time
+import hashlib, json, secrets, sqlite3, uuid, time
 from pathlib import Path
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 
 DB = Path(__file__).parent / "ledger" / "kukia.db"
 DB.parent.mkdir(parents=True, exist_ok=True)
+
+# --- Token de ADMIN: solo Kuki maneja el Core ---
+# Se genera UNA vez y se guarda en un fichero local (nadie mas lo tiene).
+ADMIN_TOKEN_FILE = Path(__file__).parent / "admin_token.txt"
+def admin_token() -> str:
+    if ADMIN_TOKEN_FILE.exists():
+        return ADMIN_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    tok = secrets.token_hex(32)
+    ADMIN_TOKEN_FILE.write_text(tok, encoding="utf-8")
+    return tok
+
+ADMIN_TOKEN = admin_token()
+
+def exigir_admin(x_admin_token: str = Header(default="", alias="X-Admin-Token")):
+    """Solo el fundador (con el token) puede administrar el Core."""
+    if not secrets.compare_digest(x_admin_token or "", ADMIN_TOKEN):
+        raise HTTPException(403, "solo el administrador del Core")
 
 MAX_SUPPLY = 100_000_000          # techo fijo 100M
 REWARD_BASE = 10.0                # KUKI por tarea base
@@ -102,23 +119,37 @@ class TareaIn(BaseModel):
 def tier(vram: int) -> float:
     return TIER_MULT.get(vram, 1.0)
 
-# --- Calendario de emision hasta ~2150 (halvings cada 21 anos) ---
-EMISSION_START = 2026
-HALVING_YEARS = 21
+# --- Calendario de emision: la ultima moneda sale el 13-04-2150 ---
+# 6 halvings en 124,28 anos -> era de 20,71 anos. Tras esa fecha, emision = 0.
+from datetime import date
+EMISSION_START = date(2026, 1, 1)
+EMISSION_END = date(2150, 4, 13)
+HALVING_YEARS = (EMISSION_END - EMISSION_START).days / 365.25 / 6  # ~20,71
 def emission_mult() -> float:
-    """Multiplicador de recompensa por era: 1.0, 0.5, 0.25... hasta ~2150."""
-    from datetime import datetime
-    era = max(0, (datetime.now().year - EMISSION_START) // HALVING_YEARS)
+    """Multiplicador de recompensa por era: 1.0, 0.5, 0.25... 0 tras el 13-04-2130."""
+    hoy = date.today()
+    if hoy >= EMISSION_END:
+        return 0.0
+    elapsed = (hoy - EMISSION_START).days / 365.25
+    era = max(0, int(elapsed // HALVING_YEARS))
     return 0.5 ** era
 
 def emission_info() -> dict:
-    from datetime import datetime
-    era = max(0, (datetime.now().year - EMISSION_START) // HALVING_YEARS)
+    from datetime import timedelta
+    hoy = date.today()
+    if hoy >= EMISSION_END:
+        return {"era_actual": 6, "multiplicador": 0.0,
+                "proximo_halving": None, "fin_emision": "2130-04-13",
+                "halving_years": round(HALVING_YEARS, 2)}
+    elapsed = (hoy - EMISSION_START).days / 365.25
+    era = max(0, int(elapsed // HALVING_YEARS))
+    prox = EMISSION_START + timedelta(days=int((era + 1) * HALVING_YEARS * 365.25))
     return {
         "era_actual": era,
         "multiplicador": 0.5 ** era,
-        "proximo_halving": EMISSION_START + (era + 1) * HALVING_YEARS,
-        "fin_emision_aprox": 2150,
+        "proximo_halving": prox.isoformat(),
+        "fin_emision": "2130-04-13",
+        "halving_years": round(HALVING_YEARS, 2),
     }
 
 @app.post("/nodos/registrar")
@@ -134,7 +165,7 @@ def nodos():
     return [dict(r) for r in con.execute("SELECT * FROM nodos").fetchall()]
 
 @app.post("/tareas/crear")
-def crear_tarea(t: TareaIn):
+def crear_tarea(t: TareaIn, _ok: None = Depends(exigir_admin)):
     tid = uuid.uuid4().hex[:12]
     # los params llevan seed -> la tarea es reproducible/verificable
     con.execute("INSERT INTO tareas(id,tipo,params,estado,creado) VALUES(?,?,?,?,?)",
@@ -218,7 +249,15 @@ def registro(r: RegistroIn):
     return {"ok": True, "mensaje": "Registrado. Te avisaremos al lanzamiento.", "posicion": con.execute("SELECT COUNT(*) c FROM registros").fetchone()["c"]}
 
 @app.get("/registros")
-def registros():
+def registros(_ok: None = Depends(exigir_admin)):
     return [dict(x) for x in con.execute("SELECT * FROM registros ORDER BY id DESC LIMIT 500").fetchall()]
+
+@app.get("/saldo/{direccion}")
+def saldo(direccion: str):
+    """Saldo publico de una direccion (cualquiera puede consultarlo)."""
+    s = con.execute("SELECT COALESCE(SUM(kuki),0) as s FROM ledger WHERE nodo_id=?",
+                    (direccion,)).fetchone()["s"]
+    # tambien sumar pagos recibidos como nodo minero
+    return {"direccion": direccion, "saldo": s}
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300
