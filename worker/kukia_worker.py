@@ -8,6 +8,9 @@ MULTI-GPU: usa TODAS las GPUs disponibles a la vez (una cola por GPU).
 """
 import hashlib, json, sys, time, threading, socket
 import requests
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent / "ledger"))
+import kukia_wallet as WALLET
 
 CORE = "http://127.0.0.1:8300"
 
@@ -41,11 +44,18 @@ def trabajo_local(tipo: str, params: dict, device: str = "cuda:0") -> str:
     return "tarea_no_soportada"
 
 def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
-    """Un hilo por GPU: registra su nodo y mina en bucle."""
+    """Un hilo por GPU: registra su nodo y mina en bucle (resultados FIRMADOS)."""
     etiqueta = f"{nombre}[{device}]"
+    # Billetera propia para firmar envios (nadie puede suplantar este nodo)
+    w = WALLET.crear_billetera("worker_" + nombre.replace("[", "_").replace("]", "_").replace(":", ""))
+    if isinstance(w, tuple):
+        w = w[0]
+    pubkey = w.get("clave_publica", "")
+    privkey = w.get("clave_privada", "")
     try:
         r = requests.post(f"{CORE}/nodos/registrar",
-                          json={"nombre": etiqueta, "vram_gb": vram_gb, "tops": tops}, timeout=30)
+                          json={"nombre": etiqueta, "vram_gb": vram_gb, "tops": tops,
+                                "clave_publica": pubkey}, timeout=30)
         nid = r.json()["id"]
         print(f"[KUKIA] nodo {nid} ({etiqueta}) vram={vram_gb}GB listo")
     except Exception as e:
@@ -58,8 +68,10 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 time.sleep(3)
                 continue
             metrica = trabajo_local(pend["tipo"], pend["params"], device)
+            firma = WALLET.firmar(f"{pend['id']}:{metrica}", privkey) if privkey else ""
             res = requests.post(f"{CORE}/tareas/resultado",
-                                params={"tid": pend["id"], "nodo_id": nid, "metrica": metrica},
+                                params={"tid": pend["id"], "nodo_id": nid, "metrica": metrica,
+                                        "firma": firma},
                                 timeout=60).json()
             estado = f"OK +{res['kuki']} KIA" if res.get("ok") else f"RECHAZADO (esperado {res.get('esperado')})"
             print(f"[KUKIA] {etiqueta} tarea {pend['id'][:8]} -> {estado}")

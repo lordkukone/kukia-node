@@ -62,6 +62,10 @@ def schema():
         con.execute("ALTER TABLE nodos ADD COLUMN tops REAL DEFAULT 0")
     except Exception:
         pass
+    try:
+        con.execute("ALTER TABLE nodos ADD COLUMN clave_publica TEXT DEFAULT ''")
+    except Exception:
+        pass
     con.commit()
 
 schema()
@@ -110,11 +114,40 @@ def computar_tarea(tipo: str, params: dict):
 
 app = FastAPI(title="KUKIA Core", version="0.2.0")
 
+# ============================================================
+#  RATE LIMIT (anti-spam: max 30 peticiones/min por IP en rutas publicas)
+# ============================================================
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarRequest
+
+RUTAS_LIMITADAS = {"/registro", "/nodos/registrar", "/tareas/pendiente", "/tareas/resultado"}
+RATE_MAX = 30
+RATE_WINDOW = 60.0
+_rate_hist = {}
+_rate_lock = threading.Lock()
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarRequest, call_next):
+        if request.url.path in RUTAS_LIMITADAS:
+            ip = request.client.host if request.client else "?"
+            ahora = time.time()
+            with _rate_lock:
+                hist = [t for t in _rate_hist.get(ip, []) if ahora - t < RATE_WINDOW]
+                if len(hist) >= RATE_MAX:
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse({"detail": "demasiadas peticiones, espera un minuto"}, status_code=429)
+                hist.append(ahora)
+                _rate_hist[ip] = hist
+        return await call_next(request)
+
+app.add_middleware(RateLimitMiddleware)
+
 class NodoIn(BaseModel):
     nombre: str
     vram_gb: int
     ref: str = ""
     tops: float = 0.0    # potencia IA declarada (TOPS, valor oficial de la GPU)
+    clave_publica: str = ""  # Ed25519 hex (64 bytes) para autenticar resultados
 
 class TareaIn(BaseModel):
     tipo: str      # 'checksum' | 'matriz' | 'inferencia'
@@ -159,10 +192,11 @@ def emission_info() -> dict:
 @app.post("/nodos/registrar")
 def registrar(n: NodoIn):
     nid = uuid.uuid4().hex[:12]
-    con.execute("INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops) VALUES(?,?,?,?,?,?,?,?)",
-                (nid, n.nombre, n.vram_gb, tier(n.vram_gb), 1.0, n.ref, time.ctime(), n.tops))
+    con.execute("INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica) VALUES(?,?,?,?,?,?,?,?,?)",
+                (nid, n.nombre, n.vram_gb, tier(n.vram_gb), 1.0, n.ref, time.ctime(), n.tops, n.clave_publica))
     con.commit()
-    return {"id": nid, "tier": tier(n.vram_gb), "max_supply": MAX_SUPPLY, "tops_registrados": n.tops}
+    return {"id": nid, "tier": tier(n.vram_gb), "max_supply": MAX_SUPPLY, "tops_registrados": n.tops,
+            "autenticado": bool(n.clave_publica)}
 
 @app.get("/nodos")
 def nodos():
@@ -188,13 +222,12 @@ def pendiente(nodo_id: str):
     return {"tarea": {"id": row["id"], "tipo": row["tipo"], "params": json.loads(row["params"])}}
 
 @app.post("/tareas/resultado")
-def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = ""):
+def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: str = ""):
     """El Core recalcula la tarea y compara el RESULTADO EXACTO (trustless).
 
-    TODO el pago ocurre en UNA transaccion atomica con bloqueo de escritura:
-    check de estado + recalculo + tope de suministro + registro del pago.
-    Dos peticiones simultaneas NO pueden cobrar dos veces (la segunda espera
-    al lock y ve la tarea ya pagada).
+    AUTENTICACION: si el nodo registro clave_publica, el envio debe traer
+    firma Ed25519 de "tid:metrica". Sin firma valida -> 401. Asi nadie puede
+    suplantar a otro nodo enviando su nodo_id.
     """
     params = None
     tipo = None
@@ -240,6 +273,24 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = ""):
                 if not node:
                     con.execute("ROLLBACK")
                     raise HTTPException(404, "nodo no registrado")
+                # AUTENTICACION: si el nodo tiene clave publica, exigir firma valida.
+                # Sin esto cualquiera podria cobrar haciendose pasar por otro nodo_id.
+                pub = None
+                try:
+                    pub = node["clave_publica"]
+                except Exception:
+                    pub = None
+                if pub:
+                    if not firma:
+                        con.execute("ROLLBACK")
+                        raise HTTPException(401, "falta firma del nodo (suplantacion bloqueada)")
+                    try:
+                        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                            bytes.fromhex(firma), f"{tid}:{metrica}".encode())
+                    except Exception:
+                        con.execute("ROLLBACK")
+                        raise HTTPException(401, "firma invalida (suplantacion bloqueada)")
                 # Tope calculado DENTRO de la transaccion (nadie mas puede mover el supply)
                 kuki, info_pago = recompensa_pago(node["tier"])
                 con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) "
