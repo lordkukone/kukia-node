@@ -158,6 +158,11 @@ def abonar(nombre, monto, motivo):
 
 if __name__ == "__main__":
     import sys
+    # Consola Windows (cp1252) no muestra tildes: forzar UTF-8 en salida
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     nombre = sys.argv[1] if len(sys.argv) > 1 else "nodo_fundador"
     password = sys.argv[2] if len(sys.argv) > 2 else ""
     res = crear_billetera(nombre, password)
