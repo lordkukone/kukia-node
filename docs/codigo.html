@@ -134,6 +134,25 @@ class TareaIn(BaseModel):
 def tier(vram: int) -&gt; float:
     return TIER_MULT.get(vram, 1.0)
 
+# --- Calendario de emision hasta ~2150 (halvings cada 21 anos) ---
+EMISSION_START = 2026
+HALVING_YEARS = 21
+def emission_mult() -&gt; float:
+    &quot;&quot;&quot;Multiplicador de recompensa por era: 1.0, 0.5, 0.25... hasta ~2150.&quot;&quot;&quot;
+    from datetime import datetime
+    era = max(0, (datetime.now().year - EMISSION_START) // HALVING_YEARS)
+    return 0.5 ** era
+
+def emission_info() -&gt; dict:
+    from datetime import datetime
+    era = max(0, (datetime.now().year - EMISSION_START) // HALVING_YEARS)
+    return {
+        &quot;era_actual&quot;: era,
+        &quot;multiplicador&quot;: 0.5 ** era,
+        &quot;proximo_halving&quot;: EMISSION_START + (era + 1) * HALVING_YEARS,
+        &quot;fin_emision_aprox&quot;: 2150,
+    }
+
 @app.post(&quot;/nodos/registrar&quot;)
 def registrar(n: NodoIn):
     nid = uuid.uuid4().hex[:12]
@@ -181,7 +200,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
         node = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
         if not node:
             raise HTTPException(404, &quot;nodo no registrado&quot;)
-        kuki = REWARD_BASE * node[&quot;tier&quot;]
+        kuki = REWARD_BASE * node[&quot;tier&quot;] * emission_mult()
         con.execute(&quot;UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) &quot;
                     &quot;WHERE id=?&quot;, (nodo_id,))
         h = hashlib.sha256(f&quot;{tid}:{nodo_id}:{metrica}&quot;.encode()).hexdigest()
@@ -211,6 +230,7 @@ def stats():
         &quot;tareas_ok&quot;: con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;ok&#x27;&quot;).fetchone()[&quot;c&quot;],
         &quot;tareas_pend&quot;: con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;queued&#x27;&quot;).fetchone()[&quot;c&quot;],
         &quot;registros&quot;: con.execute(&quot;SELECT COUNT(*) c FROM registros&quot;).fetchone()[&quot;c&quot;],
+        &quot;emision&quot;: emission_info(),
     }
 
 class RegistroIn(BaseModel):

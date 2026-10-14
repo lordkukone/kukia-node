@@ -102,6 +102,25 @@ class TareaIn(BaseModel):
 def tier(vram: int) -> float:
     return TIER_MULT.get(vram, 1.0)
 
+# --- Calendario de emision hasta ~2150 (halvings cada 21 anos) ---
+EMISSION_START = 2026
+HALVING_YEARS = 21
+def emission_mult() -> float:
+    """Multiplicador de recompensa por era: 1.0, 0.5, 0.25... hasta ~2150."""
+    from datetime import datetime
+    era = max(0, (datetime.now().year - EMISSION_START) // HALVING_YEARS)
+    return 0.5 ** era
+
+def emission_info() -> dict:
+    from datetime import datetime
+    era = max(0, (datetime.now().year - EMISSION_START) // HALVING_YEARS)
+    return {
+        "era_actual": era,
+        "multiplicador": 0.5 ** era,
+        "proximo_halving": EMISSION_START + (era + 1) * HALVING_YEARS,
+        "fin_emision_aprox": 2150,
+    }
+
 @app.post("/nodos/registrar")
 def registrar(n: NodoIn):
     nid = uuid.uuid4().hex[:12]
@@ -149,7 +168,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = ""):
         node = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
         if not node:
             raise HTTPException(404, "nodo no registrado")
-        kuki = REWARD_BASE * node["tier"]
+        kuki = REWARD_BASE * node["tier"] * emission_mult()
         con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) "
                     "WHERE id=?", (nodo_id,))
         h = hashlib.sha256(f"{tid}:{nodo_id}:{metrica}".encode()).hexdigest()
@@ -179,6 +198,7 @@ def stats():
         "tareas_ok": con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"],
         "tareas_pend": con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='queued'").fetchone()["c"],
         "registros": con.execute("SELECT COUNT(*) c FROM registros").fetchone()["c"],
+        "emision": emission_info(),
     }
 
 class RegistroIn(BaseModel):
