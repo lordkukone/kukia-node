@@ -98,14 +98,15 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   </ul>
 </nav>
 
-<header class="hero">
+<header class="hero" style="background:radial-gradient(ellipse at 50% -10%, #03140c 0%, #010806 55%, #000 100%);">
+  <canvas id="netcanvas" style="position:absolute;inset:0;width:100%;height:100%;opacity:.85;"></canvas>
   <div class="stars"></div>
   <div class="coin-wrap">
-    <div class="coin-ring"></div>
-    <img class="coin" src="moneda.jpg" alt="KIA Coin (KUKIA)">
+    <div class="coin-ring" style="border-color:rgba(0,255,136,.5);"></div>
+    <img class="coin" src="moneda.jpg" alt="KIA Coin (KUKIA)" style="border-color:#00ff88;box-shadow:0 0 60px rgba(0,255,136,.55);">
   </div>
-  <h1>KUKIA</h1>
-  <div class="tag">QUANTUM AI COMPUTE NETWORK</div>
+  <h1 style="font-size:clamp(3.5rem,10vw,6.5rem);color:#00ff88;text-shadow:0 0 20px rgba(0,255,136,.8),0 0 60px rgba(0,255,136,.4);">KUKIA</h1>
+  <div class="tag" style="color:#00e5ff;">CYBER NETWORK // QUANTUM AI COMPUTE</div>
   <div class="slogan">Every GPU. One intelligence network.</div>
   <div class="hero-video" style="margin:1.8rem auto 0.5rem;max-width:820px;width:94%;">
     <video id="heroVideo" controls autoplay loop playsinline style="width:100%;border-radius:16px;border:2px solid var(--gold);box-shadow:0 0 60px rgba(212,175,55,.35);display:block;">
@@ -115,8 +116,8 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <div style="color:var(--soft);font-size:.85rem;margin-top:.6rem;">Presentacion KUKIA</div>
   </div>
   <div class="cta-row">
-    <a class="btn" href="#registro">Unirme a la lista</a>
-    <a class="btn btn2" href="#como">Como funciona</a>
+    <a class="btn" href="#registro" style="background:linear-gradient(135deg,#00ff88,#00e5ff);color:#010806;box-shadow:0 0 35px rgba(0,255,136,.45);">Unirme a la lista</a>
+    <a class="btn btn2" href="#como" style="border-color:#00e5ff;color:#00e5ff;">Como funciona</a>
   </div>
   <div id="hashtags">#KUKIA #KIA #EveryGPUOneNetwork #ComputeCoin #DecentralizedAI #GPUtoQPU #VerificadoNoFake</div>
 </header>
@@ -330,6 +331,66 @@ const cio = new IntersectionObserver((entries) => {
   });
 }, { threshold: 0.5 });
 counters.forEach(c => cio.observe(c));
+</script>
+<script>
+// Red de nodos GPU animada (fondo cyber del hero)
+(function(){
+  var cv = document.getElementById('netcanvas');
+  if(!cv) return;
+  var ctx = cv.getContext('2d');
+  var W, H, nodes = [];
+  function resize(){
+    var r = cv.parentElement.getBoundingClientRect();
+    W = cv.width = r.width; H = cv.height = r.height;
+  }
+  window.addEventListener('resize', resize); resize();
+  var N = 45;
+  for(var i=0;i<N;i++){
+    nodes.push({x: Math.random(), y: Math.random(),
+      vx: (Math.random()-.5)*0.0009, vy: (Math.random()-.5)*0.0009,
+      r: 1.5+Math.random()*2.2, gpu: Math.random() < 0.25});
+  }
+  function frame(){
+    ctx.clearRect(0,0,W,H);
+    var i, j, a, b, dx, dy, d;
+    for(i=0;i<nodes.length;i++){
+      a = nodes[i];
+      a.x += a.vx; a.y += a.vy;
+      if(a.x<0||a.x>1) a.vx*=-1;
+      if(a.y<0||a.y>1) a.vy*=-1;
+    }
+    for(i=0;i<nodes.length;i++){
+      a = nodes[i];
+      for(j=i+1;j<nodes.length;j++){
+        b = nodes[j];
+        dx = (a.x-b.x)*W; dy = (a.y-b.y)*H;
+        d = Math.sqrt(dx*dx+dy*dy);
+        if(d < 170){
+          var alpha = (1 - d/170) * 0.55;
+          ctx.strokeStyle = (a.gpu||b.gpu)
+            ? 'rgba(0,255,136,'+alpha+')'
+            : 'rgba(0,229,255,'+(alpha*0.7)+')';
+          ctx.lineWidth = (a.gpu||b.gpu) ? 1.4 : 0.8;
+          ctx.beginPath(); ctx.moveTo(a.x*W, a.y*H); ctx.lineTo(b.x*W, b.y*H); ctx.stroke();
+        }
+      }
+    }
+    for(i=0;i<nodes.length;i++){
+      a = nodes[i];
+      if(a.gpu){
+        ctx.fillStyle = '#00ff88';
+        ctx.shadowColor = '#00ff88'; ctx.shadowBlur = 12;
+        ctx.fillRect(a.x*W-3, a.y*H-3, 6, 6);
+        ctx.shadowBlur = 0;
+      } else {
+        ctx.fillStyle = 'rgba(0,229,255,.85)';
+        ctx.beginPath(); ctx.arc(a.x*W, a.y*H, a.r, 0, 6.283); ctx.fill();
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
 </script>
 <script>
 (function(){
