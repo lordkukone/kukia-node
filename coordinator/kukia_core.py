@@ -121,12 +121,12 @@ def tier(vram: int) -> float:
 
 # --- Calendario de emision: la ultima moneda sale el 13-04-2150 ---
 # 6 halvings en 124,28 anos -> era de 20,71 anos. Tras esa fecha, emision = 0.
-from datetime import date
+from datetime import date, datetime
 EMISSION_START = date(2026, 1, 1)
 EMISSION_END = date(2150, 4, 13)
 HALVING_YEARS = (EMISSION_END - EMISSION_START).days / 365.25 / 6  # ~20,71
 def emission_mult() -> float:
-    """Multiplicador de recompensa por era: 1.0, 0.5, 0.25... 0 tras el 13-04-2130."""
+    """Multiplicador de recompensa por era: 1.0, 0.5, 0.25... 0 tras el 13-04-2150."""
     hoy = date.today()
     if hoy >= EMISSION_END:
         return 0.0
@@ -139,7 +139,7 @@ def emission_info() -> dict:
     hoy = date.today()
     if hoy >= EMISSION_END:
         return {"era_actual": 6, "multiplicador": 0.0,
-                "proximo_halving": None, "fin_emision": "2130-04-13",
+                "proximo_halving": None, "fin_emision": "2150-04-13",
                 "halving_years": round(HALVING_YEARS, 2)}
     elapsed = (hoy - EMISSION_START).days / 365.25
     era = max(0, int(elapsed // HALVING_YEARS))
@@ -148,7 +148,7 @@ def emission_info() -> dict:
         "era_actual": era,
         "multiplicador": 0.5 ** era,
         "proximo_halving": prox.isoformat(),
-        "fin_emision": "2130-04-13",
+        "fin_emision": "2150-04-13",
         "halving_years": round(HALVING_YEARS, 2),
     }
 
@@ -189,17 +189,22 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = ""):
     task = con.execute("SELECT * FROM tareas WHERE id=?", (tid,)).fetchone()
     if not task:
         raise HTTPException(404, "tarea no encontrada")
+    if task["estado"] == "ok":
+        raise HTTPException(409, "tarea ya pagada (doble pago bloqueado)")
+    if task["nodo_id"] and task["nodo_id"] != nodo_id:
+        raise HTTPException(409, "tarea asignada a otro nodo")
     params = json.loads(task["params"])
     esperado = computar_tarea(task["tipo"], params)
     if esperado is None:
         raise HTTPException(400, "tipo de tarea no soportado")
     ok = str(metrica).strip() == str(esperado).strip()
     kuki = 0.0
+    info_pago = {}
     if ok:
         node = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
         if not node:
             raise HTTPException(404, "nodo no registrado")
-        kuki = REWARD_BASE * node["tier"] * emission_mult()
+        kuki, info_pago = recompensa_pago(node["tier"])
         con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) "
                     "WHERE id=?", (nodo_id,))
         h = hashlib.sha256(f"{tid}:{nodo_id}:{metrica}".encode()).hexdigest()
@@ -212,16 +217,84 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = ""):
         con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
                     (tid, nodo_id, 0.0, "resultado incorrecto (recalculado por el Core)", time.ctime()))
     con.commit()
-    return {"ok": ok, "kuki": kuki, "esperado": esperado}
+    return {"ok": ok, "kuki": kuki, "esperado": esperado, "pago": info_pago}
 
 @app.get("/ledger")
 def ledger():
     return [dict(r) for r in con.execute("SELECT * FROM ledger ORDER BY id DESC LIMIT 200").fetchall()]
 
+# ============================================================
+#  DIFICULTAD ADAPTATIVA (potencia de LA RED KUKIA, no mundial)
+#  + RECOMPENSA DINAMICA (garantiza agotar justo el 13-04-2150)
+# ============================================================
+REFERENCIA_TOPS = 1747.0   # red inicial (5070 + 5060 Ti): punto de calibracion
+BASE_MATRIX_N = 256
+BASE_INFER_N = 64
+
+def tops_red() -> float:
+    """Potencia total de la red = suma de TOPS declarados por los nodos."""
+    row = con.execute("SELECT COALESCE(SUM(tops),0) s FROM nodos").fetchone()
+    return float(row["s"] or 0.0)
+
+def dificultad() -> dict:
+    """Tamano de tarea segun la potencia de la red (tarea ~constante en tiempo)."""
+    tops = tops_red()
+    factor = 1.0 if tops <= 0 else min(4.0, max(0.5, (tops / REFERENCIA_TOPS) ** 0.5))
+    return {
+        "tops_red": round(tops, 1),
+        "tops_referencia": REFERENCIA_TOPS,
+        "factor": round(factor, 3),
+        "matriz_n": int(BASE_MATRIX_N * factor),
+        "inferencia_n": int(BASE_INFER_N * factor),
+    }
+
+def supply_emitido() -> float:
+    return float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger").fetchone()["s"] or 0.0)
+
+def _epoch(ts: str) -> float:
+    try:
+        return time.mktime(time.strptime(ts))
+    except Exception:
+        return time.time()
+
+def tasa_tareas_seg() -> float:
+    """Ritmo medio real de la red (tareas OK / segundo). Minimo: 1 tarea/dia."""
+    n = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"]
+    if n == 0:
+        return 1.0 / 86400.0
+    primera = con.execute("SELECT MIN(fin) m FROM tareas WHERE estado='ok' AND fin IS NOT NULL").fetchone()["m"]
+    if not primera:
+        return 1.0 / 86400.0
+    elapsed = max(3600.0, time.time() - _epoch(primera))
+    return max(1.0 / 86400.0, n / elapsed)
+
+def recompensa_pago(tier: float) -> tuple:
+    """Pago que garantiza: (1) nunca pasar de 100M, (2) agotar justo el 13-04-2150.
+
+    - objetivo = restante / tareas_restantes_estimadas (persigue la fecha)
+    - techo/suelo = bandas del halving x10 / x0.1 (predecible, anti-spikes)
+    - pago final = min(base x tier, restante) -> el ledger JAMAS supera 100M
+    """
+    emit = supply_emitido()
+    restante = MAX_SUPPLY - emit
+    if restante <= 0:
+        return 0.0, {"agotado": True}
+    fin_dt = datetime(EMISSION_END.year, EMISSION_END.month, EMISSION_END.day)
+    seg_rest = max(1.0, (fin_dt - datetime.now()).total_seconds())
+    tasa = tasa_tareas_seg()
+    tareas_rest = max(1.0, tasa * seg_rest)
+    objetivo = restante / tareas_rest
+    techo = REWARD_BASE * emission_mult()
+    base = min(max(objetivo, techo * 0.1), techo * 10.0)
+    pago = round(min(base * tier, restante), 4)
+    return pago, {"objetivo": round(objetivo, 4), "techo_halving": round(techo, 4),
+                  "tasa_dia": round(tasa * 86400, 2), "restante": round(restante, 2)}
+
 @app.get("/stats")
 def stats():
     sum = con.execute("SELECT COALESCE(SUM(kuki),0) as s FROM ledger").fetchone()["s"]
     sum = min(sum, MAX_SUPPLY)
+    pago1, info1 = recompensa_pago(1.0)
     return {
         "supply_emitido": sum,
         "max_supply": MAX_SUPPLY,
@@ -230,7 +303,29 @@ def stats():
         "tareas_pend": con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='queued'").fetchone()["c"],
         "registros": con.execute("SELECT COUNT(*) c FROM registros").fetchone()["c"],
         "emision": emission_info(),
+        "dificultad": dificultad(),
+        "recompensa_base_actual": pago1,
+        "detalle_pago": info1,
     }
+
+@app.post("/tareas/crear_auto")
+def crear_auto(tipo: str = "matriz", _ok: None = Depends(exigir_admin)):
+    """Crea una tarea con la dificultad ACTUAL de la red (tamano segun TOPS)."""
+    import secrets as _secrets
+    dif = dificultad()
+    if tipo == "matriz":
+        params = {"n": dif["matriz_n"], "seed": _secrets.randbelow(100000)}
+    elif tipo == "inferencia":
+        params = {"n": dif["inferencia_n"], "seed": _secrets.randbelow(100000)}
+    elif tipo == "checksum":
+        params = {"data": "kukia-" + _secrets.token_hex(8)}
+    else:
+        raise HTTPException(400, "tipo no soportado (matriz|inferencia|checksum)")
+    tid = uuid.uuid4().hex[:12]
+    con.execute("INSERT INTO tareas(id,tipo,params,estado,creado) VALUES(?,?,?,?,?)",
+                (tid, tipo, json.dumps(params), "queued", time.ctime()))
+    con.commit()
+    return {"tarea_id": tid, "estado": "queued", "dificultad": dif}
 
 class RegistroIn(BaseModel):
     nombre: str
