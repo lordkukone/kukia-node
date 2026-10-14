@@ -60,11 +60,14 @@ th { color:var(--gold); background:rgba(18,48,94,.5); }
 
 <h2>5. Verificacion (como se evita el fraude)</h2>
 <ul>
-<li>El Core propone una tarea con parametros unicos.</li>
-<li>El nodo la ejecuta en su GPU y devuelve un hash derivado del resultado.</li>
-<li>El Core recalcula el hash esperado y lo compara bit a bit.</li>
+<li>El Core propone una tarea con parametros unicos (con seed: reproducible).</li>
+<li>El nodo la ejecuta en su GPU y devuelve el <strong>resultado exacto</strong> (no un hash propio).</li>
+<li>El Core <strong>recalcula la tarea el mismo</strong> y compara el resultado numero a numero (trustless: no se fia del minero).</li>
 <li>Si coincide: paga al nodo y sube su reputacion. Si no: tarea rechazada, 0 KIA.</li>
-<li>Ademas: reputacion por nodo (max 5.0) y reglas anti-abuso en desarrollo.</li>
+<li><strong>Anti-doble-pago:</strong> cada tarea solo se puede cobrar UNA vez (segundo intento = error 409).</li>
+<li><strong>Tope en cada pago:</strong> el pago nunca supera lo que falta hasta 100M (el ledger jamas pasa del techo).</li>
+<li><strong>Recompensa dinamica:</strong> cada pago se ajusta para agotar justo el 13-04-2150 al ritmo real de la red, dentro de bandas del halving.</li>
+<li>Ademas: reputacion por nodo (max 5.0) y nonce por tarea.</li>
 </ul>
 
 <h2>6. Arquitectura tecnica</h2>
