@@ -194,7 +194,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <details class="qa"><summary>Necesito comprar hardware?</summary><p>No. Usas la grafica que ya tienes. Cualquier NVIDIA de 8GB en adelante sirve para empezar.</p></details>
     <details class="qa"><summary>Que diferencia a KUKIA de otras criptos de computo?</summary><p>Verificacion bit a bit, trabajo UTIL (IA real, no hashes vacios), emision honesta hasta 2150 y precio que nace de demanda real, no de especulacion.</p></details>
     <details class="qa"><summary>Cuando puedo empezar?</summary><p>Estamos en fase de pruebas (4-6 semanas). Registrate en la lista y te avisamos cuando abramos los primeros nodos.</p></details>
-    <details class="qa"><summary>Necesito billetera para registrarme?</summary><p>No. El registro es solo la lista de espera. Cuando instales el nodo, tu billetera se crea automaticamente: una direccion KUK unica, con clave y contrase&ntilde;a que solo tu controlas (se genera en tu PC, nunca sale de ella). Todo el que mina tiene su propia billetera.</p></details>
+    <details class="qa"><summary>Necesito billetera para registrarme?</summary><p>No. El registro es solo la lista de espera. Cuando instales el nodo, tu billetera se crea con <strong>tu contrasena + 20 palabras unicas de recuperacion</strong>: una direccion KUK unica con criptografia Ed25519 real. Escribelas en papel: con ambas recuperas la MISMA billetera en cualquier equipo. Tu clave nunca sale de tu PC.</p></details>
     <details class="qa"><summary>Estado real y transparencia</summary><p><strong>Fase de pruebas.</strong> Codigo 100% abierto: <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">GitHub</a> + ZIP descargable. Sin auditoria de seguridad independiente todavia (declarado). Recompensas = parametros de prueba con calendario hasta 13-04-2150, no ganancias garantizadas. Precio: no existe aun. Rentabilidad: no calculable sin precio/demanda/consumo medido. <a href="whitepaper.html" style="color:var(--gold);">Leer whitepaper completo</a>.</p></details>
   </div>
 </section>
@@ -206,7 +206,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
       <p><strong>La seguridad del sistema ha sido probada de extremo a extremo y funciona:</strong></p>
       <ul style="margin:1rem 0 0 1.2rem;color:var(--text);">
         <li><strong>Verificacion trustless probada:</strong> el Core recalcula cada tarea; correcto paga, falso rechaza (0 KIA). Anti-doble-pago activo (409). Tope de 100M aplicado en cada pago.</li>
-        <li><strong>Billetera local probada:</strong> la clave se genera en tu PC y jamas sale de ella.</li>
+        <li><strong>Billetera con recuperacion:</strong> se crea con tu contrasena + 20 palabras unicas (Ed25519 real, PBKDF2 200.000 iteraciones). Guardalas en papel: sin ellas no se recupera. La clave jamas sale de tu PC.</li>
         <li><strong>Sin permisos peligrosos:</strong> el worker no pide administrador, no toca archivos del sistema y no abre puertos entrantes.</li>
         <li><strong>Codigo 100% abierto:</strong> revisalo en un clic antes de instalar: <a href="codigo.html" style="color:var(--gold);">codigo fuente</a> o <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">GitHub</a>.</li>
         <li><strong>Recomendacion honesta:</strong> es un prototipo en fase de pruebas; para maxima tranquilidad instalalo en un equipo secundario.</li>
@@ -238,6 +238,10 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   <h2>Unete a la lista de espera</h2>
   <div class="register-box">
     <p style="color:var(--text);margin-bottom:1.8rem;line-height:1.6;">Se de los primeros en conectar tu GPU cuando la red abra. Te avisaremos al lanzamiento.</p>
+    <div style="background:rgba(212,175,55,.08);border:1px solid var(--gold);border-radius:12px;padding:1rem 1.2rem;margin-bottom:1.5rem;text-align:left;">
+      <p style="color:var(--gold);font-weight:700;margin-bottom:.5rem;">&#128274; Tu billetera: maxima seguridad</p>
+      <p style="color:var(--text);font-size:.9rem;line-height:1.6;">Al instalar el nodo recibiras tu <strong>contrasena + 20 palabras unicas</strong>. <strong>Escríbelas en papel y guardalas en 2 sitios distintos.</strong> En caso de perdida del equipo, SOLO con ambas recuperas tu billetera y tus KIA en cualquier otro equipo. Sin ellas, nadie —ni siquiera nosotros— puede recuperarlas. No las guardes en fotos del movil ni en la nube sin cifrar.</p>
+    </div>
     <form action="https://formsubmit.co/kukone510@hotmail.com" method="POST">
       <input type="hidden" name="_subject" value="Nuevo registro KUKIA - lista de espera">
       <input type="hidden" name="_captcha" value="false">
