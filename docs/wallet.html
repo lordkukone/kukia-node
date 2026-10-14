@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#081a3a">
+<title>KUKIA Wallet - Tu billetera KIA</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="moneda.jpg">
+<style>
+:root { --gold:#d4af37; --navy:#081a3a; --blue:#12305e; --line:#27487c; --text:#c3d1ea; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; min-height:100vh; }
+.hero { text-align:center; padding:2rem 1rem 1rem; background:radial-gradient(ellipse at 50% 0%, #1a3f7a 0%, var(--navy) 60%); }
+.coin { width:130px; height:130px; border-radius:50%; object-fit:cover; border:3px solid var(--gold); box-shadow:0 0 40px rgba(212,175,55,.5); }
+h1 { color:var(--gold); letter-spacing:.12em; margin-top:.8rem; font-size:1.8rem; }
+.sub { color:var(--text); font-size:.85rem; margin-top:.3rem; }
+.tabs { display:flex; gap:.5rem; justify-content:center; padding:1rem; }
+.tab { flex:1; max-width:160px; padding:.8rem; text-align:center; border-radius:12px; border:1px solid var(--line); color:var(--text); cursor:pointer; font-size:.9rem; }
+.tab.on { background:var(--gold); color:var(--navy); font-weight:700; border-color:var(--gold); }
+.panel { display:none; padding:1rem; max-width:520px; margin:0 auto; }
+.panel.on { display:block; }
+.card { background:rgba(18,48,94,.6); border:1px solid var(--line); border-radius:14px; padding:1.2rem; margin-bottom:1rem; }
+.card h3 { color:var(--gold); font-size:1rem; margin-bottom:.8rem; }
+input, textarea { width:100%; padding:.9rem; margin-bottom:.8rem; border-radius:10px; border:1px solid var(--line); background:rgba(8,26,58,.9); color:#fff; font-size:.95rem; }
+textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
+.btn { display:block; width:100%; padding:1rem; background:linear-gradient(135deg,var(--gold),#f0d060); color:var(--navy); font-weight:800; border-radius:12px; border:none; font-size:1rem; cursor:pointer; }
+.btn2 { background:transparent; border:2px solid var(--gold); color:var(--gold); margin-top:.6rem; }
+.addr { font-family:monospace; font-size:.75rem; word-break:break-all; color:var(--gold); background:rgba(8,26,58,.9); padding:.8rem; border-radius:10px; margin:.6rem 0; }
+.saldo { font-size:2.2rem; color:var(--gold); font-weight:800; text-align:center; }
+.words { display:grid; grid-template-columns:1fr 1fr; gap:.4rem; margin:.8rem 0; }
+.words span { background:rgba(8,26,58,.9); border:1px solid var(--line); border-radius:8px; padding:.5rem; font-size:.82rem; font-family:monospace; }
+.warn { background:rgba(212,175,55,.08); border:1px solid var(--gold); border-radius:10px; padding:.8rem; font-size:.82rem; color:var(--text); margin:.8rem 0; line-height:1.5; }
+#qrcode img { margin:0 auto; display:block; border:8px solid #fff; border-radius:8px; }
+.small { font-size:.78rem; color:var(--text); text-align:center; margin-top:.5rem; }
+.ok { color:#5ee08a; } .err { color:#ff7b7b; }
+</style>
+</head>
+<body>
+<div class="hero">
+  <img class="coin" src="moneda.jpg" alt="KIA">
+  <h1>KUKIA</h1>
+  <div class="sub">Billetera KIA — tus claves, tu dinero</div>
+</div>
+<div class="tabs">
+  <div class="tab on" onclick="ver('crear')">Nueva</div>
+  <div class="tab" onclick="ver('recuperar')">Recuperar</div>
+  <div class="tab" onclick="ver('ver')">Mi saldo</div>
+</div>
+
+<div id="p-crear" class="panel on">
+  <div class="card">
+    <h3>Crear billetera</h3>
+    <input id="c-pass" type="password" placeholder="Tu contraseña (guárdala bien)">
+    <button class="btn" onclick="crear()">Crear mis 20 palabras</button>
+    <div id="c-out"></div>
+  </div>
+</div>
+
+<div id="p-recuperar" class="panel">
+  <div class="card">
+    <h3>Recuperar con contraseña + 20 palabras</h3>
+    <input id="r-pass" type="password" placeholder="Tu contraseña">
+    <textarea id="r-words" placeholder="Pega tus 20 palabras separadas por espacios"></textarea>
+    <button class="btn" onclick="recuperar()">Recuperar billetera</button>
+    <div id="r-out"></div>
+  </div>
+</div>
+
+<div id="p-ver" class="panel">
+  <div class="card">
+    <h3>Mi saldo</h3>
+    <input id="v-addr" placeholder="Tu dirección KUK...">
+    <button class="btn" onclick="saldo()">Ver saldo</button>
+    <div id="v-out"></div>
+    <div id="qrcode"></div>
+  </div>
+</div>
+
+<script src="nacl.min.js"></script>
+<script src="qrcode.min.js"></script>
+<script>
+var WORDS = null;
+fetch('wordlist.txt').then(function(r){ return r.text(); }).then(function(t){
+  WORDS = t.split('\n').map(function(w){ return w.trim(); }).filter(Boolean);
+});
+
+function ver(id){
+  document.querySelectorAll('.panel').forEach(function(p){ p.classList.remove('on'); });
+  document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('on'); });
+  document.getElementById('p-'+id).classList.add('on');
+  event.target.classList.add('on');
+}
+
+async function pbkdf2(pass, words){
+  var msg = words.join(' ') + '|' + pass;
+  var key = await crypto.subtle.importKey('raw', new TextEncoder().encode(msg), 'PBKDF2', false, ['deriveBits']);
+  var bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt:new TextEncoder().encode('kukia-wallet-v1'), iterations:200000, hash:'SHA-512'}, key, 512);
+  return new Uint8Array(bits).slice(0, 32);
+}
+
+async function sha256hex(data){
+  var h = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(h)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('').toUpperCase();
+}
+
+function crear(){
+  var pass = document.getElementById('c-pass').value;
+  if(!pass){ alert('Pon una contraseña primero'); return; }
+  if(!WORDS || WORDS.length < 2048){ alert('Cargando lista de palabras, espera...'); return; }
+  var words = [];
+  var rnd = new Uint32Array(20);
+  crypto.getRandomValues(rnd);
+  for(var i=0;i<20;i++){ words.push(WORDS[rnd[i] % WORDS.length]); }
+  pbkdf2(pass, words).then(async function(seed){
+    var kp = nacl.sign.keyPair.fromSeed(seed);
+    var addr = 'KUK' + (await sha256hex(kp.publicKey)).substring(0,38);
+    var privHex = Array.from(seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+    localStorage.setItem('kukia_priv', privHex);
+    localStorage.setItem('kukia_addr', addr);
+    localStorage.setItem('kukia_words', JSON.stringify(words));
+    var html = '<div class="addr">' + addr + '</div>';
+    html += '<div class="warn"><strong>Escribe estas 20 palabras EN PAPEL y en orden.</strong> Sin tu contraseña + palabras no recuperas nada.</div>';
+    html += '<div class="words">' + words.map(function(w,i){ return '<span>'+(i+1)+'. '+w+'</span>'; }).join('') + '</div>';
+    document.getElementById('c-out').innerHTML = html;
+  });
+}
+
+function recuperar(){
+  var pass = document.getElementById('r-pass').value;
+  var words = document.getElementById('r-words').value.trim().split(/\s+/);
+  if(!pass || words.length !== 20){ alert('Necesitas contraseña + las 20 palabras exactas'); return; }
+  pbkdf2(pass, words).then(async function(seed){
+    var kp = nacl.sign.keyPair.fromSeed(seed);
+    var addr = 'KUK' + (await sha256hex(kp.publicKey)).substring(0,38);
+    var privHex = Array.from(seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+    localStorage.setItem('kukia_priv', privHex);
+    localStorage.setItem('kukia_addr', addr);
+    document.getElementById('r-out').innerHTML = '<div class="addr">' + addr + '</div><p class="ok">Billetera recuperada. Es la misma dirección.</p>';
+  });
+}
+
+function saldo(){
+  var addr = document.getElementById('v-addr').value.trim() || localStorage.getItem('kukia_addr') || '';
+  if(!addr){ alert('Pon tu dirección KUK...'); return; }
+  document.getElementById('v-out').innerHTML = '<div class="saldo">...</div>';
+  fetch('http://192.168.1.11:8300/saldo/' + encodeURIComponent(addr)).then(function(r){ return r.json(); }).then(function(j){
+    document.getElementById('v-out').innerHTML = '<div class="saldo">' + Number(j.saldo).toLocaleString() + ' KIA</div><div class="addr">' + addr + '</div>';
+    var qr = qrcode(0, 'M');
+    qr.addData(addr);
+    qr.make();
+    document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
+  }).catch(function(){
+    document.getElementById('v-out').innerHTML = '<p class="err">Core no accesible (tiene que estar online). Dirección guardada igualmente.</p><div class="addr">' + addr + '</div>';
+    try {
+      var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
+      document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
+    } catch(e){}
+  });
+}
+</script>
+<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js');}</script>
+</body>
+</html>
