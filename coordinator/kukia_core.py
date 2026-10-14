@@ -5,11 +5,15 @@ El Core recalcula la tarea el mismo (trustless) y compara el resultado
 exacto. Tareas con aritmetica determinista (enteros exactos via float64
 con magnitudes acotadas) para que CPU y GPU den el MISMO numero.
 """
-import hashlib, json, secrets, sqlite3, uuid, time
+import hashlib, json, secrets, sqlite3, threading, uuid, time
 from pathlib import Path
 import numpy as np
 from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
+
+# Lock global: SQLite NO es seguro para uso concurrente en una sola conexion.
+# Todo pago pasa por este lock + BEGIN IMMEDIATE (doble proteccion).
+_pago_lock = threading.Lock()
 
 DB = Path(__file__).parent / "ledger" / "kukia.db"
 DB.parent.mkdir(parents=True, exist_ok=True)
@@ -185,38 +189,79 @@ def pendiente(nodo_id: str):
 
 @app.post("/tareas/resultado")
 def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = ""):
-    """El Core recalcula la tarea y compara el RESULTADO EXACTO (trustless)."""
+    """El Core recalcula la tarea y compara el RESULTADO EXACTO (trustless).
+
+    TODO el pago ocurre en UNA transaccion atomica con bloqueo de escritura:
+    check de estado + recalculo + tope de suministro + registro del pago.
+    Dos peticiones simultaneas NO pueden cobrar dos veces (la segunda espera
+    al lock y ve la tarea ya pagada).
+    """
+    params = None
+    tipo = None
+    # 1. Lectura inicial (sin lock: solo para validar existencia y tipo)
     task = con.execute("SELECT * FROM tareas WHERE id=?", (tid,)).fetchone()
     if not task:
         raise HTTPException(404, "tarea no encontrada")
-    if task["estado"] == "ok":
-        raise HTTPException(409, "tarea ya pagada (doble pago bloqueado)")
-    if task["nodo_id"] and task["nodo_id"] != nodo_id:
-        raise HTTPException(409, "tarea asignada a otro nodo")
     params = json.loads(task["params"])
-    esperado = computar_tarea(task["tipo"], params)
+    tipo = task["tipo"]
+    esperado = computar_tarea(tipo, params)
     if esperado is None:
         raise HTTPException(400, "tipo de tarea no soportado")
     ok = str(metrica).strip() == str(esperado).strip()
-    kuki = 0.0
-    info_pago = {}
-    if ok:
-        node = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
-        if not node:
-            raise HTTPException(404, "nodo no registrado")
-        kuki, info_pago = recompensa_pago(node["tier"])
-        con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) "
-                    "WHERE id=?", (nodo_id,))
-        h = hashlib.sha256(f"{tid}:{nodo_id}:{metrica}".encode()).hexdigest()
-        con.execute("UPDATE tareas SET estado='ok', hash=?, metrica=?, fin=?, verificado=1 WHERE id=?",
-                    (h, metrica, time.ctime(), tid))
-        con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
-                    (tid, nodo_id, kuki, "trabajo verificado", time.ctime()))
-    else:
-        con.execute("UPDATE tareas SET estado='fallo', fin=? WHERE id=?", (time.ctime(), tid))
-        con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
-                    (tid, nodo_id, 0.0, "resultado incorrecto (recalculado por el Core)", time.ctime()))
-    con.commit()
+
+    # 2. TRANSACCION ATOMICA con bloqueo de escritura inmediato.
+    # Lock de hilos (la conexion SQLite es compartida) + BEGIN IMMEDIATE
+    # (bloqueo a nivel de fichero BD contra otros procesos).
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            raise HTTPException(503, "Core ocupado, reintentar")
+        try:
+            # Releer DENTRO del lock (el estado pudo cambiar entre 1 y 2)
+            task2 = con.execute("SELECT * FROM tareas WHERE id=?", (tid,)).fetchone()
+            if task2["estado"] == "ok":
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "tarea ya pagada (doble pago bloqueado)")
+            if task2["estado"] == "fallo":
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "tarea ya cerrada con fallo (no reintentable)")
+            if task2["estado"] != "ejecutando":
+                con.execute("ROLLBACK")
+                raise HTTPException(409, f"tarea en estado '{task2['estado']}', no pagable")
+            if task2["nodo_id"] and task2["nodo_id"] != nodo_id:
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "tarea asignada a otro nodo")
+
+            kuki = 0.0
+            info_pago = {}
+            if ok:
+                node = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
+                if not node:
+                    con.execute("ROLLBACK")
+                    raise HTTPException(404, "nodo no registrado")
+                # Tope calculado DENTRO de la transaccion (nadie mas puede mover el supply)
+                kuki, info_pago = recompensa_pago(node["tier"])
+                con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) "
+                            "WHERE id=?", (nodo_id,))
+                h = hashlib.sha256(f"{tid}:{nodo_id}:{metrica}".encode()).hexdigest()
+                con.execute("UPDATE tareas SET estado='ok', hash=?, metrica=?, fin=?, verificado=1 WHERE id=?",
+                            (h, metrica, time.ctime(), tid))
+                con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
+                            (tid, nodo_id, kuki, "trabajo verificado", time.ctime()))
+            else:
+                con.execute("UPDATE tareas SET estado='fallo', fin=? WHERE id=?", (time.ctime(), tid))
+                con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
+                            (tid, nodo_id, 0.0, "resultado incorrecto (recalculado por el Core)", time.ctime()))
+            con.commit()
+        except HTTPException:
+            raise
+        except Exception as e:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise HTTPException(500, f"error interno en el pago: {e}")
     return {"ok": ok, "kuki": kuki, "esperado": esperado, "pago": info_pago}
 
 @app.get("/ledger")
