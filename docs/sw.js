@@ -1,4 +1,4 @@
-var CACHE = 'kukia-wallet-v1';
+var CACHE = 'kukia-wallet-v2';
 var FILES = [
   'wallet.html',
   'manifest.json',

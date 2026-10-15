@@ -8,11 +8,11 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="moneda.jpg">
 <style>
-:root { --gold:#d4af37; --navy:#081a3a; --blue:#12305e; --line:#27487c; --text:#c3d1ea; }
+:root { --gold:#00e5ff; --coin:#d4af37; --navy:#050b1e; --blue:#12305e; --line:#27487c; --text:#c3d1ea; }
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; min-height:100vh; }
 .hero { text-align:center; padding:2rem 1rem 1rem; background:radial-gradient(ellipse at 50% 0%, #1a3f7a 0%, var(--navy) 60%); }
-.coin { width:130px; height:130px; border-radius:50%; object-fit:cover; border:3px solid var(--gold); box-shadow:0 0 40px rgba(212,175,55,.5); }
+.coin { width:130px; height:130px; border-radius:50%; object-fit:cover; border:3px solid var(--coin); box-shadow:0 0 40px rgba(212,175,55,.5); }
 h1 { color:var(--gold); letter-spacing:.12em; margin-top:.8rem; font-size:1.8rem; }
 .sub { color:var(--text); font-size:.85rem; margin-top:.3rem; }
 .tabs { display:flex; gap:.5rem; justify-content:center; padding:1rem; }
@@ -24,13 +24,13 @@ h1 { color:var(--gold); letter-spacing:.12em; margin-top:.8rem; font-size:1.8rem
 .card h3 { color:var(--gold); font-size:1rem; margin-bottom:.8rem; }
 input, textarea { width:100%; padding:.9rem; margin-bottom:.8rem; border-radius:10px; border:1px solid var(--line); background:rgba(8,26,58,.9); color:#fff; font-size:.95rem; }
 textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
-.btn { display:block; width:100%; padding:1rem; background:linear-gradient(135deg,var(--gold),#f0d060); color:var(--navy); font-weight:800; border-radius:12px; border:none; font-size:1rem; cursor:pointer; }
+.btn { display:block; width:100%; padding:1rem; background:linear-gradient(135deg,var(--gold),#7b5cff); color:var(--navy); font-weight:800; border-radius:12px; border:none; font-size:1rem; cursor:pointer; }
 .btn2 { background:transparent; border:2px solid var(--gold); color:var(--gold); margin-top:.6rem; }
 .addr { font-family:monospace; font-size:.75rem; word-break:break-all; color:var(--gold); background:rgba(8,26,58,.9); padding:.8rem; border-radius:10px; margin:.6rem 0; }
 .saldo { font-size:2.2rem; color:var(--gold); font-weight:800; text-align:center; }
 .words { display:grid; grid-template-columns:1fr 1fr; gap:.4rem; margin:.8rem 0; }
 .words span { background:rgba(8,26,58,.9); border:1px solid var(--line); border-radius:8px; padding:.5rem; font-size:.82rem; font-family:monospace; }
-.warn { background:rgba(212,175,55,.08); border:1px solid var(--gold); border-radius:10px; padding:.8rem; font-size:.82rem; color:var(--text); margin:.8rem 0; line-height:1.5; }
+.warn { background:rgba(0,229,255,.08); border:1px solid var(--gold); border-radius:10px; padding:.8rem; font-size:.82rem; color:var(--text); margin:.8rem 0; line-height:1.5; }
 #qrcode img { margin:0 auto; display:block; border:8px solid #fff; border-radius:8px; }
 .small { font-size:.78rem; color:var(--text); text-align:center; margin-top:.5rem; }
 .ok { color:#5ee08a; } .err { color:#ff7b7b; }
@@ -146,20 +146,11 @@ function recuperar(){
 function saldo(){
   var addr = document.getElementById('v-addr').value.trim() || localStorage.getItem('kukia_addr') || '';
   if(!addr){ alert('Pon tu dirección KUK...'); return; }
-  document.getElementById('v-out').innerHTML = '<div class="saldo">...</div>';
-  fetch('http://192.168.1.11:8300/saldo/' + encodeURIComponent(addr)).then(function(r){ return r.json(); }).then(function(j){
-    document.getElementById('v-out').innerHTML = '<div class="saldo">' + Number(j.saldo).toLocaleString() + ' KIA</div><div class="addr">' + addr + '</div>';
-    var qr = qrcode(0, 'M');
-    qr.addData(addr);
-    qr.make();
+  document.getElementById('v-out').innerHTML = '<p class="err">La consulta de saldo no está disponible en la web pública (TESTNET). Para ver tu saldo, usa el panel local junto a tu Core.</p><div class="addr">' + addr + '</div>';
+  try {
+    var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
     document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
-  }).catch(function(){
-    document.getElementById('v-out').innerHTML = '<p class="err">Core no accesible (tiene que estar online). Dirección guardada igualmente.</p><div class="addr">' + addr + '</div>';
-    try {
-      var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
-      document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
-    } catch(e){}
-  });
+  } catch(e){}
 }
 </script>
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js');}</script>
