@@ -98,6 +98,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <li><a href="#red">Red</a></li>
     <li><a href="#mineros">Mineros</a></li>
     <li><a href="#clientes">Clientes</a></li>
+    <li><a href="#graficas">Gráficas</a></li>
     <li><a href="#tokenomics">Tokenomics</a></li>
     <li><a href="#roadmap">Roadmap</a></li>
     <li><a href="#faq">FAQ</a></li>
@@ -168,6 +169,23 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   </div>
   <p id="stNote" style="text-align:center;color:var(--text);font-size:.85rem;max-width:720px;margin:0 auto 1.5rem;">Datos de la red de pruebas a fecha de publicación (TESTNET). No son métricas en vivo: el panel en vivo corre en tu propio equipo junto al Core.</p>
   <p style="text-align:center;margin-top:2rem;"><a class="btn" href="#registro">Pedir acceso de cliente</a></p>
+</section>
+
+<section id="graficas" class="reveal">
+  <h2>Gráficas de la red <span class="pill">TESTNET</span></h2>
+  <p style="text-align:center;color:var(--text);max-width:720px;margin:0 auto 2rem;line-height:1.7;">Datos reales de la TESTNET a partir de la última instantánea disponible. No son tiempo real. <strong style="color:#fff;">Copia de desarrollo: datos de prueba.</strong></p>
+  <div class="grid">
+    <div class="gcard"><h3>Evolución del suministro (KIA)</h3><div id="g-supply"><p class="gload">Cargando datos…</p></div><p class="gnote" id="n-supply"></p></div>
+    <div class="gcard"><h3>Tareas verificadas y fallidas</h3><div id="g-tasks"><p class="gload">Cargando datos…</p></div><p class="gnote" id="n-tasks"></p></div>
+    <div class="gcard"><h3>Nodos registrados</h3><div id="g-nodes"><p class="gload">Cargando datos…</p></div><p class="gnote" id="n-nodes"></p></div>
+    <div class="gcard"><h3>Reparto por VRAM</h3><div id="g-vram"><p class="gload">Cargando datos…</p></div><p class="gnote" id="n-vram"></p></div>
+    <div class="gcard"><h3>Potencia declarada (TOPS)</h3><div id="g-pow"><p class="gload">Cargando datos…</p></div><p class="gnote" id="n-pow"></p></div>
+    <div class="gcard"><h3>Recompensas verificadas</h3><div id="g-rew"><p class="gload">Cargando datos…</p></div><p class="gnote" id="n-rew"></p></div>
+    <div class="gcard"><h3>Tasa de éxito (ventana)</h3><div id="g-tasa"><p class="gload">Cargando datos…</p></div><p class="gnote" id="n-tasa"></p></div>
+  </div>
+  <div class="gcard" style="margin-top:1.5rem;"><h3>Nodos por tareas verificadas</h3><div id="g-board"><p class="gload">Cargando datos…</p></div><p class="gnote">Nodos registrados (no implica conexión en tiempo real). Etiquetas anonimizadas.</p></div>
+  <div class="gcard" style="margin-top:1.5rem;"><h3>Transparencia de datos</h3><p class="gnote" id="g-meta">Cargando…</p>
+  <p class="gnote">No disponible: modelo de GPU por nodo, telemetría (uso, temperatura, consumo), tiempos de ejecución, historial completo y evolución de potencia y VRAM. Motivo: el Core no registra esas métricas; solo se mostrarán cuando existan fuentes verificadas. Nada en esta página es tiempo real.</p></div>
 </section>
 
 <section id="mineros" class="reveal">
@@ -462,5 +480,6 @@ counters.forEach(c => cio.observe(c));
   }).catch(function(){ /* sin stats.json: se mantienen los datos estáticos */ });
 })();
 </script>
+<script src="graficas.js"></script>
 </body>
 </html>

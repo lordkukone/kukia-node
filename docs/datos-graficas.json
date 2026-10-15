@@ -1,0 +1,227 @@
+{
+ "estado": "ok",
+ "testnet": true,
+ "generado": "2026-10-15T14:59:09",
+ "generado_ms": 1792069149467,
+ "source_status": "ok",
+ "fuente": [
+  "GET /ledger",
+  "GET /nodos"
+ ],
+ "cobertura": "ultimas 20 operaciones disponibles (maximo 200 por respuesta); sin historico anterior",
+ "ledger": [
+  {
+   "t": "Wed Oct 14 12:06:10 2026",
+   "k": 100.0,
+   "m": "trabajo verificado",
+   "id": "1b72d67efff1"
+  },
+  {
+   "t": "Wed Oct 14 12:06:10 2026",
+   "k": 0.0,
+   "m": "resultado incorrecto (recalculado por el Core)",
+   "id": "2cbda3da0408"
+  },
+  {
+   "t": "Wed Oct 14 11:58:31 2026",
+   "k": 100.0,
+   "m": "trabajo verificado",
+   "id": "ece4eb6b4c87"
+  },
+  {
+   "t": "Wed Oct 14 11:41:39 2026",
+   "k": 0.0,
+   "m": "resultado incorrecto (recalculado por el Core)",
+   "id": "368c11804724"
+  },
+  {
+   "t": "Wed Oct 14 11:41:39 2026",
+   "k": 100.0,
+   "m": "trabajo verificado",
+   "id": "d91475b1f23f"
+  },
+  {
+   "t": "Wed Oct 14 11:38:32 2026",
+   "k": 0.0,
+   "m": "resultado incorrecto (recalculado por el Core)",
+   "id": "04a99703629b"
+  },
+  {
+   "t": "Wed Oct 14 11:28:49 2026",
+   "k": 100.0,
+   "m": "trabajo verificado",
+   "id": "25a96841d59c"
+  },
+  {
+   "t": "Wed Oct 14 11:12:28 2026",
+   "k": 15000000.0,
+   "m": "migracion a billetera con recuperacion (entrada)",
+   "id": "migracion"
+  },
+  {
+   "t": "Wed Oct 14 11:12:28 2026",
+   "k": -15000000.0,
+   "m": "migracion a billetera con recuperacion (salida)",
+   "id": "migracion"
+  },
+  {
+   "t": "Wed Oct 14 11:02:54 2026",
+   "k": 10.0,
+   "m": "trabajo verificado",
+   "id": "bc04f7cbe68d"
+  },
+  {
+   "t": "Wed Oct 14 11:02:34 2026",
+   "k": 0.0,
+   "m": "resultado incorrecto (recalculado por el Core)",
+   "id": "6eb3c4f17f1d"
+  },
+  {
+   "t": "Wed Oct 14 11:02:34 2026",
+   "k": 0.0,
+   "m": "resultado incorrecto (recalculado por el Core)",
+   "id": "178425bcb406"
+  },
+  {
+   "t": "Tue Oct 13 21:28:09 2026",
+   "k": 10.0,
+   "m": "trabajo verificado",
+   "id": "3a0133b7e88a"
+  },
+  {
+   "t": "Tue Oct 13 21:27:18 2026",
+   "k": 0.0,
+   "m": "resultado incorrecto (recalculado por el Core)",
+   "id": "ed14d6ac4c68"
+  },
+  {
+   "t": "Tue Oct 13 21:27:18 2026",
+   "k": 10.0,
+   "m": "trabajo verificado",
+   "id": "362562d75889"
+  },
+  {
+   "t": "Tue Oct 13 19:37:45 2026",
+   "k": 15000000.0,
+   "m": "asignacion fundacional",
+   "id": "genesis"
+  },
+  {
+   "t": "Tue Oct 13 16:29:23 2026",
+   "k": 0.0,
+   "m": "hash no verificado",
+   "id": "c17a137494d9"
+  },
+  {
+   "t": "Tue Oct 13 16:29:23 2026",
+   "k": 10.0,
+   "m": "trabajo verificado",
+   "id": "2dfce6ab7562"
+  },
+  {
+   "t": "Tue Oct 13 16:29:14 2026",
+   "k": 10.0,
+   "m": "trabajo verificado",
+   "id": "1e2474db95e0"
+  },
+  {
+   "t": "Tue Oct 13 16:29:14 2026",
+   "k": 10.0,
+   "m": "trabajo verificado",
+   "id": "ed4c2b625c86"
+  }
+ ],
+ "nodos": [
+  {
+   "id": "77a96489",
+   "c": "Tue Oct 13 16:10:07 2026",
+   "v": 12,
+   "ok": 0,
+   "r": 1.0
+  },
+  {
+   "id": "520c99c5",
+   "c": "Tue Oct 13 16:29:14 2026",
+   "v": 12,
+   "ok": 3,
+   "r": 1.15
+  },
+  {
+   "id": "0be9be21",
+   "c": "Tue Oct 13 21:27:18 2026",
+   "v": 12,
+   "ok": 1,
+   "r": 1.05
+  },
+  {
+   "id": "6f7756aa",
+   "c": "Tue Oct 13 21:27:57 2026",
+   "v": 15,
+   "ok": 1,
+   "r": 1.05
+  },
+  {
+   "id": "490e11a8",
+   "c": "Tue Oct 13 21:27:57 2026",
+   "v": 11,
+   "ok": 0,
+   "r": 1.0
+  },
+  {
+   "id": "9a1c4380",
+   "c": "Wed Oct 14 11:02:34 2026",
+   "v": 12,
+   "ok": 0,
+   "r": 1.0
+  },
+  {
+   "id": "67a2cf16",
+   "c": "Wed Oct 14 11:02:54 2026",
+   "v": 12,
+   "ok": 1,
+   "r": 1.05
+  },
+  {
+   "id": "af5edff0",
+   "c": "Wed Oct 14 11:28:49 2026",
+   "v": 12,
+   "ok": 1,
+   "r": 1.05
+  },
+  {
+   "id": "76c9038d",
+   "c": "Wed Oct 14 11:38:32 2026",
+   "v": 12,
+   "ok": 0,
+   "r": 1.0
+  },
+  {
+   "id": "27ad4b11",
+   "c": "Wed Oct 14 11:41:39 2026",
+   "v": 12,
+   "ok": 1,
+   "r": 1.05
+  },
+  {
+   "id": "9f9c273b",
+   "c": "Wed Oct 14 11:58:30 2026",
+   "v": 12,
+   "ok": 1,
+   "r": 1.05
+  },
+  {
+   "id": "4c488fa7",
+   "c": "Wed Oct 14 12:06:10 2026",
+   "v": 12,
+   "ok": 1,
+   "r": 1.05
+  },
+  {
+   "id": "dc8f895a",
+   "c": "Wed Oct 14 12:06:10 2026",
+   "v": 12,
+   "ok": 0,
+   "r": 1.0
+  }
+ ]
+}

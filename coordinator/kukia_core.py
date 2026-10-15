@@ -47,7 +47,11 @@ BOUNTY = 1000.0                   # bounty anti-trampa (mejora 3)
 # False = nodos viejos sin clave siguen cobrando (compatibilidad, fase pruebas).
 # True  = TODOS los nodos deben traer firma (rechaza sin clave_publica).
 # Pasar a True al abrir la red publica.
-EXIGIR_FIRMA_GLOBAL = False
+EXIGIR_FIRMA_GLOBAL = True
+
+# Tareas 'ejecutando' sin resultado tras este tiempo vuelven a 'queued'
+# (recuperacion oportunista en /tareas/pendiente, misma transaccion).
+ABANDONO_SEG = 1800.0
 
 con = sqlite3.connect(str(DB), check_same_thread=False)
 con.row_factory = sqlite3.Row
@@ -69,6 +73,10 @@ def schema():
         pass
     try:
         con.execute("ALTER TABLE nodos ADD COLUMN clave_publica TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        con.execute("ALTER TABLE tareas ADD COLUMN asignado REAL DEFAULT NULL")
     except Exception:
         pass
     con.commit()
@@ -222,6 +230,11 @@ def pendiente(nodo_id: str):
 
     Dos workers simultaneos NO pueden llevarse la misma tarea: el segundo
     espera al lock y re-verifica que siga en 'queued' antes de asignarla.
+
+    Recuperacion oportunista: antes de asignar, las tareas 'ejecutando'
+    sin resultado tras ABANDONO_SEG vuelven a 'queued' en la misma
+    transaccion. No duplica pagos: el pago exige estado='ejecutando' con
+    el nodo asignado actual (ver /tareas/resultado).
     """
     with _pago_lock:
         try:
@@ -229,6 +242,9 @@ def pendiente(nodo_id: str):
         except Exception:
             raise HTTPException(503, "Core ocupado, reintentar")
         try:
+            con.execute("UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL "
+                        "WHERE estado='ejecutando' AND asignado IS NOT NULL "
+                        "AND asignado < ?", (time.time() - ABANDONO_SEG,))
             row = con.execute("SELECT id,tipo,params FROM tareas WHERE estado='queued' "
                               "ORDER BY creado LIMIT 1").fetchone()
             if not row:
@@ -239,17 +255,18 @@ def pendiente(nodo_id: str):
             if not chk or chk["estado"] != "queued":
                 con.execute("ROLLBACK")
                 return {"tarea": None}
-            con.execute("UPDATE tareas SET estado='ejecutando', nodo_id=? WHERE id=?", (nodo_id, row["id"]))
+            con.execute("UPDATE tareas SET estado='ejecutando', nodo_id=?, asignado=? WHERE id=?",
+                        (nodo_id, time.time(), row["id"]))
             con.commit()
             return {"tarea": {"id": row["id"], "tipo": row["tipo"], "params": json.loads(row["params"])}}
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             try:
                 con.execute("ROLLBACK")
             except Exception:
                 pass
-            raise HTTPException(500, f"error asignando tarea: {e}")
+            raise HTTPException(500, "error interno asignando tarea")
 
 @app.post("/tareas/resultado")
 def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: str = ""):
@@ -342,12 +359,12 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
             con.commit()
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             try:
                 con.execute("ROLLBACK")
             except Exception:
                 pass
-            raise HTTPException(500, f"error interno en el pago: {e}")
+            raise HTTPException(500, "error interno en el pago")
     return {"ok": ok, "kuki": kuki, "esperado": esperado, "pago": info_pago}
 
 @app.get("/ledger")

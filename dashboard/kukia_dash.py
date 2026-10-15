@@ -2,7 +2,7 @@
 import sqlite3
 from pathlib import Path
 
-DB = Path(__file__).parent.parent / "ledger" / "kukia.db"
+DB = Path(__file__).parent.parent / "coordinator" / "ledger" / "kukia.db"
 
 HTML = """<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">
 <title>KUKIA Network - Dashboard</title>
