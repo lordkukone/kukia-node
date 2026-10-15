@@ -1,5 +1,10 @@
 # KUKIA - Red descentralizada de computo GPU
 
+> **Copyright (c) 2026 LordKukone (KUKIA Network). Todos los derechos reservados.**
+> Licencia propietaria (ver archivo `LICENSE`). Prohibido el uso comercial,
+> la copia, los forks publicos y el uso del nombre KUKIA / ticker KIA sin
+> autorizacion escrita. El codigo se publica solo para auditoria.
+
 **KIA Coin (ticker: KIA)** - la moneda del trabajo verificado.
 
 KUKIA conecta las GPUs de todo el mundo en una sola red de inteligencia artificial.

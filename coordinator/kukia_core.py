@@ -503,4 +503,17 @@ def saldo(direccion: str):
     # tambien sumar pagos recibidos como nodo minero
     return {"direccion": direccion, "saldo": s}
 
+@app.get("/saldos")
+def saldos():
+    """Mapa publico direccion -> saldo (solo lectura, agregados del ledger).
+
+    Permite a la web mostrar saldos sin exponer el Core: el exportador
+    guarda este mapa en un JSON estatico. No incluye emails, claves ni
+    datos personales (el ledger solo guarda ids y cantidades).
+    """
+    filas = con.execute("SELECT nodo_id, COALESCE(SUM(kuki),0) as s FROM ledger "
+                        "GROUP BY nodo_id").fetchall()
+    return {"saldos": {r["nodo_id"]: r["s"] for r in filas},
+            "direcciones": len(filas)}
+
 # el coordinador corre: uvicorn kukia_core:app --port 8300

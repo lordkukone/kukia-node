@@ -92,12 +92,79 @@ def construir_no_disponible(ahora: datetime.datetime, detalle: str) -> dict:
     }
 
 
+def es_numero(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
 def snapshot_valido_existente(out: str) -> bool:
     try:
         with open(out, encoding="utf-8") as f:
             return json.load(f).get("estado") == "ok"
     except Exception:
         return False
+
+
+def saldos_valido_existente(out: str) -> bool:
+    try:
+        with open(out, encoding="utf-8") as f:
+            d = json.load(f)
+        return d.get("estado") == "ok" and isinstance(d.get("saldos"), dict)
+    except Exception:
+        return False
+
+
+def construir_saldos(saldos: dict, ahora: datetime.datetime) -> dict:
+    return {
+        "estado": "ok",
+        "testnet": True,
+        "fecha_actualizacion": ahora.isoformat(timespec="seconds"),
+        "etiqueta_fecha": ahora.strftime("%d/%m/%Y %H:%M"),
+        "saldos": saldos.get("saldos", {}),
+        "direcciones": saldos.get("direcciones", 0),
+        "nota": ("Mapa publico direccion->saldo desde el Core local. "
+                 "TESTNET: instantanea, no tiempo real."),
+    }
+
+
+def construir_saldos_no_disponible(ahora: datetime.datetime, detalle: str) -> dict:
+    return {
+        "estado": "no_disponible",
+        "testnet": True,
+        "fecha_actualizacion": ahora.isoformat(timespec="seconds"),
+        "etiqueta_fecha": ahora.strftime("%d/%m/%Y %H:%M"),
+        "detalle": detalle,
+        "saldos": {},
+        "direcciones": 0,
+        "nota": "Core local sin respuesta en el momento de la generacion. TESTNET.",
+    }
+
+
+def exportar_saldos(core: str, out: str, ahora: datetime.datetime) -> bool:
+    """Genera el mapa publico de saldos. True si OK. Nunca inventa cifras."""
+    try:
+        req = urllib.request.Request(core.rstrip("/") + "/saldos",
+                                     headers={"User-Agent": "kukia-export-stats/1.0"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SEG) as r:
+            datos = json.loads(r.read().decode("utf-8"))
+        mapa = datos.get("saldos")
+        if not isinstance(mapa, dict):
+            raise ValueError("respuesta sin mapa 'saldos'")
+        for k, v in mapa.items():
+            if not isinstance(k, str) or not es_numero(v):
+                raise ValueError("entrada de saldo invalida")
+    except Exception as e:
+        detalle = f"Core local sin respuesta o datos invalidos ({e.__class__.__name__})"
+        if saldos_valido_existente(out):
+            print(f"[export_stats] ERROR saldos: {detalle}. Se conserva el fichero.",
+                  file=sys.stderr)
+        else:
+            escribir(out, construir_saldos_no_disponible(ahora, detalle))
+            print(f"[export_stats] ERROR saldos: {detalle}. Marcador escrito.",
+                  file=sys.stderr)
+        return False
+    escribir(out, construir_saldos(datos, ahora))
+    print(f"[export_stats] OK saldos: {out} (direcciones={len(mapa)})")
+    return True
 
 
 def escribir(out: str, data: dict) -> None:
@@ -107,11 +174,85 @@ def escribir(out: str, data: dict) -> None:
     os.replace(tmp, out)
 
 
+def historial_valido_existente(out: str) -> bool:
+    try:
+        with open(out, encoding="utf-8") as f:
+            d = json.load(f)
+        return d.get("estado") == "ok" and isinstance(d.get("movimientos"), list)
+    except Exception:
+        return False
+
+
+def construir_historial(rows: list, ahora: datetime.datetime) -> dict:
+    return {
+        "estado": "ok",
+        "testnet": True,
+        "fecha_actualizacion": ahora.isoformat(timespec="seconds"),
+        "etiqueta_fecha": ahora.strftime("%d/%m/%Y %H:%M"),
+        "movimientos": [{"ts": r["ts"], "id": r["nodo_id"], "k": r["kuki"],
+                         "m": r["motivo"], "tid": r["tarea_id"]} for r in rows],
+        "cuenta": len(rows),
+        "nota": ("Movimientos reales del ledger (maximo 200 por respuesta). "
+                 "TESTNET: instantanea, no tiempo real."),
+    }
+
+
+def construir_historial_no_disponible(ahora: datetime.datetime, detalle: str) -> dict:
+    return {
+        "estado": "no_disponible",
+        "testnet": True,
+        "fecha_actualizacion": ahora.isoformat(timespec="seconds"),
+        "etiqueta_fecha": ahora.strftime("%d/%m/%Y %H:%M"),
+        "detalle": detalle,
+        "movimientos": [],
+        "cuenta": 0,
+        "nota": "Core local sin respuesta en el momento de la generacion. TESTNET.",
+    }
+
+
+def exportar_historial(core: str, out: str, ahora: datetime.datetime) -> bool:
+    """Genera el historial publico de movimientos. True si OK. Sin inventos."""
+    try:
+        req = urllib.request.Request(core.rstrip("/") + "/ledger",
+                                     headers={"User-Agent": "kukia-export-stats/1.0"})
+        with urllib.request.urlopen(req, timeout=TIMEOUT_SEG) as r:
+            rows = json.loads(r.read().decode("utf-8"))
+        if not isinstance(rows, list):
+            raise ValueError("respuesta /ledger no es lista")
+        for i, r in enumerate(rows):
+            if not isinstance(r, dict):
+                raise ValueError(f"fila {i} no es objeto")
+            if not isinstance(r.get("ts"), str) or not isinstance(r.get("motivo"), str) \
+                    or not isinstance(r.get("tarea_id"), str) or not isinstance(r.get("nodo_id"), str):
+                raise ValueError(f"fila {i} con campos invalidos")
+            if not es_numero(r.get("kuki")):
+                raise ValueError(f"fila {i} con kuki no numerico")
+    except Exception as e:
+        detalle = f"Core local sin respuesta o datos invalidos ({e.__class__.__name__})"
+        if historial_valido_existente(out):
+            print(f"[export_stats] ERROR historial: {detalle}. Se conserva el fichero.",
+                  file=sys.stderr)
+        else:
+            escribir(out, construir_historial_no_disponible(ahora, detalle))
+            print(f"[export_stats] ERROR historial: {detalle}. Marcador escrito.",
+                  file=sys.stderr)
+        return False
+    escribir(out, construir_historial(rows, ahora))
+    print(f"[export_stats] OK historial: {out} (movimientos={len(rows)})")
+    return True
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--core", default=CORE_DEFAULT, help="URL del Core (GET /stats)")
     ap.add_argument("--out", default=None,
                     help="Ruta del stats.json (por defecto: docs/stats.json del repositorio)")
+    ap.add_argument("--con-saldos", default=None, metavar="RUTA",
+                    help="Generar tambien el mapa publico direccion->saldo en RUTA "
+                         "(por defecto no se genera)")
+    ap.add_argument("--con-historial", default=None, metavar="RUTA",
+                    help="Generar tambien el historial publico de movimientos en RUTA "
+                         "(por defecto no se genera)")
     args = ap.parse_args()
 
     if args.out:
@@ -138,6 +279,12 @@ def main() -> None:
     print(f"[export_stats] OK: {out} "
           f"(nodos={st.get('nodos')}, tareas_ok={st.get('tareas_ok')}, "
           f"en_cola={st.get('tareas_pend')}, supply={st.get('supply_emitido')})")
+    if args.con_saldos:
+        if not exportar_saldos(args.core, os.path.abspath(args.con_saldos), ahora):
+            sys.exit(1)
+    if args.con_historial:
+        if not exportar_historial(args.core, os.path.abspath(args.con_historial), ahora):
+            sys.exit(1)
 
 
 if __name__ == "__main__":

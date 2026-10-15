@@ -34,6 +34,7 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
 #qrcode img { margin:0 auto; display:block; border:8px solid #fff; border-radius:8px; }
 .small { font-size:.78rem; color:var(--text); text-align:center; margin-top:.5rem; }
 .ok { color:#5ee08a; } .err { color:#ff7b7b; }
+.ojo { margin-top:.6rem; font-size:.85rem; padding:.6rem; }
 </style>
 </head>
 <body>
@@ -46,6 +47,7 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
   <div class="tab on" onclick="ver('crear')">Nueva</div>
   <div class="tab" onclick="ver('recuperar')">Recuperar</div>
   <div class="tab" onclick="ver('ver')">Mi saldo</div>
+  <div class="tab" onclick="ver('hist')">Historial</div>
 </div>
 
 <div id="p-crear" class="panel on">
@@ -74,6 +76,15 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
     <button class="btn" onclick="saldo()">Ver saldo</button>
     <div id="v-out"></div>
     <div id="qrcode"></div>
+  </div>
+</div>
+
+<div id="p-hist" class="panel">
+  <div class="card">
+    <h3>Historial de movimientos</h3>
+    <input id="h-addr" placeholder="Tu dirección KUK...">
+    <button class="btn" onclick="historial()">Ver historial</button>
+    <div id="h-out"></div>
   </div>
 </div>
 
@@ -121,10 +132,11 @@ function crear(){
     localStorage.setItem('kukia_priv', privHex);
     localStorage.setItem('kukia_addr', addr);
     localStorage.setItem('kukia_words', JSON.stringify(words));
-    var html = '<div class="addr">' + addr + '</div>';
-    html += '<div class="warn"><strong>GUARDA ESTO EN PAPEL AHORA:</strong><br>Contrasena: <code>' + pass + '</code></div>';
-    html += '<div class="warn"><strong>Escribe estas 20 palabras EN PAPEL y en orden.</strong> Sin contrasena + palabras no recuperas nada.</div>';
-    html += '<div class="words">' + words.map(function(w,i){ return '<span>'+(i+1)+'. '+w+'</span>'; }).join('') + '</div>';
+    var html = '<div class="addr">' + privTxt(addr) + '</div>';
+    html += '<div class="warn"><strong>GUARDA ESTO EN PAPEL AHORA:</strong><br>Contraseña: <code>' + privTxt(pass) + '</code></div>';
+    html += '<div class="warn"><strong>Escribe estas 20 palabras EN PAPEL y en orden.</strong> Sin contraseña + palabras no recuperas nada.</div>';
+    html += '<div class="words">' + words.map(function(w,i){ return '<span>'+(i+1)+'. '+privTxt(w)+'</span>'; }).join('') + '</div>';
+    html += btnOjo();
     document.getElementById('c-out').innerHTML = html;
   });
 }
@@ -143,14 +155,98 @@ function recuperar(){
   });
 }
 
+function fmtFechaHist(ts){
+  try {
+    var p = String(ts).split(' ');
+    var ME = {Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+    if(p.length < 5 || !ME[p[1]]) return String(ts);
+    var h = p[3].split(':');
+    return p[2] + '/' + ME[p[1]] + ' ' + h[0] + ':' + h[1];
+  } catch(e){ return String(ts); }
+}
+
+function historial(){
+  var addr = document.getElementById('h-addr').value.trim() || document.getElementById('v-addr').value.trim() || localStorage.getItem('kukia_addr') || '';
+  var out = document.getElementById('h-out');
+  if(!addr){ alert('Pon tu dirección KUK...'); return; }
+  if(!/^[A-Za-z0-9]{1,64}$/.test(addr)){
+    out.innerHTML = '<p class="err">Dirección no válida: usa solo letras y números (máx. 64).</p>';
+    return;
+  }
+  out.innerHTML = '<p class="small">Cargando movimientos…</p>';
+  fetch('historial.json', {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(d){
+    if(!d || d.estado !== 'ok' || !Array.isArray(d.movimientos)){
+      out.innerHTML = '<p class="err">Historial no disponible: no hay datos públicos ahora mismo.</p>';
+      return;
+    }
+    var movs = d.movimientos.filter(function(m){ return m.id === addr; });
+    if(!movs.length){
+      out.innerHTML = '<p class="small">Sin movimientos registrados para esta dirección en la instantánea del ' + (d.etiqueta_fecha || '—') + ' (TESTNET).</p>';
+      return;
+    }
+    var html = '<table style="width:100%;border-collapse:collapse;font-size:.82rem;"><tbody>';
+    var acum = 0;
+    movs.forEach(function(m){
+      acum += Number(m.k) || 0;
+      html += '<tr><td style="padding:.3rem;color:var(--text);">' + fmtFechaHist(m.t) + '</td>' +
+        '<td style="padding:.3rem;color:#fff;">' + String(m.m).substring(0, 60) + '</td>' +
+        '<td style="padding:.3rem;text-align:right;color:#00ff88;">' + Number(m.k).toLocaleString() + '</td>' +
+        '<td style="padding:.3rem;text-align:right;color:var(--text);">' + acum.toLocaleString() + '</td>';
+    });
+    out.innerHTML = html + '</tbody></table>' +
+      '<p class="small">Total: ' + acum.toLocaleString() + ' KIA en ' + movs.length + ' movimientos. Instantánea del ' + (d.etiqueta_fecha || '—') + ' (TESTNET, últimos 200 como máximo).</p>';
+  }).catch(function(){
+    out.innerHTML = '<p class="err">Historial no disponible: no se pudo leer el fichero público.</p>';
+  });
+}
+
+function ojo(btn){
+  var card = btn.closest('.card');
+  var abierto = btn.getAttribute('data-abierto') === '1';
+  card.querySelectorAll('.priv').forEach(function(el){
+    var real = el.getAttribute('data-v') || '';
+    el.setAttribute('data-v', el.textContent);
+    el.textContent = real;
+  });
+  btn.setAttribute('data-abierto', abierto ? '0' : '1');
+  btn.textContent = abierto ? '👁 Mostrar' : '🔒 Ocultar';
+  var qr = card.querySelector('#qrcode');
+  if(qr) qr.style.display = abierto ? 'none' : '';
+}
+
+function privTxt(v){ return '<span class="priv" data-v="' + v + '">••••••••••</span>'; }
+function btnOjo(){ return '<button class="btn btn2 ojo" onclick="ojo(this)">👁 Mostrar</button>'; }
+
 function saldo(){
   var addr = document.getElementById('v-addr').value.trim() || localStorage.getItem('kukia_addr') || '';
+  var out = document.getElementById('v-out');
   if(!addr){ alert('Pon tu dirección KUK...'); return; }
-  document.getElementById('v-out').innerHTML = '<p class="err">La consulta de saldo no está disponible en la web pública (TESTNET). Para ver tu saldo, usa el panel local junto a tu Core.</p><div class="addr">' + addr + '</div>';
-  try {
-    var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
-    document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
-  } catch(e){}
+  if(!/^[A-Za-z0-9]{1,64}$/.test(addr)){
+    out.innerHTML = '<p class="err">Dirección no válida: usa solo letras y números (máx. 64).</p>';
+    try { document.getElementById('qrcode').innerHTML = ''; } catch(e){}
+    return;
+  }
+  out.innerHTML = '<div class="saldo">…</div>';
+  try { document.getElementById('qrcode').innerHTML = ''; document.getElementById('qrcode').style.display = 'none'; } catch(e){}
+  fetch('saldos.json', {cache:'no-store'}).then(function(r){ return r.json(); }).then(function(d){
+    if(!d || d.estado !== 'ok' || typeof d.saldos !== 'object' || !d.saldos){
+      out.innerHTML = '<p class="err">Saldo no disponible: no hay datos públicos ahora mismo.</p><div class="addr">' + privTxt(addr) + '</div>' + btnOjo();
+    } else if(Object.prototype.hasOwnProperty.call(d.saldos, addr)){
+      out.innerHTML = '<div class="saldo">' + Number(d.saldos[addr]).toLocaleString() + ' KIA</div><div class="addr">' + privTxt(addr) + '</div>' +
+        '<p class="small">Instantánea del ' + (d.etiqueta_fecha || '—') + ' (TESTNET).</p>' + btnOjo();
+    } else {
+      out.innerHTML = '<div class="saldo">0 KIA</div><div class="addr">' + privTxt(addr) + '</div>' +
+        '<p class="small">Sin movimientos registrados en la instantánea del ' + (d.etiqueta_fecha || '—') + ' (TESTNET).</p>' + btnOjo();
+    }
+    try {
+      var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
+      document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
+      document.getElementById('qrcode').style.display = 'none';
+    } catch(e){}
+  }).catch(function(){
+    out.innerHTML = '<p class="err">Saldo no disponible: no se pudo leer el fichero público.</p><div class="addr">' + privTxt(addr) + '</div>' + btnOjo();
+    try { document.getElementById('qrcode').innerHTML = ''; } catch(e){}
+  });
 }
 </script>
 <script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js');}</script>
