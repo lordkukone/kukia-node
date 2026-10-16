@@ -41,7 +41,85 @@ def trabajo_local(tipo: str, params: dict, device: str = "cuda:0") -> str:
             for j in range(3):
                 out += float((x[i:n-2+i, j:n-2+j] * k[i, j]).sum().item())
         return str(int(round(out)))
+    if tipo in ("embeddings", "lote_embeddings"):
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        import ia_onnx_cpu
+        ruta = _modelo_local(params)
+        clave = params["input"] if tipo == "embeddings" else params["inputs"]
+        h = ia_onnx_cpu.config_hash(ruta, clave)
+        if "model_hash" in params and str(params["model_hash"]) != h:
+            return "hash_modelo_no_coincide"
+        if tipo == "embeddings":
+            return json.dumps(ia_onnx_cpu.ejecutar_tarea(ruta, params["input"]))
+        return json.dumps([ia_onnx_cpu.ejecutar_tarea(ruta, e) for e in params["inputs"]])
     return "tarea_no_soportada"
+
+def _modelo_local(params):
+    """Punto 5: usa el modelo local o lo baja del Core (/modelos) si falta."""
+    ruta = Path(str(params["model_path"]))
+    if ruta.is_file():
+        return str(ruta)
+    dest = Path(__file__).parent.parent / "modelos" / ruta.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    r = requests.get(f"{CORE}/modelos/{ruta.name}", timeout=600)
+    if r.status_code != 200:
+        raise RuntimeError("modelo no disponible ni local ni en el Core")
+    dest.write_bytes(r.content)
+    return str(dest)
+
+# --- PASO 3: controles del propietario (se aplican AQUI, en el minero) ---
+# LIMITACION HONESTA: max_vram_fraction limita la memoria CUDA de este proceso
+# (torch), y espera_entre_tareas_seg dosifica el uso en el tiempo. NINGUNO de
+# los dos garantiza por si solo un limite exacto de potencia (W) ni de
+# temperatura: eso exige control del driver (nvidia-smi -pl, con permisos).
+CONFIG_PATH = Path(__file__).parent / "minero_config.json"
+DEFAULT_CONFIG = {"max_vram_fraction": 0.8, "horarios": [["00:00", "24:00"]],
+                  "pausa": False, "excluir_campanas": [], "colas": ["A", "B", "C"],
+                  "espera_entre_tareas_seg": 0, "espera_sin_tareas_seg": 10}
+
+def cargar_config():
+    try:
+        cfg = dict(DEFAULT_CONFIG)
+        if CONFIG_PATH.is_file():
+            cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
+        return cfg
+    except Exception:
+        return dict(DEFAULT_CONFIG)
+
+def _en_horario(cfg):
+    try:
+        from datetime import datetime as _dt
+        ahora = _dt.now().strftime("%H:%M")
+        for ini, fin in cfg.get("horarios", [["00:00", "24:00"]]):
+            if ini <= ahora <= fin or (fin < ini and (ahora >= ini or ahora <= fin)):
+                return True
+        return False
+    except Exception:
+        return True
+
+def _pausado(cfg):
+    try:
+        if cfg.get("pausa"):
+            return True
+        return (Path(__file__).parent / "PAUSA").is_file()
+    except Exception:
+        return False
+
+def prueba_gpu():
+    """Punto 3: atestado GPU declarativo (NO criptografico: el minero podria
+    mentir; sirve como telemetria y filtro inicial, no como prueba)."""
+    import time as _t
+    try:
+        import torch
+        if torch.cuda.is_available():
+            i = torch.cuda.current_device()
+            p = torch.cuda.get_device_properties(i)
+            a = torch.randn(2048, 2048, device=f"cuda:{i}")
+            t0 = _t.time(); c = (a @ a.T).sum().item(); dt = _t.time() - t0
+            return f"{p.name}|cc{p.major}.{p.minor}|vram{p.total_memory//1024**3}GB|kernel{dt:.3f}s"
+    except Exception as e:
+        return f"sin_gpu:{e}"
+    return "sin_gpu"
 
 def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
     """Un hilo por GPU: registra su nodo y mina en bucle (resultados FIRMADOS)."""
@@ -52,20 +130,54 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
         w = w[0]
     pubkey = w.get("clave_publica", "")
     privkey = w.get("clave_privada", "")
-    try:
-        r = requests.post(f"{CORE}/nodos/registrar",
-                          json={"nombre": etiqueta, "vram_gb": vram_gb, "tops": tops,
-                                "clave_publica": pubkey}, timeout=30)
-        nid = r.json()["id"]
-        print(f"[KUKIA] nodo {nid} ({etiqueta}) vram={vram_gb}GB listo")
-    except Exception as e:
-        print(f"[KUKIA] {etiqueta} error registro: {e}")
+    for _intento in range(5):
+        try:
+            r = requests.post(f"{CORE}/nodos/registrar",
+                              json={"nombre": etiqueta, "vram_gb": vram_gb, "tops": tops,
+                                    "clave_publica": pubkey,
+                                    "prueba_gpu": prueba_gpu()}, timeout=30)
+            if r.status_code == 429:
+                time.sleep(60)
+                continue
+            nid = r.json().get("id")
+            if not nid:
+                print(f"[KUKIA] {etiqueta} registro sin id, reintento")
+                time.sleep(10)
+                continue
+            break
+        except Exception as e:
+            print(f"[KUKIA] {etiqueta} error registro: {e}")
+            time.sleep(10)
+    else:
         return
+    print(f"[KUKIA] nodo {nid} ({etiqueta}) vram={vram_gb}GB listo")
+    try:
+        import torch as _tc
+        _dev = int(str(device).split(":")[1]) if ":" in str(device) else 0
+        _tc.cuda.set_per_process_memory_fraction(
+            max(0.1, min(1.0, float(cargar_config().get("max_vram_fraction", 0.8)))), _dev)
+    except Exception:
+        pass
     while True:
         try:
-            pend = requests.get(f"{CORE}/tareas/pendiente", params={"nodo_id": nid}, timeout=30).json()["tarea"]
+            cfg = cargar_config()
+            if not _en_horario(cfg) or _pausado(cfg):
+                time.sleep(30)
+                continue
+            r = requests.get(f"{CORE}/tareas/pendiente",
+                                params={"nodo_id": nid,
+                                        "excluir": ",".join(cfg.get("excluir_campanas", [])),
+                                        "colas": ",".join(cfg.get("colas", ["A", "B", "C"]))},
+                                timeout=30)
+            if r.status_code == 429:
+                time.sleep(60)
+                continue
+            try:
+                pend = r.json().get("tarea")
+            except Exception:
+                pend = None
             if not pend:
-                time.sleep(3)
+                time.sleep(int(cfg.get("espera_sin_tareas_seg", 10) or 10))
                 continue
             metrica = trabajo_local(pend["tipo"], pend["params"], device)
             firma = WALLET.firmar(f"{pend['id']}:{metrica}", privkey) if privkey else ""
@@ -75,11 +187,19 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                                 timeout=60).json()
             estado = f"OK +{res['kuki']} KIA" if res.get("ok") else f"RECHAZADO (esperado {res.get('esperado')})"
             print(f"[KUKIA] {etiqueta} tarea {pend['id'][:8]} -> {estado}")
+            _esp = float(cargar_config().get("espera_entre_tareas_seg", 0) or 0)
+            if _esp > 0:
+                time.sleep(_esp)
         except Exception as e:
             print(f"[KUKIA] {etiqueta} err: {e}")
             time.sleep(5)
 
 def main():
+    if "--probar-onnx" in sys.argv:
+        # Autotest aislado de la referencia CPU (no mina, no toca red/BD).
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        import ia_onnx_cpu
+        sys.exit(0 if ia_onnx_cpu.probar_onnx() else 1)
     nombre = sys.argv[1] if len(sys.argv) > 1 else "worker_" + socket.gethostname()
     try:
         import torch
