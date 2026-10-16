@@ -15,7 +15,10 @@ def main():
     try:
         with urllib.request.urlopen(CORE + '/saldos', timeout=15) as r:
             d = json.load(r)
-        snap = {'fecha': datetime.datetime.now().isoformat(timespec='seconds'),
+        import time as _t
+        snap = {'estado': 'ok',
+                'fecha': datetime.datetime.now().isoformat(timespec='seconds'),
+                'etiqueta_fecha': datetime.datetime.now().strftime('%d/%m/%Y'),
                 'fuente': 'Core local (/saldos)', 'testnet': True,
                 'direcciones': d.get('direcciones', 0),
                 'saldos': d.get('saldos', {})}

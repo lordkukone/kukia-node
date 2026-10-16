@@ -253,8 +253,25 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float, billetera:
     pubkey = w.get("clave_publica", "")
     privkey = w.get("clave_privada", "")
     _espera = 10
-    print(f"[KUKIAMINER V1.0 BETA] {etiqueta} REGISTRANDO")
-    while True:
+    # IDENTIDAD PERSISTENTE: reutiliza el nodo ya registrado (evita duplicados).
+    sys.path.insert(0, str(Path(__file__).parent))
+    import identidad as _ID
+    _info = _ID.get_nodo(etiqueta)
+    nid = None
+    if _info.get("nodo_id"):
+        try:
+            _r = requests.get(f"{CORE}/tareas/pendiente",
+                              params={"nodo_id": _info["nodo_id"]}, timeout=15)
+            if _r.status_code in (200, 429):
+                nid = _info["nodo_id"]
+                print(f"[KUKIAMINER V1.0 BETA] {etiqueta} identidad reutilizada {nid}")
+        except Exception:
+            nid = None
+    if nid:
+        pass
+    else:
+        print(f"[KUKIAMINER V1.0 BETA] {etiqueta} REGISTRANDO")
+    while not nid:
         try:
             r = requests.post(f"{CORE}/nodos/registrar",
                               json={"nombre": etiqueta, "vram_gb": vram_gb, "tops": tops,
@@ -275,6 +292,7 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float, billetera:
             print(f"[KUKIAMINER V1.0 BETA] {etiqueta} sin conexion, reintentando solo en {_espera}s: {_limpia(e)}")
             time.sleep(_espera)
             _espera = min(60, _espera + 10)
+    _ID.set_nodo(etiqueta, nid, pubkey)
     print(f"[KUKIAMINER V1.0 BETA] nodo {nid} ({etiqueta}) vram={vram_gb}GB listo")
     try:
         import torch as _tc

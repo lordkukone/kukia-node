@@ -235,6 +235,7 @@ class NodoIn(BaseModel):
     clave_publica: str = ""  # Ed25519 hex (64 bytes) para autenticar resultados
     prueba_gpu: str = ""  # atestado GPU declarativo (punto 3, no criptografico)
     tops_estimado: bool = True  # punto 1: los TOPS son estimados por VRAM, no medidos
+    direccion_cobro: str = ""  # direccion KUK donde acreditar el pago (opcional)
 
 class TareaIn(BaseModel):
     tipo: str      # 'checksum' | 'matriz' | 'inferencia' | 'embeddings' | 'lote_embeddings' | 'difusion_calor'
@@ -288,11 +289,15 @@ def registrar(n: NodoIn):
         con.execute("ALTER TABLE nodos ADD COLUMN tops_estimado INT DEFAULT 1")
     except Exception:
         pass
+    try:
+        con.execute("ALTER TABLE nodos ADD COLUMN direccion_cobro TEXT DEFAULT ''")
+    except Exception:
+        pass
     if n.prueba_gpu:
         con.execute("INSERT INTO gpu_pruebas(nodo_id,prueba,creado) VALUES(?,?,?)",
                     (nid, n.prueba_gpu[:2000], time.ctime()))
-    con.execute("INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (nid, n.nombre, n.vram_gb, tier(n.vram_gb), 1.0, n.ref, time.ctime(), n.tops, n.clave_publica, 1 if n.tops_estimado else 0))
+    con.execute("INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (nid, n.nombre, n.vram_gb, tier(n.vram_gb), 1.0, n.ref, time.ctime(), n.tops, n.clave_publica, 1 if n.tops_estimado else 0, n.direccion_cobro[:64]))
     con.commit()
     return {"id": nid, "tier": tier(n.vram_gb), "max_supply": MAX_SUPPLY, "tops_registrados": n.tops,
             "autenticado": bool(n.clave_publica)}

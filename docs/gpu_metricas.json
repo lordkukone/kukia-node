@@ -1,11 +1,11 @@
 {
- "fecha": "2026-10-16T14:21:01",
+ "fecha": "2026-10-16T15:39:03",
  "core": {
-  "supply_emitido": 15000694.8461,
+  "supply_emitido": 15000798.8551,
   "max_supply": 100000000,
-  "nodos": 18,
-  "tareas_ok": 59,
-  "tareas_pend": 4,
+  "nodos": 26,
+  "tareas_ok": 159,
+  "tareas_pend": 39,
   "registros": 1,
   "emision": {
    "era_actual": 0,
@@ -15,18 +15,18 @@
    "halving_years": 20.71
   },
   "dificultad": {
-   "tops_red": 9592.0,
+   "tops_red": 10392.0,
    "tops_referencia": 1747.0,
-   "factor": 2.343,
-   "matriz_n": 599,
-   "inferencia_n": 149
+   "factor": 2.439,
+   "matriz_n": 624,
+   "inferencia_n": 156
   },
-  "recompensa_base_actual": 1.3309,
+  "recompensa_base_actual": 1.0673,
   "detalle_pago": {
-   "objetivo": 1.3309,
+   "objetivo": 1.0673,
    "techo_halving": 10.0,
-   "tasa_dia": 1416.0,
-   "restante": 84999305.15
+   "tasa_dia": 1765.78,
+   "restante": 84999201.14
   }
  },
  "gpus": []

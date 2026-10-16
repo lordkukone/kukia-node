@@ -1,5 +1,7 @@
 {
- "fecha": "2026-10-16T14:22:13",
+ "estado": "ok",
+ "fecha": "2026-10-16T14:26:39",
+ "etiqueta_fecha": "16/10/2026",
  "fuente": "Core local (/saldos)",
  "testnet": true,
  "direcciones": 18,
