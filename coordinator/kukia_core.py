@@ -5,9 +5,14 @@ El Core recalcula la tarea el mismo (trustless) y compara el resultado
 exacto. Tareas con aritmetica determinista (enteros exactos via float64
 con magnitudes acotadas) para que CPU y GPU den el MISMO numero.
 """
-import hashlib, json, secrets, sqlite3, threading, uuid, time
+import hashlib, json, secrets, sqlite3, threading, uuid, time, sys
 from pathlib import Path
 import numpy as np
+sys.path.insert(0, str(Path(__file__).parent.parent))
+try:
+    import ia_onnx_cpu as ONNXCPU  # referencia CPU (tareas embeddings)
+except Exception:
+    ONNXCPU = None
 from fastapi import FastAPI, HTTPException, Header, Depends
 from pydantic import BaseModel
 
@@ -79,6 +84,20 @@ def schema():
         con.execute("ALTER TABLE tareas ADD COLUMN asignado REAL DEFAULT NULL")
     except Exception:
         pass
+    for _sql in (
+        "ALTER TABLE tareas ADD COLUMN cola TEXT DEFAULT 'B'",
+        "ALTER TABLE tareas ADD COLUMN campana TEXT DEFAULT ''",
+        "ALTER TABLE tareas ADD COLUMN prioridad REAL DEFAULT 0",
+        "ALTER TABLE tareas ADD COLUMN vram_min INT DEFAULT 0",
+        "ALTER TABLE tareas ADD COLUMN device TEXT DEFAULT ''",
+        "ALTER TABLE tareas ADD COLUMN duracion_ms REAL DEFAULT 0",
+    ):
+        try:
+            con.execute(_sql)
+        except Exception:
+            pass
+    con.execute("CREATE TABLE IF NOT EXISTS planificador_log(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "tarea_id TEXT, nodo_id TEXT, cola TEXT, motivo TEXT, ts TEXT)")
     con.commit()
 
 schema()
@@ -125,6 +144,59 @@ def computar_tarea(tipo: str, params: dict):
         return str(int(round(out)))
     return None
 
+# --- Modelos de referencia para tareas IA (punto 5: distribucion) ---
+MODELOS_DIR = Path(__file__).parent / "modelos"
+MODELOS_DIR.mkdir(parents=True, exist_ok=True)
+
+def _verificar_difusion(params, metrica):
+    """Recomputa la difusion en CPU (numpy float64) y compara con tolerancia
+    relativa (GPU y CPU redondean distinto tras cientos de pasos)."""
+    try:
+        n = int(params.get("n", 256))
+        pasos = int(params.get("pasos", 200))
+        seed = int(params.get("seed", 42))
+        x = np.random.default_rng(seed).random((n, n))
+        for _ in range(pasos):
+            x[1:-1, 1:-1] = x[1:-1, 1:-1] + 0.2 * (
+                x[:-2, 1:-1] + x[2:, 1:-1] + x[1:-1, :-2] + x[1:-1, 2:] - 4 * x[1:-1, 1:-1])
+        ref = float(x.sum())
+        val = float(metrica)
+        tol = float(params.get("tolerancia_rel", 1e-9))
+        return abs(val - ref) <= tol * max(1.0, abs(ref))
+    except Exception:
+        return False
+
+def _verificar_embeddings(tipo, params, metrica):
+    """Puntos 1+2: hash del modelo + recomputo CPU con tolerancia (lote: spot-check)."""
+    try:
+        modelo = params["model_path"]
+        vecs = json.loads(metrica)
+        if not isinstance(vecs, list):
+            return False
+        h = ONNXCPU.config_hash(modelo, params["input"] if tipo == "embeddings" else params["inputs"])
+        if str(params.get("model_hash", h)) != h:
+            return False
+        tol = float(params.get("tolerancia", 1e-5))
+        if tipo == "embeddings":
+            pares = [(params["input"], vecs)]
+        else:
+            entradas = list(params["inputs"])
+            if len(vecs) != len(entradas):
+                return False
+            if len(entradas) > 3:
+                import random
+                idx = random.Random(int(params.get("seed", 0))).sample(range(len(entradas)), 3)
+                pares = [(entradas[i], vecs[i]) for i in idx]
+            else:
+                pares = list(zip(entradas, vecs))
+        for ent, rec in pares:
+            ref = ONNXCPU.ejecutar_tarea(modelo, ent)
+            if not ONNXCPU.comparar_con_tolerancia(rec, ref, tol):
+                return False
+        return True
+    except Exception:
+        return False
+
 app = FastAPI(title="KUKIA Core", version="0.2.0")
 
 # ============================================================
@@ -133,7 +205,7 @@ app = FastAPI(title="KUKIA Core", version="0.2.0")
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarRequest
 
-RUTAS_LIMITADAS = {"/registro", "/nodos/registrar", "/tareas/pendiente", "/tareas/resultado"}
+RUTAS_LIMITADAS = {"/registro", "/nodos/registrar", "/tareas/pendiente", "/tareas/resultado", "/transferir"}
 RATE_MAX = 30
 RATE_WINDOW = 60.0
 _rate_hist = {}
@@ -161,10 +233,16 @@ class NodoIn(BaseModel):
     ref: str = ""
     tops: float = 0.0    # potencia IA declarada (TOPS, valor oficial de la GPU)
     clave_publica: str = ""  # Ed25519 hex (64 bytes) para autenticar resultados
+    prueba_gpu: str = ""  # atestado GPU declarativo (punto 3, no criptografico)
+    tops_estimado: bool = True  # punto 1: los TOPS son estimados por VRAM, no medidos
 
 class TareaIn(BaseModel):
-    tipo: str      # 'checksum' | 'matriz' | 'inferencia'
+    tipo: str      # 'checksum' | 'matriz' | 'inferencia' | 'embeddings' | 'lote_embeddings' | 'difusion_calor'
     params: dict = {}
+    cola: str = "B"       # A=comercial, B=investigacion KUKIA, C=voluntaria/experimental
+    campana: str = ""     # identificador de campana (para exclusion y trazabilidad)
+    prioridad: float = 0.0  # dentro de la cola, mayor antes
+    vram_min: int = 0     # VRAM minima (GB) que exige la tarea
 
 def tier(vram: int) -> float:
     return TIER_MULT.get(vram, 1.0)
@@ -205,8 +283,16 @@ def emission_info() -> dict:
 @app.post("/nodos/registrar")
 def registrar(n: NodoIn):
     nid = uuid.uuid4().hex[:12]
-    con.execute("INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica) VALUES(?,?,?,?,?,?,?,?,?)",
-                (nid, n.nombre, n.vram_gb, tier(n.vram_gb), 1.0, n.ref, time.ctime(), n.tops, n.clave_publica))
+    con.execute("CREATE TABLE IF NOT EXISTS gpu_pruebas(nodo_id TEXT, prueba TEXT, creado TEXT)")
+    try:
+        con.execute("ALTER TABLE nodos ADD COLUMN tops_estimado INT DEFAULT 1")
+    except Exception:
+        pass
+    if n.prueba_gpu:
+        con.execute("INSERT INTO gpu_pruebas(nodo_id,prueba,creado) VALUES(?,?,?)",
+                    (nid, n.prueba_gpu[:2000], time.ctime()))
+    con.execute("INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (nid, n.nombre, n.vram_gb, tier(n.vram_gb), 1.0, n.ref, time.ctime(), n.tops, n.clave_publica, 1 if n.tops_estimado else 0))
     con.commit()
     return {"id": nid, "tier": tier(n.vram_gb), "max_supply": MAX_SUPPLY, "tops_registrados": n.tops,
             "autenticado": bool(n.clave_publica)}
@@ -215,21 +301,40 @@ def registrar(n: NodoIn):
 def nodos():
     return [dict(r) for r in con.execute("SELECT * FROM nodos").fetchall()]
 
+@app.get("/modelos/{nombre}")
+def descargar_modelo(nombre: str):
+    """Punto 5: el Core sirve el modelo de referencia; el minero lo baja si le falta."""
+    seguro = Path(nombre).name
+    ruta = MODELOS_DIR / seguro
+    if not ruta.is_file():
+        raise HTTPException(404, "modelo no disponible en el Core")
+    from fastapi.responses import FileResponse
+    return FileResponse(str(ruta), filename=seguro)
+
 @app.post("/tareas/crear")
 def crear_tarea(t: TareaIn, _ok: None = Depends(exigir_admin)):
     tid = uuid.uuid4().hex[:12]
     # los params llevan seed -> la tarea es reproducible/verificable
-    con.execute("INSERT INTO tareas(id,tipo,params,estado,creado) VALUES(?,?,?,?,?)",
-                (tid, t.tipo, json.dumps(t.params), "queued", time.ctime()))
+    cola = t.cola if t.cola in ("A", "B", "C") else "B"
+    con.execute("INSERT INTO tareas(id,tipo,params,estado,creado,cola,campana,prioridad,vram_min) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (tid, t.tipo, json.dumps(t.params), "queued", time.ctime(),
+                 cola, t.campana[:64], float(t.prioridad), int(t.vram_min)))
     con.commit()
     return {"tarea_id": tid, "estado": "queued"}
 
 @app.get("/tareas/pendiente")
-def pendiente(nodo_id: str):
+def pendiente(nodo_id: str, excluir: str = "", colas: str = ""):
     """Asignacion ATOMICA: SELECT + UPDATE en una transaccion con lock.
 
     Dos workers simultaneos NO pueden llevarse la misma tarea: el segundo
     espera al lock y re-verifica que siga en 'queued' antes de asignarla.
+
+    POLITICA DE PRIORIDAD (PASO 2): cola A > B > C; dentro de cola, mayor
+    prioridad antes; a igual, mas antigua antes. Solo tareas con
+    vram_min <= VRAM del nodo. 'excluir' = campanas separadas por comas que
+    el minero no quiere. SIN desalojo: lo que ya ejecuta no se interrumpe.
+    Cada asignacion queda en planificador_log (auditable).
 
     Recuperacion oportunista: antes de asignar, las tareas 'ejecutando'
     sin resultado tras ABANDONO_SEG vuelven a 'queued' en la misma
@@ -245,8 +350,23 @@ def pendiente(nodo_id: str):
             con.execute("UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL "
                         "WHERE estado='ejecutando' AND asignado IS NOT NULL "
                         "AND asignado < ?", (time.time() - ABANDONO_SEG,))
-            row = con.execute("SELECT id,tipo,params FROM tareas WHERE estado='queued' "
-                              "ORDER BY creado LIMIT 1").fetchone()
+            nodo = con.execute("SELECT vram_gb FROM nodos WHERE id=?", (nodo_id,)).fetchone()
+            vram = int(nodo["vram_gb"] or 0) if nodo else 0
+            excl = [e.strip()[:64] for e in (excluir or "").split(",") if e.strip()]
+            _q = ("SELECT id,tipo,params,cola,campana FROM tareas WHERE estado='queued' "
+                  "AND COALESCE(vram_min,0) <= ? ")
+            _args = [vram]
+            if excl:
+                _q += "AND COALESCE(campana,'') NOT IN (%s) " % ",".join("?" * len(excl))
+                _args += excl
+            _colas = [c.strip().upper() for c in (colas or "").split(",")
+                      if c.strip().upper() in ("A", "B", "C")]
+            if _colas:
+                _q += "AND COALESCE(cola,'B') IN (%s) " % ",".join("?" * len(_colas))
+                _args += _colas
+            _q += ("ORDER BY CASE COALESCE(cola,'B') WHEN 'A' THEN 0 WHEN 'B' THEN 1 ELSE 2 END, "
+                   "COALESCE(prioridad,0) DESC, creado LIMIT 1")
+            row = con.execute(_q, _args).fetchone()
             if not row:
                 con.execute("ROLLBACK")
                 return {"tarea": None}
@@ -257,6 +377,13 @@ def pendiente(nodo_id: str):
                 return {"tarea": None}
             con.execute("UPDATE tareas SET estado='ejecutando', nodo_id=?, asignado=? WHERE id=?",
                         (nodo_id, time.time(), row["id"]))
+            try:
+                _cola = row["cola"] or "B"
+            except Exception:
+                _cola = "B"
+            con.execute("INSERT INTO planificador_log(tarea_id,nodo_id,cola,motivo,ts) VALUES(?,?,?,?,?)",
+                        (row["id"], nodo_id, _cola,
+                         f"A>B>C,prioridad,vram_min_ok(vram={vram},excl={len(excl)})", time.ctime()))
             con.commit()
             return {"tarea": {"id": row["id"], "tipo": row["tipo"], "params": json.loads(row["params"])}}
         except HTTPException:
@@ -269,7 +396,8 @@ def pendiente(nodo_id: str):
             raise HTTPException(500, "error interno asignando tarea")
 
 @app.post("/tareas/resultado")
-def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: str = ""):
+def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: str = "",
+              device: str = "", duracion_ms: float = 0.0, telemetria: str = ""):
     """El Core recalcula la tarea y compara el RESULTADO EXACTO (trustless).
 
     AUTENTICACION: si el nodo registro clave_publica, el envio debe traer
@@ -285,9 +413,15 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
     params = json.loads(task["params"])
     tipo = task["tipo"]
     esperado = computar_tarea(tipo, params)
-    if esperado is None:
+    _tol = (tipo in ("embeddings", "lote_embeddings") and ONNXCPU is not None) or tipo == "difusion_calor"
+    if esperado is None and not _tol:
         raise HTTPException(400, "tipo de tarea no soportado")
-    ok = str(metrica).strip() == str(esperado).strip()
+    if tipo in ("embeddings", "lote_embeddings") and ONNXCPU is not None:
+        ok = _verificar_embeddings(tipo, params, metrica)
+    elif tipo == "difusion_calor":
+        ok = _verificar_difusion(params, metrica)
+    else:
+        ok = str(metrica).strip() == str(esperado).strip()
 
     # 2. TRANSACCION ATOMICA con bloqueo de escritura inmediato.
     # Lock de hilos (la conexion SQLite es compartida) + BEGIN IMMEDIATE
@@ -348,12 +482,21 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
                 con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) "
                             "WHERE id=?", (nodo_id,))
                 h = hashlib.sha256(f"{tid}:{nodo_id}:{metrica}".encode()).hexdigest()
-                con.execute("UPDATE tareas SET estado='ok', hash=?, metrica=?, fin=?, verificado=1 WHERE id=?",
-                            (h, metrica, time.ctime(), tid))
+                con.execute("UPDATE tareas SET estado='ok', hash=?, metrica=?, fin=?, verificado=1, device=?, duracion_ms=? WHERE id=?",
+                            (h, metrica, time.ctime(), str(device)[:16], float(duracion_ms or 0.0), tid))
+                try:
+                    con.execute("CREATE TABLE IF NOT EXISTS gpu_telemetria(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                                "nodo_id TEXT, device TEXT, metricas TEXT, ts TEXT, origen TEXT)")
+                    if telemetria:
+                        con.execute("INSERT INTO gpu_telemetria(nodo_id,device,metricas,ts,origen) VALUES(?,?,?,?,?)",
+                                    (nodo_id, str(device)[:16], telemetria[:2000], time.ctime(), "worker"))
+                except Exception:
+                    pass
                 con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
                             (tid, nodo_id, kuki, "trabajo verificado", time.ctime()))
             else:
-                con.execute("UPDATE tareas SET estado='fallo', fin=? WHERE id=?", (time.ctime(), tid))
+                con.execute("UPDATE tareas SET estado='fallo', fin=?, device=?, duracion_ms=? WHERE id=?",
+                            (time.ctime(), str(device)[:16], float(duracion_ms or 0.0), tid))
                 con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
                             (tid, nodo_id, 0.0, "resultado incorrecto (recalculado por el Core)", time.ctime()))
             con.commit()
@@ -515,5 +658,96 @@ def saldos():
                         "GROUP BY nodo_id").fetchall()
     return {"saldos": {r["nodo_id"]: r["s"] for r in filas},
             "direcciones": len(filas)}
+
+class TransferIn(BaseModel):
+    de_nodo: str
+    a_direccion: str
+    monto: float
+    nonce: str = ""
+    firma: str = ""
+
+@app.post("/transferir")
+def transferir(t: TransferIn):
+    """Transfiere KIA entre direcciones con firma Ed25519 y anti-repeticion.
+
+    La firma es sobre "transferir:de:a:monto:nonce" con la clave registrada
+    del nodo emisor. El nonce solo vale una vez (tabla transferencias con
+    UNIQUE). Todo ocurre en una transaccion: sin saldo no hay debito ni
+    credito (anti-doble-gasto). No crea moneda: debito y credito se compensan.
+    """
+    if not t.a_direccion or len(t.a_direccion) > 128:
+        raise HTTPException(400, "destino invalido")
+    if t.a_direccion == t.de_nodo:
+        raise HTTPException(400, "origen y destino iguales")
+    try:
+        monto = round(float(t.monto), 4)
+    except Exception:
+        raise HTTPException(400, "monto invalido")
+    if monto <= 0:
+        raise HTTPException(400, "monto debe ser positivo")
+    if not t.nonce or len(t.nonce) > 64:
+        raise HTTPException(400, "nonce invalido")
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            raise HTTPException(503, "Core ocupado, reintentar")
+        try:
+            con.execute("CREATE TABLE IF NOT EXISTS transferencias(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                        "de_nodo TEXT, a_direccion TEXT, monto REAL, nonce TEXT, ts TEXT, "
+                        "UNIQUE(de_nodo, nonce))")
+            node = con.execute("SELECT clave_publica FROM nodos WHERE id=?", (t.de_nodo,)).fetchone()
+            pub = (node["clave_publica"] if node else "") or ""
+            if not pub:
+                con.execute("ROLLBACK")
+                raise HTTPException(401, "emisor sin clave registrada")
+            if not t.firma:
+                con.execute("ROLLBACK")
+                raise HTTPException(401, "falta firma")
+            try:
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                    bytes.fromhex(t.firma),
+                    f"transferir:{t.de_nodo}:{t.a_direccion}:{monto}:{t.nonce}".encode())
+            except Exception:
+                con.execute("ROLLBACK")
+                raise HTTPException(401, "firma invalida")
+            saldo = float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?",
+                                      (t.de_nodo,)).fetchone()["s"] or 0.0)
+            if saldo < monto:
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "saldo insuficiente")
+            try:
+                con.execute("INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts) VALUES(?,?,?,?,?)",
+                            (t.de_nodo, t.a_direccion, monto, t.nonce, time.ctime()))
+            except Exception:
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "nonce ya usado (repeticion bloqueada)")
+            ts = time.ctime()
+            con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
+                        (f"tx-{t.nonce[:12]}", t.de_nodo, -monto, "transferencia salida", ts))
+            con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)",
+                        (f"tx-{t.nonce[:12]}", t.a_direccion, monto, "transferencia entrada", ts))
+            con.commit()
+            return {"ok": True, "de": t.de_nodo, "a": t.a_direccion, "monto": monto}
+        except HTTPException:
+            raise
+        except Exception:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise HTTPException(500, "error interno en transferencia")
+
+@app.get("/red/telemetria")
+def red_telemetria():
+    """Ultima telemetria por nodo/device (solo lectura, para el panel).
+    Cada fila lleva fecha (ts) y origen. La energia es ESTIMADA."""
+    try:
+        filas = con.execute("SELECT nodo_id,device,metricas,ts,origen FROM gpu_telemetria "
+                            "ORDER BY id DESC LIMIT 200").fetchall()
+        return {"telemetria": [dict(r) for r in filas]}
+    except Exception:
+        return {"telemetria": []}
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300

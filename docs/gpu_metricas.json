@@ -1,0 +1,33 @@
+{
+ "fecha": "2026-10-16T14:21:01",
+ "core": {
+  "supply_emitido": 15000694.8461,
+  "max_supply": 100000000,
+  "nodos": 18,
+  "tareas_ok": 59,
+  "tareas_pend": 4,
+  "registros": 1,
+  "emision": {
+   "era_actual": 0,
+   "multiplicador": 1.0,
+   "proximo_halving": "2046-09-18",
+   "fin_emision": "2150-04-13",
+   "halving_years": 20.71
+  },
+  "dificultad": {
+   "tops_red": 9592.0,
+   "tops_referencia": 1747.0,
+   "factor": 2.343,
+   "matriz_n": 599,
+   "inferencia_n": 149
+  },
+  "recompensa_base_actual": 1.3309,
+  "detalle_pago": {
+   "objetivo": 1.3309,
+   "techo_halving": 10.0,
+   "tasa_dia": 1416.0,
+   "restante": 84999305.15
+  }
+ },
+ "gpus": []
+}

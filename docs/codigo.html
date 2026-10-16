@@ -29,6 +29,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera y el dashboard.
 Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras, se corrigen. Tambien puedes descargarlo empaquetado en
 <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>.
+<br>Versión: commit c66f6df (15/10/2026) · SHA-256 8afef56e…f44810 · red en pruebas (TESTNET). El código mostrado arriba es idéntico al del ZIP.
 <br>Nota: las direcciones como 127.0.0.1:8300 que aparecen en el código son la dirección local del Core en la propia máquina de cada nodo, no un servidor público de KUKIA.</div>
 <h2>Coordinator (Core) - kukia_core.py</h2>
 <pre><code>&quot;&quot;&quot;KUKIA Core - coordinador: nodos, tareas, verificacion REAL, ledger (SQLite).
@@ -80,7 +81,11 @@ BOUNTY = 1000.0                   # bounty anti-trampa (mejora 3)
 # False = nodos viejos sin clave siguen cobrando (compatibilidad, fase pruebas).
 # True  = TODOS los nodos deben traer firma (rechaza sin clave_publica).
 # Pasar a True al abrir la red publica.
-EXIGIR_FIRMA_GLOBAL = False
+EXIGIR_FIRMA_GLOBAL = True
+
+# Tareas &#x27;ejecutando&#x27; sin resultado tras este tiempo vuelven a &#x27;queued&#x27;
+# (recuperacion oportunista en /tareas/pendiente, misma transaccion).
+ABANDONO_SEG = 1800.0
 
 con = sqlite3.connect(str(DB), check_same_thread=False)
 con.row_factory = sqlite3.Row
@@ -102,6 +107,10 @@ def schema():
         pass
     try:
         con.execute(&quot;ALTER TABLE nodos ADD COLUMN clave_publica TEXT DEFAULT &#x27;&#x27;&quot;)
+    except Exception:
+        pass
+    try:
+        con.execute(&quot;ALTER TABLE tareas ADD COLUMN asignado REAL DEFAULT NULL&quot;)
     except Exception:
         pass
     con.commit()
@@ -255,6 +264,11 @@ def pendiente(nodo_id: str):
 
     Dos workers simultaneos NO pueden llevarse la misma tarea: el segundo
     espera al lock y re-verifica que siga en &#x27;queued&#x27; antes de asignarla.
+
+    Recuperacion oportunista: antes de asignar, las tareas &#x27;ejecutando&#x27;
+    sin resultado tras ABANDONO_SEG vuelven a &#x27;queued&#x27; en la misma
+    transaccion. No duplica pagos: el pago exige estado=&#x27;ejecutando&#x27; con
+    el nodo asignado actual (ver /tareas/resultado).
     &quot;&quot;&quot;
     with _pago_lock:
         try:
@@ -262,6 +276,9 @@ def pendiente(nodo_id: str):
         except Exception:
             raise HTTPException(503, &quot;Core ocupado, reintentar&quot;)
         try:
+            con.execute(&quot;UPDATE tareas SET estado=&#x27;queued&#x27;, nodo_id=NULL, asignado=NULL &quot;
+                        &quot;WHERE estado=&#x27;ejecutando&#x27; AND asignado IS NOT NULL &quot;
+                        &quot;AND asignado &lt; ?&quot;, (time.time() - ABANDONO_SEG,))
             row = con.execute(&quot;SELECT id,tipo,params FROM tareas WHERE estado=&#x27;queued&#x27; &quot;
                               &quot;ORDER BY creado LIMIT 1&quot;).fetchone()
             if not row:
@@ -272,17 +289,18 @@ def pendiente(nodo_id: str):
             if not chk or chk[&quot;estado&quot;] != &quot;queued&quot;:
                 con.execute(&quot;ROLLBACK&quot;)
                 return {&quot;tarea&quot;: None}
-            con.execute(&quot;UPDATE tareas SET estado=&#x27;ejecutando&#x27;, nodo_id=? WHERE id=?&quot;, (nodo_id, row[&quot;id&quot;]))
+            con.execute(&quot;UPDATE tareas SET estado=&#x27;ejecutando&#x27;, nodo_id=?, asignado=? WHERE id=?&quot;,
+                        (nodo_id, time.time(), row[&quot;id&quot;]))
             con.commit()
             return {&quot;tarea&quot;: {&quot;id&quot;: row[&quot;id&quot;], &quot;tipo&quot;: row[&quot;tipo&quot;], &quot;params&quot;: json.loads(row[&quot;params&quot;])}}
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             try:
                 con.execute(&quot;ROLLBACK&quot;)
             except Exception:
                 pass
-            raise HTTPException(500, f&quot;error asignando tarea: {e}&quot;)
+            raise HTTPException(500, &quot;error interno asignando tarea&quot;)
 
 @app.post(&quot;/tareas/resultado&quot;)
 def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;, firma: str = &quot;&quot;):
@@ -375,12 +393,12 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
             con.commit()
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             try:
                 con.execute(&quot;ROLLBACK&quot;)
             except Exception:
                 pass
-            raise HTTPException(500, f&quot;error interno en el pago: {e}&quot;)
+            raise HTTPException(500, &quot;error interno en el pago&quot;)
     return {&quot;ok&quot;: ok, &quot;kuki&quot;: kuki, &quot;esperado&quot;: esperado, &quot;pago&quot;: info_pago}
 
 @app.get(&quot;/ledger&quot;)
@@ -518,6 +536,19 @@ def saldo(direccion: str):
                     (direccion,)).fetchone()[&quot;s&quot;]
     # tambien sumar pagos recibidos como nodo minero
     return {&quot;direccion&quot;: direccion, &quot;saldo&quot;: s}
+
+@app.get(&quot;/saldos&quot;)
+def saldos():
+    &quot;&quot;&quot;Mapa publico direccion -&gt; saldo (solo lectura, agregados del ledger).
+
+    Permite a la web mostrar saldos sin exponer el Core: el exportador
+    guarda este mapa en un JSON estatico. No incluye emails, claves ni
+    datos personales (el ledger solo guarda ids y cantidades).
+    &quot;&quot;&quot;
+    filas = con.execute(&quot;SELECT nodo_id, COALESCE(SUM(kuki),0) as s FROM ledger &quot;
+                        &quot;GROUP BY nodo_id&quot;).fetchall()
+    return {&quot;saldos&quot;: {r[&quot;nodo_id&quot;]: r[&quot;s&quot;] for r in filas},
+            &quot;direcciones&quot;: len(filas)}
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300
 </code></pre>
@@ -796,6 +827,11 @@ def abonar(nombre, monto, motivo):
 
 if __name__ == &quot;__main__&quot;:
     import sys
+    # Consola Windows (cp1252) no muestra tildes: forzar UTF-8 en salida
+    try:
+        sys.stdout.reconfigure(encoding=&quot;utf-8&quot;)
+    except Exception:
+        pass
     nombre = sys.argv[1] if len(sys.argv) &gt; 1 else &quot;nodo_fundador&quot;
     password = sys.argv[2] if len(sys.argv) &gt; 2 else &quot;&quot;
     res = crear_billetera(nombre, password)
@@ -815,7 +851,7 @@ if __name__ == &quot;__main__&quot;:
 import sqlite3
 from pathlib import Path
 
-DB = Path(__file__).parent.parent / &quot;ledger&quot; / &quot;kukia.db&quot;
+DB = Path(__file__).parent.parent / &quot;coordinator&quot; / &quot;ledger&quot; / &quot;kukia.db&quot;
 
 HTML = &quot;&quot;&quot;&lt;!DOCTYPE html&gt;&lt;html lang=&quot;es&quot;&gt;&lt;head&gt;&lt;meta charset=&quot;utf-8&quot;&gt;
 &lt;title&gt;KUKIA Network - Dashboard&lt;/title&gt;

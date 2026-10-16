@@ -1,17 +1,17 @@
 {
  "estado": "ok",
  "testnet": true,
- "fecha_actualizacion": "2026-10-15T12:01:51",
- "etiqueta_fecha": "15/10/2026 12:01",
+ "fecha_actualizacion": "2026-10-16T13:33:41",
+ "etiqueta_fecha": "16/10/2026 13:33",
  "metricas": {
-  "nodos_registrados": 13,
-  "tareas_verificadas": 10,
+  "nodos_registrados": 16,
+  "tareas_verificadas": 11,
   "tareas_en_cola": 0,
   "tareas_ejecutando": null,
   "tareas_fallidas": null,
-  "suministro_total_kia": 15000460.0,
+  "suministro_total_kia": 15000560.0,
   "suministro_maximo_kia": 100000000,
-  "recompensa_base_actual_kia": 100.0,
+  "recompensa_base_actual_kia": 7.1384,
   "era_actual": 0,
   "proximo_halving": "2046-09-18",
   "fin_emision": "2150-04-13"

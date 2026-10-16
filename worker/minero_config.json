@@ -1,0 +1,1 @@
+{"colas": ["A", "B", "C"], "espera_entre_tareas_seg": 0, "excluir_campanas": [], "horarios": [["00:00", "24:00"]], "max_vram_fraction": 0.8, "pausa": false}
