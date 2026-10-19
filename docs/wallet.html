@@ -267,24 +267,50 @@ async function recuperar(){
   window.__cands = cands;
 }
 
+function saldoRemoto(addr){
+  // Sin Core local: pide el saldo publicado por la red (solo lectura).
+  return fetch('metricas.json?_=' + Date.now(), {cache:'no-store'})
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(cfg){
+      if(!cfg || !cfg.api) throw new Error('sin rele');
+      var api = String(cfg.api).replace(/\/+$/, '');
+      return fetch(api + '/api/saldo/' + encodeURIComponent(addr), {cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(j){ return {saldo: Number(j.saldo), ts: Number(j.ts)}; });
+    });
+}
+function pintarSaldo(addr, j, fuente){
+  document.getElementById('v-out').innerHTML =
+    '<div class="saldo">' + Number(j.saldo).toLocaleString('es-ES', {maximumFractionDigits:4}) + ' KIA</div>' +
+    '<div class="addr">' + addr + '</div>' +
+    '<p class="small">' + fuente + '</p>';
+  try {
+    var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
+    document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
+  } catch(e){}
+}
 function saldo(){
   var addr = document.getElementById('v-addr').value.trim() || localStorage.getItem('kukia_addr') || '';
   if(!addr){ alert('Pon tu dirección KUK...'); return; }
   document.getElementById('v-out').innerHTML = '<div class="saldo">...</div>';
+  document.getElementById('qrcode').innerHTML = '';
   var core = (document.getElementById('v-core').value.trim() || localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300').replace(/\/+$/, '');
   localStorage.setItem('kukia_core', core);
-  fetch(core + '/saldo/' + encodeURIComponent(addr)).then(function(r){ return r.json(); }).then(function(j){
-    document.getElementById('v-out').innerHTML = '<div class="saldo">' + Number(j.saldo).toLocaleString() + ' KIA</div><div class="addr">' + addr + '</div>';
-    var qr = qrcode(0, 'M');
-    qr.addData(addr);
-    qr.make();
-    document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
+  fetch(core + '/saldo/' + encodeURIComponent(addr)).then(function(r){
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(j){
+    pintarSaldo(addr, j, 'Leído de tu Core local (' + core + ').');
   }).catch(function(){
-    document.getElementById('v-out').innerHTML = '<p class="err">Core no accesible en ' + core + '. Si ves esta web desde fuera de tu PC, el Core no es alcanzable (y es lo correcto: solo escucha en tu ordenador).</p><div class="addr">' + addr + '</div>';
-    try {
-      var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
-      document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
-    } catch(e){}
+    saldoRemoto(addr).then(function(j){
+      var cuando = j.ts ? new Date(j.ts * 1000).toLocaleTimeString('es-ES') : 'hace un momento';
+      pintarSaldo(addr, j, 'Core local no accesible: saldo publicado por la red (actualizado ' + cuando + ').');
+    }).catch(function(){
+      document.getElementById('v-out').innerHTML =
+        '<p class="err">No pude leer el saldo: ni tu Core local (' + core + ') ni el relé público responden. ' +
+        'Si el minero está encendido, el saldo aparece en cuanto publique.</p>' +
+        '<div class="addr">' + addr + '</div>';
+    });
   });
 }
 </script>

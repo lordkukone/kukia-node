@@ -142,17 +142,17 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #d4af3766);"><defs><linearGradient id="g-key" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#d4af37"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><circle cx="18" cy="26" r="9" fill="none" stroke="url(#g-key)" stroke-width="3"/><line x1="25" y1="26" x2="42" y2="26" stroke="url(#g-key)" stroke-width="4" stroke-linecap="round"/><line x1="36" y1="26" x2="36" y2="32" stroke="url(#g-key)" stroke-width="3"/><line x1="41" y1="26" x2="41" y2="31" stroke="url(#g-key)" stroke-width="3"/></svg></div><h3>Garantía total</h3><p>Si el resultado no verifica, no pagas. Así de simple. El ledger público lo demuestra.</p></div>
   </div>
   <div class="stats" id="liveStats" style="margin-top:2.5rem;">
-    <div class="stat"><span class="n" id="stSupply">15M+</span><span class="l">KIA emitidos (verificados)</span></div>
-    <div class="stat"><span class="n" id="stNodes">32</span><span class="l">Nodos registrados</span></div>
-    <div class="stat"><span class="n" id="stTasks">13.000+</span><span class="l">Tareas verificadas</span></div>
+    <div class="stat"><span class="n" id="stSupply">15,03M</span><span class="l">KIA emitidos (verificados)</span></div>
+    <div class="stat"><span class="n" id="stNodes">34</span><span class="l">Nodos registrados</span></div>
+    <div class="stat"><span class="n" id="stTasks">21.013</span><span class="l">Tareas verificadas</span></div>
     <div class="stat"><span class="n" id="stQueue">—</span><span class="l">Tareas en cola</span></div>
     <div class="stat"><span class="n" id="stRate">—</span><span class="l">Tareas por minuto</span></div>
     <div class="stat"><span class="n">100%</span><span class="l">Código abierto</span></div>
   </div>
   <p style="text-align:center;color:#789;font-size:.82rem;margin-top:1rem;">
-    <span id="liveDot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#789;vertical-align:middle;margin-right:.45rem;"></span><span id="liveText">Buscando el Core local…</span>
+    <span id="liveDot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#789;vertical-align:middle;margin-right:.45rem;"></span><span id="liveText">Conectando con la red…</span>
   </p>
-  <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.3rem;">Métricas en vivo solo si el Core está encendido en tu equipo (127.0.0.1:8300). Para el resto, última instantánea del 19-10-2026. El ledger público manda.</p>
+  <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.3rem;">Cifras del ledger real, refrescadas cada 5 s mientras el minero está encendido. Si se apaga, la web se queda con la última instantánea y lo avisa. El ledger público manda.</p>
   <p style="text-align:center;margin-top:2rem;"><a class="btn" href="#registro">Pedir acceso de cliente</a></p>
 </section>
 
@@ -434,55 +434,79 @@ counters.forEach(c => cio.observe(c));
 })();
 </script>
 <script>
-// Metricas en vivo: GET /stats al Core local cada 5 s (CORS permitido).
-// Si el Core no responde, se queda la instantanea y se avisa en el aviso.
+// Metricas en vivo. La web publica lee /api/metricas del rele (docs/metricas.json);
+// en el mismo PC, ?core=http://127.0.0.1:8300 lee el Core directo (sin rele).
 (function(){
-  var core = new URLSearchParams(location.search).get('core') ||
-             localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300';
-  while(core.slice(-1) === '/'){ core = core.slice(0, -1); }
   var porId = function(id){ return document.getElementById(id); };
   if(!porId('stSupply')) return;
   var dot = porId('liveDot'), txt = porId('liveText');
+  var base = '', ruta = '/api/metricas', prev = null, prevT = 0, tsDatos = 0;
   function compact(n){
     if(typeof n !== 'number' || !isFinite(n)) return '—';
     if(n >= 1000000) return (n/1000000).toLocaleString('es-ES',{maximumFractionDigits:2}) + 'M';
     return Math.round(n).toLocaleString('es-ES');
   }
-  function entero(n){
-    return (typeof n === 'number' && isFinite(n)) ? Math.round(n).toLocaleString('es-ES') : '—';
-  }
+  function entero(n){ return (typeof n === 'number' && isFinite(n)) ? Math.round(n).toLocaleString('es-ES') : '—'; }
   function set(id, v){ var e = porId(id); if(e) e.textContent = v; }
-  function aviso(ok, texto){
-    if(dot){ dot.style.background = ok ? '#00ff88' : '#e0c05e'; dot.style.boxShadow = ok ? '0 0 10px #00ff88' : 'none'; }
-    if(txt) txt.textContent = texto;
+  function color(c){ if(dot){ dot.style.background = c; dot.style.boxShadow = c === '#00ff88' ? '0 0 10px #00ff88' : 'none'; } }
+  function texto(t){ if(txt) txt.textContent = t; }
+  function hace(){
+    if(!tsDatos) return 'sin datos';
+    var s = Math.max(0, Math.round((Date.now() - tsDatos)/1000));
+    if(s < 90) return 'hace ' + s + ' s';
+    if(s < 5400) return 'hace ' + Math.round(s/60) + ' min';
+    if(s < 172800) return 'hace ' + Math.round(s/3600) + ' h';
+    return 'del ' + new Date(tsDatos).toLocaleDateString('es-ES');
   }
-  var prev = null, prevT = 0;
-  async function tick(){
-    var ctl = new AbortController();
-    var to = setTimeout(function(){ ctl.abort(); }, 2500);
+  async function descubrir(){
+    var q = new URLSearchParams(location.search).get('core');
+    if(q){ ruta = '/stats'; return q.replace(/\/+$/,''); }
     try {
-      var r = await fetch(core + '/stats?_=' + Date.now(), {cache:'no-store', signal: ctl.signal});
+      var r = await fetch('metricas.json?_=' + Date.now(), {cache:'no-store'});
+      if(r.ok){
+        var cfg = await r.json();
+        if(cfg && cfg.api){ ruta = '/api/metricas'; return String(cfg.api).replace(/\/+$/,''); }
+      }
+    } catch(e){}
+    return '';
+  }
+  function aplicar(d){
+    var s = (d && d.stats) ? d.stats : d;
+    if(!s) throw new Error('sin datos');
+    set('stSupply', compact(Number(s.supply_emitido)));
+    set('stNodes', entero(Number(s.nodos)));
+    set('stTasks', entero(Number(s.tareas_ok)));
+    set('stQueue', entero(Number(s.tareas_pend)));
+    var ahora = Date.now();
+    if(prev !== null && ahora > prevT && Number(s.tareas_ok) >= prev){
+      var porMin = (Number(s.tareas_ok) - prev) / ((ahora - prevT)/60000);
+      set('stRate', Math.max(0, Math.round(porMin)).toLocaleString('es-ES'));
+    }
+    prev = Number(s.tareas_ok); prevT = ahora;
+    tsDatos = (d && Number(d.ts)) ? Number(d.ts) * 1000 : ahora;
+  }
+  async function tick(){
+    try {
+      if(!base) base = await descubrir();
+      if(!base){ color('#e0c05e'); texto('Instantánea del 19-10-2026 · en vivo en cuanto se conecte el relé'); return; }
+      var ctl = new AbortController();
+      var to = setTimeout(function(){ ctl.abort(); }, 4000);
+      var r = await fetch(base + ruta + '?_=' + Date.now(), {cache:'no-store', signal: ctl.signal});
       clearTimeout(to);
       if(!r.ok) throw new Error('HTTP ' + r.status);
-      var d = await r.json();
-      set('stSupply', compact(Number(d.supply_emitido)));
-      set('stNodes', entero(Number(d.nodos)));
-      set('stTasks', entero(Number(d.tareas_ok)));
-      set('stQueue', entero(Number(d.tareas_pend)));
-      var ahora = Date.now();
-      if(prev !== null && ahora > prevT && Number(d.tareas_ok) >= prev){
-        var porMin = (Number(d.tareas_ok) - prev) / ((ahora - prevT) / 60000);
-        set('stRate', Math.max(0, Math.round(porMin)).toLocaleString('es-ES'));
-      }
-      prev = Number(d.tareas_ok); prevT = ahora;
-      aviso(true, 'EN VIVO · Core ' + core.replace('https://','').replace('http://','') + ' · ' + new Date().toLocaleTimeString('es-ES') + ' · refresco 5 s');
-    } catch(e) {
-      clearTimeout(to);
-      aviso(false, 'Instantánea del 19-10-2026 · Core local no accesible (arráncalo para verlo en vivo)');
+      aplicar(await r.json());
+      if(Date.now() - tsDatos < 90000){ color('#00ff88'); texto('EN VIVO · ' + hace() + ' · refresco 5 s'); }
+      else { color('#e0c05e'); texto('SIN DATOS NUEVOS · último dato ' + hace() + ' (minero apagado)'); }
+    } catch(e){
+      color('#e0c05e');
+      texto(tsDatos ? 'SIN CONEXIÓN con el relé · último dato ' + hace() : 'Instantánea del 19-10-2026 · el relé no responde');
     }
   }
   tick();
   setInterval(tick, 5000);
+  setInterval(function(){
+    if(tsDatos && Date.now() - tsDatos < 90000){ texto('EN VIVO · ' + hace() + ' · refresco 5 s'); }
+  }, 1000);
 })();
 </script>
 </body>
