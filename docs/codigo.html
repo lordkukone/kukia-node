@@ -117,7 +117,9 @@ LIMITE_PASOS = 20000       # maximo de &#x27;pasos&#x27; (difusion)
 LIMITE_PARAMS_BYTES = 65536  # el JSON de params no puede pasar de 64 KB
 MAX_FALLOS = 3             # resultados INCORRECTOS antes de cerrar la tarea
 MAX_ABANDONOS = 3          # abandonos antes de cerrar la tarea como fallo
-PENALIZACION = 25.0        # KIA que se le quitan al que entrega mal el trabajo
+PENALIZACION = 25.0        # TOPE de KIA que se le quitan por un resultado malo
+PENALIZACION_MULT = 100.0  # castigo = 100 x el premio de una tarea (proporcional)
+PENALIZACION_MIN = 0.1     # suelo del castigo (evita castigos ridiculos)
 CASTIGO_SEG = 1800.0       # tiempo sin poder pedir tareas tras sabotear
 PENDIENTE_EXIGIR_FIRMA = True
 VENTANA_FIRMA = 300.0      # segundos de validez de la firma de &#x27;pendiente&#x27;
@@ -275,6 +277,9 @@ def schema():
         &quot;ALTER TABLE ledger ADD COLUMN hash TEXT DEFAULT &#x27;&#x27;&quot;,
         &quot;ALTER TABLE registros ADD COLUMN ref TEXT DEFAULT &#x27;&#x27;&quot;,
         &quot;ALTER TABLE nodos ADD COLUMN direccion_cobro TEXT DEFAULT &#x27;&#x27;&quot;,
+        # Ultima vez que el nodo pidio/entrego trabajo: para no contar en la
+        # dificultad los nodos muertos (TOPS autodeclarados y fantasma).
+        &quot;ALTER TABLE nodos ADD COLUMN visto REAL DEFAULT 0&quot;,
     ):
         try:
             con.execute(_sql)
@@ -646,15 +651,21 @@ def registrar(n: NodoIn):
     # infle la dificultad de la red ni su tier con valores absurdos.
     vram = max(0, min(int(n.vram_gb), 512))
     tops = max(0.0, min(float(n.tops), 100_000.0))
+    # Sin billetera no se cobra: el pago se abona a la direccion, no al id del
+    # nodo. Si se permitia registrarse sin direccion, lo minado quedaba
+    # atrapado para siempre al perder la clave (12.394 KIA asi, visto 19-10).
+    if not direccion_valida(n.direccion_cobro):
+        raise HTTPException(400, &quot;falta direccion_cobro: registra una billetera KUK... &quot;
+                                 &quot;para poder cobrar (el pago va a la direccion, no al nodo)&quot;)
     nid = uuid.uuid4().hex[:12]
     with _escritura():   # AUDITORIA: antes escribia sin lock (500 con 2 GPUs)
         if n.prueba_gpu:
             con.execute(&quot;INSERT INTO gpu_pruebas(nodo_id,prueba,creado) VALUES(?,?,?)&quot;,
                         (nid, n.prueba_gpu[:2000], time.ctime()))
         dir_cobro = n.direccion_cobro.strip().upper() if direccion_valida(n.direccion_cobro) else &quot;&quot;
-        con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro) VALUES(?,?,?,?,?,?,?,?,?,?,?)&quot;,
+        con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)&quot;,
                     (nid, n.nombre[:64], vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
-                     n.clave_publica[:128], 1 if n.tops_estimado else 0, dir_cobro))
+                     n.clave_publica[:128], 1 if n.tops_estimado else 0, dir_cobro, time.time()))
     return {&quot;id&quot;: nid, &quot;tier&quot;: tier(vram), &quot;max_supply&quot;: MAX_SUPPLY, &quot;tops_registrados&quot;: tops,
             &quot;autenticado&quot;: bool(n.clave_publica), &quot;direccion_cobro&quot;: dir_cobro}
 
@@ -804,6 +815,12 @@ def pendiente(nodo_id: str, excluir: str = &quot;&quot;, colas: str = &quot;&quo
     if castigo &gt; time.time():
         raise HTTPException(429, f&quot;nodo castigado por resultados incorrectos durante &quot;
                                  f&quot;{int(castigo - time.time())} s&quot;)
+    # Marca de actividad: solo los nodos vistos en 24 h cuentan para TOPS.
+    try:
+        with _escritura():
+            con.execute(&quot;UPDATE nodos SET visto=? WHERE id=?&quot;, (time.time(), nodo_id))
+    except Exception:
+        pass
     with _pago_lock:
         try:
             con.execute(&quot;BEGIN IMMEDIATE&quot;)
@@ -926,6 +943,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
         except Exception:
             raise HTTPException(503, &quot;Core ocupado, reintentar&quot;)
         try:
+            con.execute(&quot;UPDATE nodos SET visto=? WHERE id=?&quot;, (time.time(), nodo_id))
             task2 = con.execute(&quot;SELECT * FROM tareas WHERE id=?&quot;, (tid,)).fetchone()
             if task2[&quot;estado&quot;] == &quot;ok&quot;:
                 con.execute(&quot;ROLLBACK&quot;)
@@ -971,7 +989,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                 # penalizacion economica, sin dejar saldo negativo
                 saldo = float(con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?&quot;,
                                           (nodo_id,)).fetchone()[&quot;s&quot;] or 0.0)
-                castigo_kia = min(PENALIZACION, max(0.0, saldo))
+                castigo_kia = min(castigo_por_fallo(node[&quot;tier&quot;]), max(0.0, saldo))
                 if castigo_kia &gt; 0:
                     _asiento(tid, _cuenta_de(nodo_id), -castigo_kia, &quot;penalizacion por resultado incorrecto&quot;)
                 con.execute(&quot;UPDATE nodos SET reputacion=max(0,reputacion-0.5), &quot;
@@ -1030,8 +1048,15 @@ BASE_MATRIX_N = 256
 BASE_INFER_N = 64
 
 def tops_red() -&gt; float:
-    &quot;&quot;&quot;Potencia total de la red = suma de TOPS declarados por los nodos.&quot;&quot;&quot;
-    row = con.execute(&quot;SELECT COALESCE(SUM(tops),0) s FROM nodos&quot;).fetchone()
+    &quot;&quot;&quot;TOPS de los nodos ACTIVOS (vistos en las ultimas 24 h).
+
+    Antes sumaba todos los registros, vivos o no: 34 nodos decian 11.192 TOPS
+    cuando los reales eran ~200, y eso inflaba la dificultad 2,5x. Cualquiera
+    podia registrar nodos fantasma y agrandar las tareas de toda la red.
+    &quot;&quot;&quot;
+    desde = time.time() - 86400.0
+    row = con.execute(&quot;SELECT COALESCE(SUM(tops),0) s FROM nodos WHERE visto&gt;=?&quot;,
+                      (desde,)).fetchone()
     return float(row[&quot;s&quot;] or 0.0)
 
 def dificultad() -&gt; dict:
@@ -1136,6 +1161,17 @@ def recompensa_pago(tier: float) -&gt; tuple:
     return pago, {&quot;objetivo&quot;: round(objetivo, 6), &quot;techo_halving&quot;: round(techo, 4),
                   &quot;tasa_dia&quot;: round(tasa * 86400, 2), &quot;restante&quot;: round(restante, 2),
                   &quot;emision_por_min&quot;: round(restante / (seg_rest / 60.0), 4)}
+
+
+def castigo_por_fallo(tier: float) -&gt; float:
+    &quot;&quot;&quot;Castigo por resultado incorrecto, proporcional al premio de una tarea.
+
+    100 tareas de castigo, con suelo de 0,1 y tope de 25 KIA. Antes eran 25
+    fijos: con el premio actual (0,0037) un solo fallo costaba 6.757 tareas, y
+    un nodo nuevo sin saldo no pagaba nada (el castigo se capa al saldo).
+    &quot;&quot;&quot;
+    pago, _ = recompensa_pago(tier)
+    return min(PENALIZACION, max(PENALIZACION_MIN, PENALIZACION_MULT * pago))
 
 @app.get(&quot;/stats&quot;)
 def stats():
