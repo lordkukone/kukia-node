@@ -440,7 +440,7 @@ counters.forEach(c => cio.observe(c));
   var porId = function(id){ return document.getElementById(id); };
   if(!porId('stSupply')) return;
   var dot = porId('liveDot'), txt = porId('liveText');
-  var base = '', ruta = '/api/metricas', prev = null, prevT = 0, tsDatos = 0;
+  var base = '', ruta = '/api/metricas', prev = null, prevT = 0, tsDatos = 0, tsAnterior = 0;
   function compact(n){
     if(typeof n !== 'number' || !isFinite(n)) return '—';
     if(n >= 1000000) return (n/1000000).toLocaleString('es-ES',{maximumFractionDigits:2}) + 'M';
@@ -478,12 +478,15 @@ counters.forEach(c => cio.observe(c));
     set('stTasks', entero(Number(s.tareas_ok)));
     set('stQueue', entero(Number(s.tareas_pend)));
     var ahora = Date.now();
-    if(prev !== null && ahora > prevT && Number(s.tareas_ok) >= prev){
+    var tsNuevo = (d && Number(d.ts)) ? Number(d.ts) * 1000 : ahora;
+    // El rele publica cada 10 s: si el dato es el mismo, no se recalcula el
+    // ritmo (si no, marcaria 0 en la mitad de los refrescos).
+    if(prev !== null && tsNuevo !== tsAnterior && ahora > prevT && Number(s.tareas_ok) >= prev){
       var porMin = (Number(s.tareas_ok) - prev) / ((ahora - prevT)/60000);
       set('stRate', Math.max(0, Math.round(porMin)).toLocaleString('es-ES'));
     }
-    prev = Number(s.tareas_ok); prevT = ahora;
-    tsDatos = (d && Number(d.ts)) ? Number(d.ts) * 1000 : ahora;
+    prev = Number(s.tareas_ok); prevT = ahora; tsAnterior = tsNuevo;
+    tsDatos = tsNuevo;
   }
   async function tick(){
     try {
