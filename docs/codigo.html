@@ -26,10 +26,13 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <a class="back" href="index.html">&larr; Volver a KUKIA</a>
 <h1>Codigo fuente completo</h1>
 <div class="sub">Transparencia total: todo el software de KUKIA a la vista. Nada oculto.</div>
-<div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera y el dashboard.
-Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras, se corrigen. Tambien puedes descargarlo empaquetado en
-<a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>.<br>Actualizado: 19-10-2026 (incluye la auditoria de seguridad del 18-10).</div>
-<h2>Coordinator (Core) - kukia_core.py</h2>
+<div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
+y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
+se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>.
+<br><br>Generado desde los ficheros reales el 19-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
+
+<h2>Coordinador (Core) - coordinator/kukia_core.py</h2>
+
 <pre><code>&quot;&quot;&quot;KUKIA Core - coordinador: nodos, tareas, verificacion REAL, ledger (SQLite).
 
 VERIFICACION: el Core NO confia en el hash del minero.
@@ -271,6 +274,7 @@ def schema():
         &quot;ALTER TABLE ledger ADD COLUMN hash_prev TEXT DEFAULT &#x27;&#x27;&quot;,
         &quot;ALTER TABLE ledger ADD COLUMN hash TEXT DEFAULT &#x27;&#x27;&quot;,
         &quot;ALTER TABLE registros ADD COLUMN ref TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE nodos ADD COLUMN direccion_cobro TEXT DEFAULT &#x27;&#x27;&quot;,
     ):
         try:
             con.execute(_sql)
@@ -317,6 +321,18 @@ def schema():
     con.commit()
 
 schema()
+
+def direccion_valida(d: str) -&gt; bool:
+    &quot;&quot;&quot;Formato de direccion KUKIA: KUK + 38 hex (41 caracteres).&quot;&quot;&quot;
+    d = (d or &quot;&quot;).strip().upper()
+    return len(d) == 41 and d.startswith(&quot;KUK&quot;) and all(c in &quot;0123456789ABCDEF&quot; for c in d[3:])
+
+def _cuenta_de(nodo_id):
+    &quot;&quot;&quot;Cuenta del ledger a la que se paga/castiga un nodo: su direccion de
+    cobro si la declaro al registrarse, y si no el propio id del nodo.&quot;&quot;&quot;
+    fila = con.execute(&quot;SELECT direccion_cobro FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
+    d = ((fila[&quot;direccion_cobro&quot;] if fila else &quot;&quot;) or &quot;&quot;).strip().upper()
+    return d if direccion_valida(d) else nodo_id
 
 def _asiento(tarea_id, nodo_id, kuki, motivo):
     &quot;&quot;&quot;AUDITORIA: unico camino para escribir en el ledger. Encadena hashes:
@@ -533,6 +549,11 @@ class NodoIn(BaseModel):
     clave_publica: str = &quot;&quot;  # Ed25519 hex (64 bytes) para autenticar resultados
     prueba_gpu: str = &quot;&quot;  # atestado GPU declarativo (punto 3, no criptografico)
     tops_estimado: bool = True  # punto 1: los TOPS son estimados por VRAM, no medidos
+    # ARREGLO 2026-10-19: direccion de la billetera donde COBRAR el trabajo.
+    # Antes los pagos iban siempre al id del nodo (uuid efimero): el minero
+    # ganaba KIA que no llegaban nunca a su billetera y se quedaban huerfanos
+    # en cada reinicio. Vacio = comportamiento antiguo (pagar al nodo).
+    direccion_cobro: str = &quot;&quot;
 
 class TareaIn(BaseModel):
     tipo: str      # &#x27;checksum&#x27; | &#x27;matriz&#x27; | &#x27;inferencia&#x27; | &#x27;embeddings&#x27; | &#x27;lote_embeddings&#x27; | &#x27;difusion_calor&#x27;
@@ -630,11 +651,44 @@ def registrar(n: NodoIn):
         if n.prueba_gpu:
             con.execute(&quot;INSERT INTO gpu_pruebas(nodo_id,prueba,creado) VALUES(?,?,?)&quot;,
                         (nid, n.prueba_gpu[:2000], time.ctime()))
-        con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado) VALUES(?,?,?,?,?,?,?,?,?,?)&quot;,
+        dir_cobro = n.direccion_cobro.strip().upper() if direccion_valida(n.direccion_cobro) else &quot;&quot;
+        con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro) VALUES(?,?,?,?,?,?,?,?,?,?,?)&quot;,
                     (nid, n.nombre[:64], vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
-                     n.clave_publica[:128], 1 if n.tops_estimado else 0))
+                     n.clave_publica[:128], 1 if n.tops_estimado else 0, dir_cobro))
     return {&quot;id&quot;: nid, &quot;tier&quot;: tier(vram), &quot;max_supply&quot;: MAX_SUPPLY, &quot;tops_registrados&quot;: tops,
-            &quot;autenticado&quot;: bool(n.clave_publica)}
+            &quot;autenticado&quot;: bool(n.clave_publica), &quot;direccion_cobro&quot;: dir_cobro}
+
+class CobroIn(BaseModel):
+    direccion: str
+    ts: int = 0
+    firma: str = &quot;&quot;
+
+@app.post(&quot;/nodos/{nodo_id}/cobro&quot;)
+def actualizar_cobro(nodo_id: str, c: CobroIn):
+    &quot;&quot;&quot;Cambia la direccion de cobro de un nodo ya registrado.
+
+    Firma obligatoria con la clave del propio nodo sobre
+    &quot;cobro:&lt;nodo&gt;:&lt;direccion&gt;:&lt;ts&gt;&quot; y ventana de 5 minutos: sin la clave no
+    se puede desviar el pago de otro minero.
+    &quot;&quot;&quot;
+    d = (c.direccion or &quot;&quot;).strip().upper()
+    if not direccion_valida(d):
+        raise HTTPException(400, &quot;direccion invalida (formato KUK + 38 hex)&quot;)
+    if not c.ts or abs(time.time() - float(c.ts)) &gt; 300:
+        raise HTTPException(400, &quot;firma caducada, reintenta&quot;)
+    node = con.execute(&quot;SELECT clave_publica FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
+    pub = ((node[&quot;clave_publica&quot;] if node else &quot;&quot;) or &quot;&quot;).strip()
+    if not pub:
+        raise HTTPException(401, &quot;nodo sin clave registrada&quot;)
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+            bytes.fromhex(c.firma), f&quot;cobro:{nodo_id}:{d}:{c.ts}&quot;.encode())
+    except Exception:
+        raise HTTPException(401, &quot;firma invalida&quot;)
+    with _escritura():
+        con.execute(&quot;UPDATE nodos SET direccion_cobro=? WHERE id=?&quot;, (d, nodo_id))
+    return {&quot;ok&quot;: True, &quot;nodo_id&quot;: nodo_id, &quot;direccion_cobro&quot;: d}
 
 @app.get(&quot;/nodos&quot;)
 def nodos():
@@ -906,7 +960,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                 # Contador historico: sobrevive al archivado de tareas viejas.
                 con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;tareas_ok_total&#x27;,1) &quot;
                             &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+1&quot;)
-                _asiento(tid, nodo_id, kuki, &quot;trabajo verificado&quot;)
+                _asiento(tid, _cuenta_de(nodo_id), kuki, &quot;trabajo verificado&quot;)
             else:
                 # AUDITORIA: castigo + reintento en vez de cerrar la tarea
                 intentos = int(task2[&quot;intentos&quot;] or 0) + 1
@@ -918,7 +972,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                                           (nodo_id,)).fetchone()[&quot;s&quot;] or 0.0)
                 castigo_kia = min(PENALIZACION, max(0.0, saldo))
                 if castigo_kia &gt; 0:
-                    _asiento(tid, nodo_id, -castigo_kia, &quot;penalizacion por resultado incorrecto&quot;)
+                    _asiento(tid, _cuenta_de(nodo_id), -castigo_kia, &quot;penalizacion por resultado incorrecto&quot;)
                 con.execute(&quot;UPDATE nodos SET reputacion=max(0,reputacion-0.5), &quot;
                             &quot;castigado_hasta=?, fallos=COALESCE(fallos,0)+1 WHERE id=?&quot;,
                             (time.time() + CASTIGO_SEG, nodo_id))
@@ -1379,7 +1433,9 @@ def red_telemetria():
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300
 </code></pre>
-<h2>Worker (Minero) - kukia_worker.py</h2>
+
+<h2>Minero (Worker multi-GPU) - worker/kukia_worker.py</h2>
+
 <pre><code>&quot;&quot;&quot;KUKIA Worker - minero multi-GPU: se registra, pide trabajo, ejecuta en GPU.
 
 VERIFICACION REAL: el worker calcula el resultado (no un hash propio) y el
@@ -1406,6 +1462,122 @@ import kukia_wallet as WALLET
 
 # Se puede apuntar a otro Core para pruebas: KUKIA_CORE=http://127.0.0.1:8403
 CORE = os.environ.get(&quot;KUKIA_CORE&quot;, &quot;http://127.0.0.1:8300&quot;)
+
+# ARREGLO 2026-10-19: antes cada arranque registraba un nodo NUEVO (uuid) y los
+# KIA ganados se quedaban en ese id, no en la billetera. Ahora:
+#  - el nodo se registra con direccion_cobro = direccion de la billetera,
+#  - el id se guarda en identidad_minero.json y se reutiliza al rearrancar,
+#  - al arrancar se barren a la billetera los saldos viejos de nodos que
+#    firmaban con la misma clave (recupera lo que quedo huerfano).
+IDENTIDAD = Path(__file__).parent / &quot;identidad_minero.json&quot;
+BARRIDO_SEG = 300.0        # cada cuanto se revisan saldos huerfanos
+_barrido_lock = threading.Lock()
+_ultimo_barrido = 0.0
+
+def _leer_identidad() -&gt; dict:
+    try:
+        return json.loads(IDENTIDAD.read_text(encoding=&quot;utf-8&quot;))
+    except Exception:
+        return {}
+
+def _guardar_identidad(device: str, nid: str, pubkey: str):
+    d = _leer_identidad()
+    d[device] = {&quot;id&quot;: nid, &quot;clave_publica&quot;: pubkey}
+    try:
+        IDENTIDAD.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
+    except Exception as e:
+        print(f&quot;[KUKIA] no pude guardar la identidad: {e}&quot;, flush=True)
+
+def _registrar_o_reusar(etiqueta: str, device: str, vram_gb: int, tops: float,
+                        pubkey: str, direccion: str):
+    &quot;&quot;&quot;Reutiliza el nodo de un arranque anterior si sigue existiendo en el Core.&quot;&quot;&quot;
+    guardado = _leer_identidad().get(device) or {}
+    nid = guardado.get(&quot;id&quot;)
+    if nid and guardado.get(&quot;clave_publica&quot;) == pubkey:
+        try:
+            nodos = requests.get(f&quot;{CORE}/nodos&quot;, timeout=30).json()
+            if any(n.get(&quot;id&quot;) == nid for n in nodos):
+                print(f&quot;[KUKIA] nodo {nid} ({etiqueta}) identidad reutilizada&quot;, flush=True)
+                return nid
+        except Exception:
+            pass
+    r = requests.post(f&quot;{CORE}/nodos/registrar&quot;,
+                      json={&quot;nombre&quot;: etiqueta, &quot;vram_gb&quot;: vram_gb, &quot;tops&quot;: tops,
+                            &quot;clave_publica&quot;: pubkey, &quot;direccion_cobro&quot;: direccion},
+                      timeout=30)
+    r.raise_for_status()
+    nid = r.json()[&quot;id&quot;]
+    _guardar_identidad(device, nid, pubkey)
+    print(f&quot;[KUKIA] nodo {nid} ({etiqueta}) vram={vram_gb}GB listo (cobra en {direccion})&quot;, flush=True)
+    return nid
+
+def _asegurar_cobro(nid: str, etiqueta: str, direccion: str, privkey: str):
+    &quot;&quot;&quot;Deja el nodo pagando a la billetera (tambien si se reutilizo uno viejo).&quot;&quot;&quot;
+    if not (direccion and privkey):
+        return
+    try:
+        nodos = requests.get(f&quot;{CORE}/nodos&quot;, timeout=30).json()
+        actual = next((n for n in nodos if n.get(&quot;id&quot;) == nid), None)
+        if not actual:
+            return
+        if (actual.get(&quot;direccion_cobro&quot;) or &quot;&quot;).strip().upper() == direccion.upper():
+            return
+        ts = int(time.time())
+        firma = WALLET.firmar(f&quot;cobro:{nid}:{direccion}:{ts}&quot;, privkey)
+        r = requests.post(f&quot;{CORE}/nodos/{nid}/cobro&quot;,
+                          json={&quot;direccion&quot;: direccion, &quot;ts&quot;: ts, &quot;firma&quot;: firma}, timeout=30)
+        if r.status_code == 200:
+            print(f&quot;[KUKIA] {etiqueta} cobro actualizado -&gt; {direccion}&quot;, flush=True)
+        else:
+            print(f&quot;[KUKIA] {etiqueta} no pude fijar el cobro: {r.status_code} {r.text[:120]}&quot;, flush=True)
+    except Exception as e:
+        print(f&quot;[KUKIA] {etiqueta} error fijando cobro: {e}&quot;, flush=True)
+
+def barrer_saldos(etiqueta: str, wallet: dict, privkey: str, forzar: bool = False):
+    &quot;&quot;&quot;Mueve a la billetera el saldo que quede en nodos firmados con su clave.
+
+    Idempotente y sin privilegios: firma cada transferencia con la clave del
+    nodo. Si el Core ya paga directo a la direccion, no hay nada que barrer.
+    &quot;&quot;&quot;
+    global _ultimo_barrido
+    direccion = (wallet.get(&quot;direccion&quot;) or &quot;&quot;).strip().upper()
+    pubkey = wallet.get(&quot;clave_publica&quot;) or &quot;&quot;
+    if not (direccion and pubkey and privkey):
+        return
+    if not forzar and time.time() - _ultimo_barrido &lt; BARRIDO_SEG:
+        return
+    if not _barrido_lock.acquire(blocking=False):
+        return
+    try:
+        _ultimo_barrido = time.time()
+        nodos = requests.get(f&quot;{CORE}/nodos&quot;, timeout=30).json()
+        for n in nodos:
+            if (n.get(&quot;clave_publica&quot;) or &quot;&quot;) != pubkey:
+                continue
+            try:
+                s = requests.get(f&quot;{CORE}/saldo/{n[&#x27;id&#x27;]}&quot;, timeout=30).json().get(&quot;saldo&quot;, 0)
+                monto = round(float(s), 4)
+                if monto &lt;= 0:
+                    continue
+                nonce = f&quot;barrido-{n[&#x27;id&#x27;]}-{int(time.time() * 1000)}&quot;
+                mensaje = f&quot;transferir:{n[&#x27;id&#x27;]}:{direccion}:{monto}:{nonce}&quot;
+                firma = WALLET.firmar(mensaje, privkey)
+                r = requests.post(f&quot;{CORE}/transferir&quot;,
+                                  json={&quot;de_nodo&quot;: n[&quot;id&quot;], &quot;a_direccion&quot;: direccion,
+                                        &quot;monto&quot;: monto, &quot;nonce&quot;: nonce, &quot;firma&quot;: firma},
+                                  timeout=60)
+                if r.status_code == 200:
+                    print(f&quot;[KUKIA] {etiqueta} barrido: {monto} KIA de {n[&#x27;id&#x27;]} -&gt; {direccion}&quot;, flush=True)
+                else:
+                    print(f&quot;[KUKIA] {etiqueta} barrido rechazado en {n[&#x27;id&#x27;]}: &quot;
+                          f&quot;{r.status_code} {r.text[:120]}&quot;, flush=True)
+            except Exception as e:
+                print(f&quot;[KUKIA] {etiqueta} barrido err en {n[&#x27;id&#x27;]}: {e}&quot;, flush=True)
+            time.sleep(0.2)
+    except Exception as e:
+        print(f&quot;[KUKIA] {etiqueta} barrido err: {e}&quot;, flush=True)
+    finally:
+        _barrido_lock.release()
 
 def trabajo_local(tipo: str, params: dict, device: str = &quot;cuda:0&quot;) -&gt; str:
     &quot;&quot;&quot;Calcula la tarea EXACTAMENTE como el Core (determinista).&quot;&quot;&quot;
@@ -1463,20 +1635,22 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
         w = w[0]
     pubkey = w.get(&quot;clave_publica&quot;, &quot;&quot;)
     privkey = w.get(&quot;clave_privada&quot;, &quot;&quot;)
+    direccion = w.get(&quot;direccion&quot;, &quot;&quot;)
     try:
-        r = requests.post(f&quot;{CORE}/nodos/registrar&quot;,
-                          json={&quot;nombre&quot;: etiqueta, &quot;vram_gb&quot;: vram_gb, &quot;tops&quot;: tops,
-                                &quot;clave_publica&quot;: pubkey}, timeout=30)
-        r.raise_for_status()
-        nid = r.json()[&quot;id&quot;]
-        print(f&quot;[KUKIA] nodo {nid} ({etiqueta}) vram={vram_gb}GB listo&quot;, flush=True)
+        nid = _registrar_o_reusar(etiqueta, device, vram_gb, tops, pubkey, direccion)
     except Exception as e:
         print(f&quot;[KUKIA] {etiqueta} error registro: {e}&quot;, flush=True)
         return
+    _asegurar_cobro(nid, etiqueta, direccion, privkey)
+    barrer_saldos(etiqueta, w, privkey, forzar=True)
     bloqueado_hasta = 0.0
     while True:
         try:
             ahora = time.time()
+            # Barrido periodico (throttled a BARRIDO_SEG): si el Core paga
+            # directo a la direccion no hace nada; si quedo saldo viejo en
+            # algun nodo, lo mueve a la billetera.
+            barrer_saldos(etiqueta, w, privkey)
             if ahora &lt; bloqueado_hasta:
                 time.sleep(min(5.0, bloqueado_hasta - ahora))
                 continue
@@ -1497,6 +1671,7 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 continue
             pend = rp.json().get(&quot;tarea&quot;)
             if not pend:
+                barrer_saldos(etiqueta, w, privkey)
                 time.sleep(3)
                 continue
             t0 = time.time()
@@ -1566,7 +1741,9 @@ def main():
 if __name__ == &quot;__main__&quot;:
     main()
 </code></pre>
-<h2>Billetera - kukia_wallet.py</h2>
+
+<h2>Billetera - ledger/kukia_wallet.py</h2>
+
 <pre><code>&quot;&quot;&quot;KUKIA Wallet - billetera con criptografia REAL (Ed25519) + recuperacion.
 
 - Clave privada Ed25519 (256 bits) DERIVADA de: contrasena + 20 palabras unicas
@@ -1783,7 +1960,9 @@ if __name__ == &quot;__main__&quot;:
         if abs(float(real) - float(w.get(&quot;saldo&quot;, 0.0))) &gt; 1e-9:
             print(f&quot;  (la copia local decia {w.get(&#x27;saldo&#x27;, 0.0)}: el valido es el del Core)&quot;)
 </code></pre>
-<h2>Dashboard - kukia_dash.py</h2>
+
+<h2>Dashboard - dashboard/kukia_dash.py</h2>
+
 <pre><code>&quot;&quot;&quot;KUKIA Dashboard - estado de la red en vivo (heartbeat, mejora 7).&quot;&quot;&quot;
 import sqlite3
 from pathlib import Path
@@ -1860,6 +2039,322 @@ def api_stats():
                                 f&quot;&lt;td class=ok&gt;+{l[&#x27;kuki&#x27;]:.1f}&lt;/td&gt;&lt;td&gt;{l[&#x27;motivo&#x27;]}&lt;/td&gt;&lt;td&gt;{l[&#x27;ts&#x27;]}&lt;/td&gt;&lt;/tr&gt;&quot;]) for l in led]}
 
 # corre: uvicorn kukia_dash:app --port 8301</code></pre>
+
+<h2>Rele publico (metricas) - publico/relay.js</h2>
+
+<pre><code>/**
+ * KUKIA publico - rele de metricas.
+ *
+ * El Core vive en un PC sin IP publica, asi que NO se expone: un script local
+ * (publicar_metricas.py) lee /stats y /saldos cada pocos segundos y los empuja
+ * aqui con una clave. La web publica solo puede LEER.
+ *
+ *   GET  /api/metricas        -&gt; {ts, stats:{...}, salud:{...}, saldos:{...}}
+ *   GET  /api/saldo/{dir}     -&gt; {direccion, saldo, ts}
+ *   POST /api/publicar        -&gt; escribe el estado (Authorization: Bearer &lt;clave&gt;)
+ *
+ * Binding R2: FILES (objeto estado.json).
+ */
+
+const OBJETO = &#x27;estado.json&#x27;;
+const MAX_BYTES = 256 * 1024;
+const MAX_SALDOS = 2000;
+
+const CORS = {
+  &#x27;Access-Control-Allow-Origin&#x27;: &#x27;*&#x27;,
+  &#x27;Access-Control-Allow-Methods&#x27;: &#x27;GET, OPTIONS&#x27;,
+  &#x27;Access-Control-Allow-Headers&#x27;: &#x27;*&#x27;,
+  &#x27;Access-Control-Max-Age&#x27;: &#x27;600&#x27;,
+};
+
+function json(obj, status = 200, extra = {}) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: {
+      &#x27;content-type&#x27;: &#x27;application/json; charset=utf-8&#x27;,
+      &#x27;cache-control&#x27;: &#x27;no-store&#x27;,
+      ...CORS,
+      ...extra,
+    },
+  });
+}
+
+function num(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function limpiaSaldos(v) {
+  const out = {};
+  if (!v || typeof v !== &#x27;object&#x27;) return out;
+  let n = 0;
+  for (const [k, val] of Object.entries(v)) {
+    if (n &gt;= MAX_SALDOS) break;
+    if (typeof k !== &#x27;string&#x27; || !k || k.length &gt; 64) continue;
+    const x = num(val);
+    if (x === null) continue;
+    out[k.toUpperCase()] = Math.round(x * 1e6) / 1e6;
+    n++;
+  }
+  return out;
+}
+
+async function leer(env) {
+  const o = await env.FILES.get(OBJETO);
+  if (!o) return null;
+  try {
+    return JSON.parse(await o.text());
+  } catch (e) {
+    return null;
+  }
+}
+
+function autorizado(req, env) {
+  if (!env.KUKIA_CLAVE) return false;
+  const dado = req.headers.get(&#x27;authorization&#x27;) || &#x27;&#x27;;
+  const esperado = &#x27;Bearer &#x27; + env.KUKIA_CLAVE;
+  if (dado.length !== esperado.length) return false;
+  let dif = 0;
+  for (let i = 0; i &lt; esperado.length; i++) {
+    dif |= dado.charCodeAt(i) ^ esperado.charCodeAt(i);
+  }
+  return dif === 0;
+}
+
+export default {
+  async fetch(req, env) {
+    const url = new URL(req.url);
+
+    if (req.method === &#x27;OPTIONS&#x27;) {
+      return new Response(null, { status: 204, headers: CORS });
+    }
+
+    if (req.method === &#x27;POST&#x27; &amp;&amp; url.pathname === &#x27;/api/publicar&#x27;) {
+      if (!autorizado(req, env)) return json({ error: &#x27;no autorizado&#x27; }, 401);
+      const txt = await req.text();
+      if (txt.length &gt; MAX_BYTES) return json({ error: &#x27;demasiado grande&#x27; }, 413);
+      let d;
+      try {
+        d = JSON.parse(txt);
+      } catch (e) {
+        return json({ error: &#x27;json invalido&#x27; }, 400);
+      }
+      if (!d || typeof d !== &#x27;object&#x27; || !d.stats || typeof d.stats !== &#x27;object&#x27;) {
+        return json({ error: &#x27;faltan stats&#x27; }, 400);
+      }
+      const s = d.stats;
+      const estado = {
+        v: 1,
+        ts: Math.floor(Date.now() / 1000),
+        stats: {
+          supply_emitido: num(s.supply_emitido),
+          max_supply: num(s.max_supply),
+          nodos: num(s.nodos),
+          tareas_ok: num(s.tareas_ok),
+          tareas_pend: num(s.tareas_pend),
+        },
+        salud: {
+          gpus: num(d.salud &amp;&amp; d.salud.gpus),
+          tareas_por_min: num(d.salud &amp;&amp; d.salud.tareas_por_min),
+          ultima_tarea_hace: num(d.salud &amp;&amp; d.salud.ultima_tarea_hace),
+        },
+        saldos: limpiaSaldos(d.saldos),
+      };
+      await env.FILES.put(OBJETO, JSON.stringify(estado));
+      return json({ ok: true, ts: estado.ts, saldos: Object.keys(estado.saldos).length });
+    }
+
+    if (req.method === &#x27;GET&#x27; &amp;&amp; url.pathname === &#x27;/api/metricas&#x27;) {
+      const d = await leer(env);
+      if (!d) return json({ error: &#x27;sin datos todavia&#x27; }, 503);
+      return json(d);
+    }
+
+    if (req.method === &#x27;GET&#x27; &amp;&amp; url.pathname.startsWith(&#x27;/api/saldo/&#x27;)) {
+      const dir = decodeURIComponent(url.pathname.slice(&#x27;/api/saldo/&#x27;.length)).trim().toUpperCase();
+      if (!dir) return json({ error: &#x27;falta la direccion&#x27; }, 400);
+      const d = await leer(env);
+      if (!d) return json({ error: &#x27;sin datos todavia&#x27; }, 503);
+      const saldo = d.saldos ? d.saldos[dir] : undefined;
+      return json({
+        direccion: dir,
+        saldo: typeof saldo === &#x27;number&#x27; ? saldo : 0,
+        conocido: typeof saldo === &#x27;number&#x27;,
+        ts: d.ts,
+      });
+    }
+
+    if (req.method === &#x27;GET&#x27; &amp;&amp; (url.pathname === &#x27;/&#x27; || url.pathname === &#x27;/api&#x27;)) {
+      return json({
+        servicio: &#x27;kukia-metricas&#x27;,
+        nota: &#x27;solo lectura: el Core no esta expuesto a internet&#x27;,
+        endpoints: [&#x27;/api/metricas&#x27;, &#x27;/api/saldo/{direccion}&#x27;],
+      });
+    }
+
+    return json({ error: &#x27;no encontrado&#x27; }, 404);
+  },
+};
+</code></pre>
+
+<h2>Publicador local - publico/publicar_metricas.py</h2>
+
+<pre><code>&quot;&quot;&quot;Publica las metricas del Core local en el rele publico (solo lectura).
+
+El Core NO se expone a internet: este script sale a buscar /stats y /saldos
+cada pocos segundos y los empuja al Worker `publico/relay.js` con una clave.
+La web publica solo puede leer.
+
+Configuracion (dos ficheros junto a este script, NO se publican):
+  relay_url.txt  -&gt; https://&lt;tu-rele&gt;/   (sin barra final)
+  clave.txt      -&gt; la misma clave que el secreto KUKIA_CLAVE del Worker
+
+Uso:
+  python publicar_metricas.py            (bucle, cada 10 s)
+  python publicar_metricas.py --una      (una sola vez, para probar)
+&quot;&quot;&quot;
+import collections
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+AQUI = Path(__file__).parent
+IDENTIDAD = AQUI.parent / &quot;worker&quot; / &quot;identidad_minero.json&quot;
+CORE = os.environ.get(&quot;KUKIA_CORE&quot;, &quot;http://127.0.0.1:8300&quot;).rstrip(&quot;/&quot;)
+INTERVALO = float(os.environ.get(&quot;KUKIA_PUBLICAR_SEG&quot;, &quot;10&quot;))
+
+
+def leer_fichero(nombre: str) -&gt; str:
+    try:
+        return (AQUI / nombre).read_text(encoding=&quot;utf-8&quot;).strip()
+    except Exception:
+        return &quot;&quot;
+
+
+def get_json(ruta: str):
+    with urllib.request.urlopen(CORE + ruta, timeout=8) as r:
+        return json.loads(r.read().decode(&quot;utf-8&quot;))
+
+
+# Ventana movil de tareas: sirve para que la web sepa si el minero esta
+# minando AHORA (una tarea de hace 2 minutos no es &quot;en vivo&quot;).
+_hist = collections.deque()      # (momento, tareas_ok)
+_ultimo_cambio = 0.0
+
+
+def _gpus_de_identidad():
+    &quot;&quot;&quot;GPUs reales segun worker/identidad_minero.json (lo escribe el minero).&quot;&quot;&quot;
+    try:
+        d = json.loads(IDENTIDAD.read_text(encoding=&quot;utf-8&quot;))
+        claves = [k for k in d if re.match(r&quot;^(cuda|cpu)&quot;, str(k))]
+        return len(claves) or None
+    except Exception:
+        return None
+
+
+def salud(nodos: list) -&gt; dict:
+    &quot;&quot;&quot;Estado del minero calculado en local (el rele no ve tu Core).&quot;&quot;&quot;
+    global _ultimo_cambio
+    ahora = time.time()
+    ok = float(_hist[-1][1]) if _hist else 0.0
+    base = _hist[0][1] if _hist else ok
+    seg = (ahora - _hist[0][0]) if _hist else 0.0
+    # Tareas por minuto normalizadas a la ventana que haya (hasta 60 s).
+    por_min = ((ok - base) / seg * 60.0) if seg &gt; 1 else 0.0
+    gpus = _gpus_de_identidad()
+    if gpus is None:
+        # Sin fichero de identidad: cuenta los nodos con nombre de GPU (puede
+        # incluir nodos viejos, por eso el fichero manda cuando existe).
+        gpus = len({n.get(&quot;nombre&quot;) for n in nodos
+                    if re.search(r&quot;\[(cuda|cpu):?\d*\]$&quot;, str(n.get(&quot;nombre&quot;, &quot;&quot;)))})
+    return {
+        &quot;gpus&quot;: gpus,
+        &quot;tareas_por_min&quot;: int(round(por_min)),
+        &quot;ultima_tarea_hace&quot;: int(max(0, ahora - _ultimo_cambio)) if _ultimo_cambio else None,
+    }
+
+
+def publicar(relay: str, clave: str) -&gt; dict:
+    global _ultimo_cambio
+    stats = get_json(&quot;/stats&quot;)
+    saldos = get_json(&quot;/saldos&quot;)
+    nodos = get_json(&quot;/nodos&quot;)
+    ok = float(stats.get(&quot;tareas_ok&quot;) or 0)
+    ahora = time.time()
+    if not _hist or ok != _hist[-1][1]:
+        _ultimo_cambio = ahora
+    _hist.append((ahora, ok))
+    while _hist and ahora - _hist[0][0] &gt; 60:
+        _hist.popleft()
+    cuerpo = json.dumps({
+        &quot;stats&quot;: stats,
+        &quot;salud&quot;: salud(nodos),
+        &quot;saldos&quot;: saldos.get(&quot;saldos&quot;, {}),
+    }).encode(&quot;utf-8&quot;)
+    req = urllib.request.Request(
+        relay + &quot;/api/publicar&quot;,
+        data=cuerpo,
+        method=&quot;POST&quot;,
+        # User-Agent propio: el borde de Cloudflare rechaza (403) el de
+        # urllib por defecto.
+        headers={&quot;content-type&quot;: &quot;application/json&quot;,
+                 &quot;authorization&quot;: &quot;Bearer &quot; + clave,
+                 &quot;user-agent&quot;: &quot;KUKIA-publicador/1.0&quot;},
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read().decode(&quot;utf-8&quot;))
+
+
+def main() -&gt; int:
+    relay = leer_fichero(&quot;relay_url.txt&quot;).rstrip(&quot;/&quot;)
+    clave = leer_fichero(&quot;clave.txt&quot;)
+    if not relay or not clave:
+        print(&quot;[KUKIA] faltan publico/relay_url.txt o publico/clave.txt&quot;, flush=True)
+        return 2
+    una = &quot;--una&quot; in sys.argv
+    print(f&quot;[KUKIA] publicando {CORE} -&gt; {relay} cada {INTERVALO:.0f} s&quot;, flush=True)
+    estado = None
+    ultimo_aviso = 0.0
+    while True:
+        try:
+            j = publicar(relay, clave)
+            ahora = time.time()
+            if estado != &quot;ok&quot; or ahora - ultimo_aviso &gt;= 60:
+                s = get_json(&quot;/stats&quot;)
+                print(f&quot;[KUKIA] metricas publicadas: {s[&#x27;nodos&#x27;]} nodos, &quot;
+                      f&quot;{s[&#x27;tareas_ok&#x27;]} tareas ok, {j.get(&#x27;saldos&#x27;)} saldos&quot;, flush=True)
+                ultimo_aviso = ahora
+            estado = &quot;ok&quot;
+        except urllib.error.HTTPError as e:
+            if estado != &quot;http&quot; or time.time() - ultimo_aviso &gt;= 60:
+                print(f&quot;[KUKIA] el rele rechaza la publicacion: {e.code} &quot;
+                      f&quot;(revisa clave.txt)&quot;, flush=True)
+                ultimo_aviso = time.time()
+            estado = &quot;http&quot;
+        except Exception as e:
+            if estado != &quot;err&quot; or time.time() - ultimo_aviso &gt;= 60:
+                print(f&quot;[KUKIA] no pude publicar ({type(e).__name__}: {e}); &quot;
+                      f&quot;el Core sigue en {CORE}&quot;, flush=True)
+                ultimo_aviso = time.time()
+            estado = &quot;err&quot;
+        if una:
+            return 0 if estado == &quot;ok&quot; else 1
+        time.sleep(INTERVALO)
+
+
+if __name__ == &quot;__main__&quot;:
+    try:
+        sys.stdout.reconfigure(encoding=&quot;utf-8&quot;)
+    except Exception:
+        pass
+    raise SystemExit(main())
+</code></pre>
+
 <div class="foot">KUKIA Network - prototipo en fase de pruebas. Sin auditoria externa todavia. Sin precio hasta demanda real.</div>
 </div>
 </body>
