@@ -142,7 +142,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #d4af3766);"><defs><linearGradient id="g-key" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#d4af37"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><circle cx="18" cy="26" r="9" fill="none" stroke="url(#g-key)" stroke-width="3"/><line x1="25" y1="26" x2="42" y2="26" stroke="url(#g-key)" stroke-width="4" stroke-linecap="round"/><line x1="36" y1="26" x2="36" y2="32" stroke="url(#g-key)" stroke-width="3"/><line x1="41" y1="26" x2="41" y2="31" stroke="url(#g-key)" stroke-width="3"/></svg></div><h3>Garantía total</h3><p>Si el resultado no verifica, no pagas. Así de simple. El ledger público lo demuestra.</p></div>
   </div>
   <div class="stats" id="liveStats" style="margin-top:2.5rem;">
-    <div class="stat"><span class="n" id="stSupply">15,03M</span><span class="l">KIA emitidos (verificados)</span></div>
+    <div class="stat"><span class="n" id="stSupply">15.053.428</span><span class="l" id="stSupplyLabel">KIA emitidos · +—/min</span></div>
     <div class="stat"><span class="n" id="stNodes">34</span><span class="l">Nodos registrados</span></div>
     <div class="stat"><span class="n" id="stTasks">21.013</span><span class="l">Tareas verificadas</span></div>
     <div class="stat"><span class="n" id="stQueue">—</span><span class="l">Tareas en cola</span></div>
@@ -472,8 +472,16 @@ counters.forEach(c => cio.observe(c));
   }
   function aplicar(d){
     var s = (d && d.stats) ? d.stats : d;
+    var salud = (d && d.salud) ? d.salud : {};
     if(!s) throw new Error('sin datos');
-    set('stSupply', compact(Number(s.supply_emitido)));
+    set('stSupply', entero(Number(s.supply_emitido)));
+    var lbl = porId('stSupplyLabel');
+    if(lbl){
+      var em = salud.emision_por_min;
+      lbl.textContent = (typeof em === 'number')
+        ? 'KIA emitidos · +' + Math.max(0, Math.round(em)).toLocaleString('es-ES') + '/min'
+        : 'KIA emitidos (verificados)';
+    }
     set('stNodes', entero(Number(s.nodos)));
     set('stTasks', entero(Number(s.tareas_ok)));
     set('stQueue', entero(Number(s.tareas_pend)));
