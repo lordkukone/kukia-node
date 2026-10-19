@@ -980,6 +980,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                             &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+1&quot;)
                 _asiento(tid, _cuenta_de(nodo_id), kuki, &quot;trabajo verificado&quot;)
                 _marcar_ok()
+                _anotar_duracion(task2[&quot;tipo&quot;], duracion_ms)
             else:
                 # AUDITORIA: castigo + reintento en vez de cerrar la tarea
                 intentos = int(task2[&quot;intentos&quot;] or 0) + 1
@@ -1043,6 +1044,68 @@ def verificar_ledger():
 #  DIFICULTAD ADAPTATIVA (potencia de LA RED KUKIA, no mundial)
 #  + RECOMPENSA DINAMICA (garantiza agotar justo el 13-04-2150)
 # ============================================================
+# Tiempo objetivo por tarea (media, sin checksum). Con tareas de milisegundos
+# el premio por tarea quedaba en 0,004 KIA; con tareas de ~2 s el ritmo baja y
+# cada tarea paga mas, sin tocar el presupuesto de 1,31 KIA/min ni la fecha 2150.
+OBJETIVO_TAREA_MS = float(os.environ.get(&quot;KUKIA_TAREA_MS&quot;, &quot;2000&quot;))
+ESCALA_MIN, ESCALA_MAX = 0.5, 8.0
+_dur_reciente = collections.deque(maxlen=800)   # ms de tareas con FLOPs
+_ESCALA_TAREA = 1.0
+_escala_pendiente = False
+_escala_cargada = False
+
+
+def _anotar_duracion(tipo: str, ms: float) -&gt; None:
+    &quot;&quot;&quot;Guarda la duracion de una tarea util (checksum no cuenta: no tiene FLOPs).&quot;&quot;&quot;
+    try:
+        ms = float(ms or 0.0)
+    except (TypeError, ValueError):
+        return
+    if tipo == &quot;checksum&quot; or ms &lt;= 0:
+        return
+    _dur_reciente.append(ms)
+
+
+def escala_tarea() -&gt; float:
+    &quot;&quot;&quot;Factor de tamano que acerca la duracion media de tarea al objetivo.
+
+    Ajuste suave (+-15 % por vuelta) y solo con &gt;=30 muestras. Sube el tamano
+    si las tareas salen cortas, lo baja si se pasan. Se guarda en &#x27;meta&#x27; desde
+    el bucle de auto-tareas (aqui no se escribe: puede llamarse dentro de una
+    transaccion de pago).
+    &quot;&quot;&quot;
+    global _ESCALA_TAREA, _escala_pendiente, _escala_cargada
+    if not _escala_cargada:
+        _escala_cargada = True
+        try:
+            guardada = _meta_float(&quot;escala_tarea&quot;, 1.0) or 1.0
+            _ESCALA_TAREA = min(ESCALA_MAX, max(ESCALA_MIN, guardada))
+        except Exception:
+            pass
+    if len(_dur_reciente) &lt; 30:
+        return _ESCALA_TAREA
+    medido = sum(_dur_reciente) / len(_dur_reciente)
+    if medido &lt;= 0:
+        return _ESCALA_TAREA
+    # raiz cuadrada: matriz crece ~n^3 y la difusion ~pasos; asi el ajuste no
+    # oscila. Tope de +-15 % por vuelta para no dar saltos bruscos.
+    ajuste = (OBJETIVO_TAREA_MS / medido) ** 0.5
+    nuevo = _ESCALA_TAREA * min(1.15, max(0.85, ajuste))
+    nuevo = min(ESCALA_MAX, max(ESCALA_MIN, nuevo))
+    # Freno por cola: si el Core no da abasto (la verificacion cuesta lo mismo
+    # que minar), no se siguen agrandando tareas; se retrocede un poco.
+    try:
+        pend = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;queued&#x27;&quot;).fetchone()[&quot;c&quot;]
+    except Exception:
+        pend = 0
+    if pend &gt; 400:
+        nuevo = min(nuevo, _ESCALA_TAREA * 0.97)
+    if abs(nuevo - _ESCALA_TAREA) &gt; 1e-3:
+        _ESCALA_TAREA = nuevo
+        _escala_pendiente = True
+        _dur_reciente.clear()
+    return _ESCALA_TAREA
+
 REFERENCIA_TOPS = 1747.0   # red inicial (5070 + 5060 Ti): punto de calibracion
 BASE_MATRIX_N = 256
 BASE_INFER_N = 64
@@ -1063,12 +1126,18 @@ def dificultad() -&gt; dict:
     &quot;&quot;&quot;Tamano de tarea segun la potencia de la red (tarea ~constante en tiempo).&quot;&quot;&quot;
     tops = tops_red()
     factor = 1.0 if tops &lt;= 0 else min(4.0, max(0.5, (tops / REFERENCIA_TOPS) ** 0.5))
+    escala = escala_tarea()
     return {
         &quot;tops_red&quot;: round(tops, 1),
         &quot;tops_referencia&quot;: REFERENCIA_TOPS,
         &quot;factor&quot;: round(factor, 3),
-        &quot;matriz_n&quot;: min(LIMITE_N, int(BASE_MATRIX_N * factor)),
-        &quot;inferencia_n&quot;: min(LIMITE_N, int(BASE_INFER_N * factor)),
+        &quot;escala_tarea&quot;: round(escala, 3),
+        &quot;objetivo_ms&quot;: OBJETIVO_TAREA_MS,
+        # La difusion es la que se lleva el tiempo; la matriz crece con techo
+        # (3x) para que no explote cuando los pasos ya tocan el limite.
+        &quot;matriz_n&quot;: min(LIMITE_N, max(64, int(BASE_MATRIX_N * factor * min(escala, 3.0)))),
+        &quot;inferencia_n&quot;: min(LIMITE_N, max(32, int(BASE_INFER_N * factor * min(escala, 3.0)))),
+        &quot;difusion_pasos&quot;: min(LIMITE_PASOS, max(300, int(1500 * escala * escala))),
     }
 
 def supply_emitido() -&gt; float:
@@ -1250,9 +1319,11 @@ def params_auto(tipo: str) -&gt; dict:
     if tipo == &quot;checksum&quot;:
         return {&quot;data&quot;: &quot;kukia-&quot; + secrets.token_hex(12)}
     if tipo == &quot;difusion_calor&quot;:
-        # tamano moderado: el minero tarda ~0,5 s en GPU y el Core lo verifica
-        # en mucho menos (antes una tarea n=2048/pasos=4000 costaba 7,4 min).
-        return {&quot;n&quot;: 1024, &quot;pasos&quot;: 1500, &quot;seed&quot;: rnd(1_000_000), &quot;tolerancia_rel&quot;: 1e-9}
+        # Los pasos los fija el control de dificultad (objetivo ~2 s por tarea).
+        # Antes una tarea n=2048/pasos=4000 costaba 7,4 min de verificacion en
+        # CPU; hoy la verificacion va en GPU y el control no deja crecer sin tope.
+        return {&quot;n&quot;: 1024, &quot;pasos&quot;: int(dif.get(&quot;difusion_pasos&quot;) or 1500),
+                &quot;seed&quot;: rnd(1_000_000), &quot;tolerancia_rel&quot;: 1e-9}
     raise HTTPException(400, &quot;tipo no soportado&quot;)
 
 def crear_tarea_auto(tipo: str = None, cola: str = &quot;C&quot;, prioridad: float = 0.0) -&gt; str:
@@ -1281,6 +1352,17 @@ def _bucle_auto_tareas():
                     print(f&quot;[KUKIA Core] auto-tareas: cola {en_cola} -&gt; {en_cola + min(faltan, AUTO_POR_PASADA)}&quot;, flush=True)
         except Exception as e:
             print(f&quot;[KUKIA Core] auto-tareas error: {e}&quot;, flush=True)
+        # Persistir el tamano de tarea que ha aprendido el control de dificultad.
+        global _escala_pendiente
+        if _escala_pendiente:
+            try:
+                with _escritura():
+                    con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;escala_tarea&#x27;,?) &quot;
+                                &quot;ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor&quot;,
+                                (round(_ESCALA_TAREA, 4),))
+                _escala_pendiente = False
+            except Exception:
+                pass
         time.sleep(AUTO_INTERVALO)
 
 threading.Thread(target=_bucle_auto_tareas, daemon=True).start()
@@ -2474,7 +2556,10 @@ def flops_de(tipo: str, dif: dict) -&gt; float:
             n = float(dif.get(&quot;inferencia_n&quot;) or 0)
             return 2.0 * 9.0 * max(0.0, n - 2) ** 2
         if tipo == &quot;difusion_calor&quot;:
-            return 2.0 * 5.0 * (1024 - 2) ** 2 * 1500
+            # Los pasos los fija el control de dificultad del Core (cambian con
+            # el tiempo); antes eran 1500 fijos y el calculo habria quedado viejo.
+            pasos = float(dif.get(&quot;difusion_pasos&quot;) or 1500)
+            return 2.0 * 5.0 * (1024 - 2) ** 2 * pasos
     except (TypeError, ValueError):
         return 0.0
     return 0.0
