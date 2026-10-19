@@ -16,7 +16,7 @@ body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); colo
 h1 { color:var(--gold); letter-spacing:.12em; margin-top:.8rem; font-size:1.8rem; }
 .sub { color:var(--text); font-size:.85rem; margin-top:.3rem; }
 .tabs { display:flex; gap:.5rem; justify-content:center; padding:1rem; }
-.tab { flex:1; max-width:160px; padding:.8rem; text-align:center; border-radius:12px; border:1px solid var(--line); color:var(--text); cursor:pointer; font-size:.9rem; }
+.tab { flex:1; max-width:160px; padding:.8rem; text-align:center; border-radius:12px; border:1px solid var(--line); background:transparent; color:var(--text); cursor:pointer; font-size:.9rem; font-family:inherit; }
 .tab.on { background:var(--gold); color:var(--navy); font-weight:700; border-color:var(--gold); }
 .panel { display:none; padding:1rem; max-width:520px; margin:0 auto; }
 .panel.on { display:block; }
@@ -43,9 +43,9 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
   <div class="sub">Billetera KIA — tus claves, tu dinero</div>
 </div>
 <div class="tabs">
-  <div class="tab on" onclick="ver('crear')">Nueva</div>
-  <div class="tab" onclick="ver('recuperar')">Recuperar</div>
-  <div class="tab" onclick="ver('ver')">Mi saldo</div>
+  <button type="button" class="tab on" onclick="ver('crear', this)">Nueva</button>
+  <button type="button" class="tab" onclick="ver('recuperar', this)">Recuperar</button>
+  <button type="button" class="tab" onclick="ver('ver', this)">Mi saldo</button>
 </div>
 
 <div id="p-crear" class="panel on">
@@ -62,6 +62,9 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
     <h3>Recuperar con contraseña + 20 palabras</h3>
     <input id="r-pass" type="password" placeholder="Tu contraseña">
     <textarea id="r-words" placeholder="Pega tus 20 palabras separadas por espacios"></textarea>
+    <label style="display:block;margin:.4rem 0;font-size:.85rem">
+      <input type="checkbox" id="r-v1"> Billetera antigua (creada antes del 18-10-2026)
+    </label>
     <button class="btn" onclick="recuperar()">Recuperar billetera</button>
     <div id="r-out"></div>
   </div>
@@ -71,6 +74,7 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
   <div class="card">
     <h3>Mi saldo</h3>
     <input id="v-addr" placeholder="Tu dirección KUK...">
+    <input id="v-core" placeholder="Dirección del Core (por defecto http://127.0.0.1:8300)">
     <button class="btn" onclick="saldo()">Ver saldo</button>
     <div id="v-out"></div>
     <div id="qrcode"></div>
@@ -81,21 +85,100 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
 <script src="qrcode.min.js"></script>
 <script>
 var WORDS = null;
+// AUDITORIA 2026-10-18: la clave privada y las 20 palabras ya NO se guardan
+// en el navegador (localStorage). Se derivan en memoria al usarlas; si cierras
+// la pagina, las vuelves a poner con tus palabras. Asi un XSS o una extension
+// no se lleva tu billetera ni tu copia de seguridad.
+var PRIV = null;
+var ADDR = null;
+var MNEMO = null;   // palabras exactas recien generadas (para copiarlas tal cual)
 fetch('wordlist.txt').then(function(r){ return r.text(); }).then(function(t){
   WORDS = t.split('\n').map(function(w){ return w.trim(); }).filter(Boolean);
 });
 
-function ver(id){
+window.addEventListener('load', function(){
+  var c = document.getElementById('v-core');
+  if(c){ c.value = localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300'; }
+  var a = document.getElementById('v-addr');
+  if(a){ a.value = localStorage.getItem('kukia_addr') || ''; }
+});
+
+function ver(id, el){
+  // El elemento se pasa desde el onclick: no dependemos del 'event' global
+  // (fallaba en Firefox y al llamar a ver() sin pulsar un boton).
   document.querySelectorAll('.panel').forEach(function(p){ p.classList.remove('on'); });
   document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('on'); });
   document.getElementById('p-'+id).classList.add('on');
-  event.target.classList.add('on');
+  if(!el){ el = document.querySelector('.tab[onclick*="' + id + '"]'); }
+  if(el){ el.classList.add('on'); }
 }
 
-async function pbkdf2(pass, words){
+// Las tildes de la lista oficial estan guardadas en forma "descompuesta"
+// (NFD). Si el usuario las teclea a mano, su teclado escribe la forma
+// "compuesta" (NFC) y la direccion saldria DISTINTA. No cambiamos la
+// derivacion (romperia las billeteras ya creadas): probamos las dos formas
+// y nos quedamos con la que coincide con la direccion guardada o con saldo.
+function normalizar(lista, forma){
+  try { return lista.map(function(w){ return w.normalize(forma); }); } catch(e){ return lista.slice(); }
+}
+function iguales(a, b){
+  if(a.length !== b.length) return false;
+  for(var i=0;i<a.length;i++){ if(a[i] !== b[i]) return false; }
+  return true;
+}
+function coreUrl(){
+  var el = document.getElementById('v-core');
+  return ((el && el.value.trim()) || localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300').replace(/\/+$/, '');
+}
+async function saldoCore(addr, ms){
+  try {
+    var ctl = new AbortController();
+    var t = setTimeout(function(){ ctl.abort(); }, ms || 2500);
+    var r = await fetch(coreUrl() + '/saldo/' + encodeURIComponent(addr), {signal: ctl.signal});
+    clearTimeout(t);
+    var j = await r.json();
+    return Number(j.saldo);
+  } catch(e){ return null; }
+}
+async function derivarDireccion(pass, words, v1){
+  var seed = await pbkdf2(pass, words, v1);
+  var kp = nacl.sign.keyPair.fromSeed(seed);
+  return { seed: seed, addr: 'KUK' + (await sha256hex(kp.publicKey)).substring(0,38) };
+}
+function usarCandidato(idx, cands){
+  var c = cands[idx];
+  if(!c) return;
+  PRIV = Array.from(c.seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  ADDR = c.addr;
+  localStorage.setItem('kukia_addr', c.addr);
+  document.getElementById('r-out').innerHTML = '<div class="addr">' + c.addr + '</div>' +
+    '<p class="ok">Billetera recuperada (' + c.forma + ').</p>' +
+    '<button class="btn btn2" onclick="copiar(ADDR)">Copiar direccion</button>';
+}
+function copiar(texto){
+  if(!texto) return;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(texto).then(function(){ /* ok */ });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = texto; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch(e){}
+    document.body.removeChild(ta);
+  }
+}
+
+async function saltPara(words, v1){
+  // v1 = sal fija historica. v2 = sal unica por billetera (SHA-256 de tus
+  // palabras), igual que hace kukia_wallet.py, asi que se recupera en Python.
+  if(v1){ return new TextEncoder().encode('kukia-wallet-v1'); }
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('kukia-wallet-v2|' + words.join(' '))));
+}
+
+async function pbkdf2(pass, words, v1){
   var msg = words.join(' ') + '|' + pass;
+  var salt = await saltPara(words, v1);
   var key = await crypto.subtle.importKey('raw', new TextEncoder().encode(msg), 'PBKDF2', false, ['deriveBits']);
-  var bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt:new TextEncoder().encode('kukia-wallet-v1'), iterations:200000, hash:'SHA-512'}, key, 512);
+  var bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt:salt, iterations:200000, hash:'SHA-512'}, key, 512);
   return new Uint8Array(bits).slice(0, 32);
 }
 
@@ -114,47 +197,90 @@ function crear(){
   var rnd = new Uint32Array(20);
   crypto.getRandomValues(rnd);
   for(var i=0;i<20;i++){ words.push(WORDS[rnd[i] % WORDS.length]); }
-  pbkdf2(pass, words).then(async function(seed){
+  pbkdf2(pass, words, false).then(async function(seed){
     var kp = nacl.sign.keyPair.fromSeed(seed);
     var addr = 'KUK' + (await sha256hex(kp.publicKey)).substring(0,38);
-    var privHex = Array.from(seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-    localStorage.setItem('kukia_priv', privHex);
-    localStorage.setItem('kukia_addr', addr);
-    localStorage.setItem('kukia_words', JSON.stringify(words));
+    PRIV = Array.from(seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+    ADDR = addr;
+    MNEMO = words.join(' ');
+    localStorage.setItem('kukia_addr', addr);   // solo la direccion (es publica)
     var html = '<div class="addr">' + addr + '</div>';
     html += '<div class="warn"><strong>GUARDA ESTO EN PAPEL AHORA:</strong><br>Contrasena: <code>' + pass + '</code></div>';
     html += '<div class="warn"><strong>Escribe estas 20 palabras EN PAPEL y en orden.</strong> Sin contrasena + palabras no recuperas nada.</div>';
     html += '<div class="words">' + words.map(function(w,i){ return '<span>'+(i+1)+'. '+w+'</span>'; }).join('') + '</div>';
+    html += '<button class="btn btn2" onclick="copiar(MNEMO)">Copiar las 20 palabras tal cual</button>';
+    html += '<p class="small">Copia las palabras con ese boton, no las reescribas: las tildes tienen que ser exactamente las mismas. Tus claves viven solo en esta pestaña y desaparecen al cerrarla.</p>';
     document.getElementById('c-out').innerHTML = html;
   });
 }
 
-function recuperar(){
+async function recuperar(){
   var pass = document.getElementById('r-pass').value;
-  var words = document.getElementById('r-words').value.trim().split(/\s+/);
-  if(!pass || words.length !== 20){ alert('Necesitas contraseña + las 20 palabras exactas'); return; }
-  pbkdf2(pass, words).then(async function(seed){
-    var kp = nacl.sign.keyPair.fromSeed(seed);
-    var addr = 'KUK' + (await sha256hex(kp.publicKey)).substring(0,38);
-    var privHex = Array.from(seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
-    localStorage.setItem('kukia_priv', privHex);
-    localStorage.setItem('kukia_addr', addr);
-    document.getElementById('r-out').innerHTML = '<div class="addr">' + addr + '</div><p class="ok">Billetera recuperada. Es la misma dirección.</p>';
-  });
+  // Limpia lo que suele venir al copiar: mayusculas, saltos de linea y
+  // numeracion ("1. casa 2. perro"). Las palabras de la lista son minusculas.
+  var words = document.getElementById('r-words').value.toLowerCase().trim()
+    .split(/\s+/)
+    .map(function(w){ return w.replace(/^[0-9]+[\.\):\-]?$/, '').replace(/^[0-9]+[\.\):\-](?=[a-z])/, ''); })
+    .filter(Boolean);
+  if(!pass || words.length !== 20){ alert('Necesitas contraseña + las 20 palabras exactas (tienes ' + words.length + ')'); return; }
+  var v1 = document.getElementById('r-v1') && document.getElementById('r-v1').checked;
+  var out = document.getElementById('r-out');
+  out.innerHTML = '<p class="small">Comprobando...</p>';
+
+  var nfc = normalizar(words, 'NFC');
+  var nfd = normalizar(words, 'NFD');
+  var formas = [{forma:'NFC', words:nfc}];
+  if(!iguales(nfc, nfd)){ formas.push({forma:'NFD', words:nfd}); }
+
+  var cands = [];
+  for(var i=0;i<formas.length;i++){
+    var d = await derivarDireccion(pass, formas[i].words, v1);
+    cands.push({forma: formas[i].forma, seed: d.seed, addr: d.addr, saldo: null});
+  }
+
+  var elegido = null;
+  if(cands.length === 1){ elegido = 0; }
+  if(elegido === null){
+    var guardada = localStorage.getItem('kukia_addr') || '';
+    for(i=0;i<cands.length;i++){ if(cands[i].addr === guardada){ elegido = i; break; } }
+  }
+  if(elegido === null){
+    for(i=0;i<cands.length;i++){ cands[i].saldo = await saldoCore(cands[i].addr); }
+    var conSaldo = [];
+    for(i=0;i<cands.length;i++){ if(Number(cands[i].saldo) > 0){ conSaldo.push(i); } }
+    if(conSaldo.length === 1){ elegido = conSaldo[0]; }
+  }
+
+  if(elegido !== null){
+    usarCandidato(elegido, cands);
+    return;
+  }
+
+  // Ambigua (billetera nueva, sin saldo y en otro equipo): muestra las dos.
+  var html = '<p class="err">Las tildes pueden escribirse de dos formas y dan direcciones distintas. ' +
+             'Compara con la direccion que tenias: la correcta es una de estas.</p>';
+  for(i=0;i<cands.length;i++){
+    html += '<div class="addr">' + cands[i].forma + ': ' + cands[i].addr + '</div>' +
+            '<button class="btn btn2" onclick="usarCandidato(' + i + ', window.__cands)">Usar esta</button>';
+  }
+  out.innerHTML = html;
+  window.__cands = cands;
 }
 
 function saldo(){
   var addr = document.getElementById('v-addr').value.trim() || localStorage.getItem('kukia_addr') || '';
   if(!addr){ alert('Pon tu dirección KUK...'); return; }
   document.getElementById('v-out').innerHTML = '<div class="saldo">...</div>';
-  fetch('http://192.168.1.11:8300/saldo/' + encodeURIComponent(addr)).then(function(r){ return r.json(); }).then(function(j){
+  var core = (document.getElementById('v-core').value.trim() || localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300').replace(/\/+$/, '');
+  localStorage.setItem('kukia_core', core);
+  fetch(core + '/saldo/' + encodeURIComponent(addr)).then(function(r){ return r.json(); }).then(function(j){
     document.getElementById('v-out').innerHTML = '<div class="saldo">' + Number(j.saldo).toLocaleString() + ' KIA</div><div class="addr">' + addr + '</div>';
     var qr = qrcode(0, 'M');
     qr.addData(addr);
     qr.make();
     document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
   }).catch(function(){
-    document.getElementById('v-out').innerHTML = '<p class="err">Core no accesible (tiene que estar online). Dirección guardada igualmente.</p><div class="addr">' + addr + '</div>';
+    document.getElementById('v-out').innerHTML = '<p class="err">Core no accesible en ' + core + '. Si ves esta web desde fuera de tu PC, el Core no es alcanzable (y es lo correcto: solo escucha en tu ordenador).</p><div class="addr">' + addr + '</div>';
     try {
       var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
       document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);

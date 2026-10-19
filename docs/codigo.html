@@ -28,19 +28,40 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="sub">Transparencia total: todo el software de KUKIA a la vista. Nada oculto.</div>
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera y el dashboard.
 Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras, se corrigen. Tambien puedes descargarlo empaquetado en
-<a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>.</div>
+<a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>.<br>Actualizado: 19-10-2026 (incluye la auditoria de seguridad del 18-10).</div>
 <h2>Coordinator (Core) - kukia_core.py</h2>
 <pre><code>&quot;&quot;&quot;KUKIA Core - coordinador: nodos, tareas, verificacion REAL, ledger (SQLite).
 
-VERIFICACION (corregida): el Core NO confia en el hash del minero.
+VERIFICACION: el Core NO confia en el hash del minero.
 El Core recalcula la tarea el mismo (trustless) y compara el resultado
 exacto. Tareas con aritmetica determinista (enteros exactos via float64
 con magnitudes acotadas) para que CPU y GPU den el MISMO numero.
+
+AUDITORIA 2026-10-18 (todas las marcas &quot;AUDITORIA&quot; son de esta revision):
+  - Se valida la cabecera Host y el Origin (corta el DNS rebinding).
+  - /tareas/pendiente exige firma Ed25519 del nodo (nadie roba la cola).
+  - /tareas/resultado AUTENTICA ANTES de recalcular (no se puede quemar CPU).
+  - Topes duros a params (n, pasos) y tamano del JSON.
+  - Limitador por ruta (antes un solo contador bloqueaba las 5 rutas juntas).
+  - Reintentos: un resultado incorrecto no mata la tarea; castiga al nodo.
+  - Recuperacion de tareas atascadas en hilo propio (no dependia de que
+    alguien pidiera trabajo) + /admin/liberar_atascadas.
+  - Ledger con cadena de hashes verificable (/ledger/verificar).
+  - monto de transferencia finito (NaN daba 500 despues de escribir).
+  - /registro guarda la IP real (antes guardaba el &#x27;ref&#x27; en su columna).
 &quot;&quot;&quot;
-import hashlib, json, secrets, sqlite3, threading, uuid, time
+import hashlib, json, math, os, secrets, sqlite3, threading, uuid, time, sys, urllib.parse
+from contextlib import contextmanager
 from pathlib import Path
 import numpy as np
-from fastapi import FastAPI, HTTPException, Header, Depends
+sys.path.insert(0, str(Path(__file__).parent.parent))
+try:
+    import ia_onnx_cpu as ONNXCPU  # referencia CPU (tareas embeddings)
+except Exception:
+    ONNXCPU = None
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 # Lock global: SQLite NO es seguro para uso concurrente en una sola conexion.
@@ -79,10 +100,138 @@ BOUNTY = 1000.0                   # bounty anti-trampa (mejora 3)
 # False = nodos viejos sin clave siguen cobrando (compatibilidad, fase pruebas).
 # True  = TODOS los nodos deben traer firma (rechaza sin clave_publica).
 # Pasar a True al abrir la red publica.
-EXIGIR_FIRMA_GLOBAL = False
+EXIGIR_FIRMA_GLOBAL = True
 
-con = sqlite3.connect(str(DB), check_same_thread=False)
+# Tareas &#x27;ejecutando&#x27; sin resultado tras este tiempo vuelven a &#x27;queued&#x27;
+# (recuperacion en hilo propio Y oportunista en /tareas/pendiente).
+ABANDONO_SEG = 1800.0
+
+# ============================================================
+#  AUDITORIA: limites y castigos
+# ============================================================
+LIMITE_N = 4096            # maximo de &#x27;n&#x27; en cualquier tarea
+LIMITE_PASOS = 20000       # maximo de &#x27;pasos&#x27; (difusion)
+LIMITE_PARAMS_BYTES = 65536  # el JSON de params no puede pasar de 64 KB
+MAX_FALLOS = 3             # resultados INCORRECTOS antes de cerrar la tarea
+MAX_ABANDONOS = 3          # abandonos antes de cerrar la tarea como fallo
+PENALIZACION = 25.0        # KIA que se le quitan al que entrega mal el trabajo
+CASTIGO_SEG = 1800.0       # tiempo sin poder pedir tareas tras sabotear
+PENDIENTE_EXIGIR_FIRMA = True
+VENTANA_FIRMA = 300.0      # segundos de validez de la firma de &#x27;pendiente&#x27;
+_extra = [h.strip().lower() for h in (os.environ.get(&quot;KUKIA_HOSTS&quot;, &quot;&quot;) or &quot;&quot;).split(&quot;,&quot;) if h.strip()]
+# La verificacion de &#x27;difusion_calor&#x27; en CPU costaba 7,4 min por tarea pesada
+# (habia 97 asi en la cola). Con la GPU baja a ~1 s. Sigue siendo un recalculo
+# INDEPENDIENTE del minero; solo cambia donde se hace la aritmetica float64.
+# Se puede desactivar con KUKIA_VERIF_GPU=0.
+USAR_GPU_VERIF = os.environ.get(&quot;KUKIA_VERIF_GPU&quot;, &quot;1&quot;) != &quot;0&quot;
+HOSTS_PERMITIDOS = {&quot;127.0.0.1&quot;, &quot;localhost&quot;, &quot;::1&quot;, &quot;0.0.0.0&quot;} | set(_extra)
+
+# AUDITORIA 2026-10-19: la billetera web consulta el saldo desde el navegador.
+# Antes el guardia solo aceptaba el Origin con el puerto DEL CORE (8300), asi
+# que una pagina local en otro puerto (o GitHub Pages) recibia 403; y ademas
+# faltaban las cabeceras CORS, con lo que el fetch fallaba igualmente.
+# Ahora: vale cualquier origen de loopback (el puerto da igual), la web
+# publica del proyecto, y lo que se anada en KUKIA_ORIGENES=&quot;https://a,...&quot;.
+ORIGENES_PERMITIDOS = {&quot;https://lordkukone.github.io&quot;, &quot;null&quot;} | {
+    o.strip().lower() for o in (os.environ.get(&quot;KUKIA_ORIGENES&quot;, &quot;&quot;) or &quot;&quot;).split(&quot;,&quot;) if o.strip()
+}
+
+def _origen_ok(origen: str) -&gt; bool:
+    if origen in ORIGENES_PERMITIDOS:
+        return True
+    try:
+        u = urllib.parse.urlsplit(origen)
+    except Exception:
+        return False
+    if u.scheme not in (&quot;http&quot;, &quot;https&quot;):
+        return False
+    return (u.hostname or &quot;&quot;).lower() in {&quot;127.0.0.1&quot;, &quot;localhost&quot;, &quot;::1&quot;}
+
+class _ConSegura:
+    &quot;&quot;&quot;Conexion SQLite compartida protegida con un RLock.
+
+    AUDITORIA: sqlite3 NO deja que dos hilos usen la MISMA conexion a la vez.
+    Al arrancar, las dos GPUs se registran en paralelo y saltaba
+    &quot;sqlite3.InterfaceError: bad parameter or other API misuse&quot; -&gt; 500 y una
+    GPU se quedaba sin nodo (sin poder minar). Cada llamada va ahora bajo el
+    RLock; las transacciones de escritura siguen ademas bajo _pago_lock, para
+    que una transaccion entera no se pueda partir entre dos hilos.
+    &quot;&quot;&quot;
+    def __init__(self, con):
+        self._con = con
+        self._lk = threading.RLock()
+
+    def execute(self, sql, parametros=()):
+        with self._lk:
+            return self._con.execute(sql, parametros)
+
+    def executemany(self, sql, seq):
+        with self._lk:
+            return self._con.executemany(sql, seq)
+
+    def executescript(self, sql):
+        with self._lk:
+            return self._con.executescript(sql)
+
+    def commit(self):
+        with self._lk:
+            return self._con.commit()
+
+    def rollback(self):
+        with self._lk:
+            return self._con.rollback()
+
+    def close(self):
+        with self._lk:
+            return self._con.close()
+
+    @property
+    def row_factory(self):
+        return self._con.row_factory
+
+    @row_factory.setter
+    def row_factory(self, valor):
+        self._con.row_factory = valor
+
+con = _ConSegura(sqlite3.connect(str(DB), check_same_thread=False, timeout=10))
 con.row_factory = sqlite3.Row
+
+@contextmanager
+def _escritura():
+    &quot;&quot;&quot;Escritura corta y atomica: lock + BEGIN IMMEDIATE + commit.
+
+    AUDITORIA: /nodos/registrar, /tareas/crear y /registro escribian sin
+    lock (dos peticiones a la vez podian mezclar transacciones).
+    &quot;&quot;&quot;
+    with _pago_lock:
+        # AUDITORIA: si otro programa tiene la base bloqueada, se reintenta una
+        # vez y se responde 503 rapido (antes se quedaba esperando 30 s).
+        listo = False
+        for intento in (1, 2):
+            try:
+                con.execute(&quot;BEGIN IMMEDIATE&quot;)
+                listo = True
+                break
+            except Exception:
+                if intento == 1:
+                    time.sleep(0.3)
+        if not listo:
+            raise HTTPException(503, &quot;Core ocupado (la base esta bloqueada), reintentar&quot;)
+        try:
+            yield
+            con.commit()
+        except HTTPException:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            raise
+        except Exception:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            raise HTTPException(500, &quot;error interno escribiendo&quot;)
 
 def schema():
     con.execute(&quot;CREATE TABLE IF NOT EXISTS nodos(id TEXT PRIMARY KEY, nombre TEXT, vram_gb INT, &quot;
@@ -103,16 +252,95 @@ def schema():
         con.execute(&quot;ALTER TABLE nodos ADD COLUMN clave_publica TEXT DEFAULT &#x27;&#x27;&quot;)
     except Exception:
         pass
+    try:
+        con.execute(&quot;ALTER TABLE tareas ADD COLUMN asignado REAL DEFAULT NULL&quot;)
+    except Exception:
+        pass
+    for _sql in (
+        &quot;ALTER TABLE tareas ADD COLUMN cola TEXT DEFAULT &#x27;B&#x27;&quot;,
+        &quot;ALTER TABLE tareas ADD COLUMN campana TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE tareas ADD COLUMN prioridad REAL DEFAULT 0&quot;,
+        &quot;ALTER TABLE tareas ADD COLUMN vram_min INT DEFAULT 0&quot;,
+        &quot;ALTER TABLE tareas ADD COLUMN device TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE tareas ADD COLUMN duracion_ms REAL DEFAULT 0&quot;,
+        # AUDITORIA: reintentos, castigos y cadena de hashes
+        &quot;ALTER TABLE tareas ADD COLUMN intentos INT DEFAULT 0&quot;,
+        &quot;ALTER TABLE tareas ADD COLUMN nodos_intento TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE nodos ADD COLUMN castigado_hasta REAL DEFAULT 0&quot;,
+        &quot;ALTER TABLE nodos ADD COLUMN fallos INT DEFAULT 0&quot;,
+        &quot;ALTER TABLE ledger ADD COLUMN hash_prev TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE ledger ADD COLUMN hash TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE registros ADD COLUMN ref TEXT DEFAULT &#x27;&#x27;&quot;,
+    ):
+        try:
+            con.execute(_sql)
+        except Exception:
+            pass
+    con.execute(&quot;CREATE TABLE IF NOT EXISTS planificador_log(id INTEGER PRIMARY KEY AUTOINCREMENT, &quot;
+                &quot;tarea_id TEXT, nodo_id TEXT, cola TEXT, motivo TEXT, ts TEXT)&quot;)
+    con.execute(&quot;CREATE TABLE IF NOT EXISTS gpu_pruebas(nodo_id TEXT, prueba TEXT, creado TEXT)&quot;)
+    try:
+        con.execute(&quot;ALTER TABLE nodos ADD COLUMN tops_estimado INT DEFAULT 1&quot;)
+    except Exception:
+        pass
+    # AUDITORIA: con el generador de trabajo la tabla &#x27;tareas&#x27; crece sola
+    # (miles al dia). Sin indices, los COUNT(*) de la cola y los saldos
+    # acabarian recorriendo toda la tabla.
+    # ARCHIVADO (18-10-2026): la tabla &#x27;tareas&#x27; crece con el generador
+    # automatico (~500.000 filas al dia a pleno ritmo). Para poder borrar las
+    # tareas viejas sin tocar el dinero ni el ritmo de emision, los totales
+    # historicos viven en &#x27;meta&#x27; y NO se recalculan contando filas.
+    con.execute(&quot;CREATE TABLE IF NOT EXISTS meta(clave TEXT PRIMARY KEY, valor REAL)&quot;)
+    if con.execute(&quot;SELECT valor FROM meta WHERE clave=&#x27;tareas_ok_total&#x27;&quot;).fetchone() is None:
+        _ok = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;ok&#x27;&quot;).fetchone()[&quot;c&quot;]
+        _prim = con.execute(&quot;SELECT MIN(fin) m FROM tareas WHERE estado=&#x27;ok&#x27; AND fin IS NOT NULL&quot;).fetchone()[&quot;m&quot;]
+        try:
+            _prim_e = float(time.mktime(time.strptime(_prim))) if _prim else float(time.time())
+        except Exception:
+            _prim_e = float(time.time())
+        con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;tareas_ok_total&#x27;,?)&quot;, (float(_ok),))
+        con.execute(&quot;INSERT OR IGNORE INTO meta(clave,valor) VALUES(&#x27;primera_ok_epoch&#x27;,?)&quot;, (_prim_e,))
+        con.execute(&quot;INSERT OR IGNORE INTO meta(clave,valor) VALUES(&#x27;tareas_archivadas&#x27;,0)&quot;)
+    for _ix in (
+        &quot;CREATE INDEX IF NOT EXISTS idx_tareas_estado ON tareas(estado)&quot;,
+        &quot;CREATE INDEX IF NOT EXISTS idx_tareas_cola ON tareas(estado, cola, prioridad)&quot;,
+        &quot;CREATE INDEX IF NOT EXISTS idx_tareas_nodo ON tareas(nodo_id)&quot;,
+        &quot;CREATE INDEX IF NOT EXISTS idx_tareas_campana ON tareas(campana)&quot;,
+        &quot;CREATE INDEX IF NOT EXISTS idx_tareas_creado ON tareas(creado)&quot;,
+        &quot;CREATE INDEX IF NOT EXISTS idx_ledger_nodo ON ledger(nodo_id)&quot;,
+        &quot;CREATE INDEX IF NOT EXISTS idx_ledger_motivo ON ledger(motivo)&quot;,
+    ):
+        try:
+            con.execute(_ix)
+        except Exception:
+            pass
     con.commit()
 
 schema()
+
+def _asiento(tarea_id, nodo_id, kuki, motivo):
+    &quot;&quot;&quot;AUDITORIA: unico camino para escribir en el ledger. Encadena hashes:
+
+        hash = sha256(tarea_id|nodo_id|kuki|motivo|ts|hash_prev)
+
+    Asi un saldo retocado a mano en el .db deja de cuadrar con la cadena y
+    se detecta con /ledger/verificar. Se llama SIEMPRE dentro del lock.
+    &quot;&quot;&quot;
+    fila = con.execute(&quot;SELECT hash FROM ledger WHERE hash IS NOT NULL AND hash&lt;&gt;&#x27;&#x27; &quot;
+                       &quot;ORDER BY id DESC LIMIT 1&quot;).fetchone()
+    prev = (fila[&quot;hash&quot;] if fila else &quot;&quot;) or &quot;&quot;
+    ts = time.ctime()
+    base = f&quot;{tarea_id}|{nodo_id}|{kuki}|{motivo}|{ts}|{prev}&quot;
+    h = hashlib.sha256(base.encode()).hexdigest()
+    con.execute(&quot;INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts,hash_prev,hash) &quot;
+                &quot;VALUES(?,?,?,?,?,?,?)&quot;, (tarea_id, nodo_id, kuki, motivo, ts, prev, h))
+    return h
 
 def genesis():
     &quot;&quot;&quot;Asignacion fundacional: se ejecuta UNA sola vez (idempotente).&quot;&quot;&quot;
     ya = con.execute(&quot;SELECT COUNT(*) c FROM ledger WHERE motivo=&#x27;asignacion fundacional&#x27;&quot;).fetchone()[&quot;c&quot;]
     if not ya:
-        con.execute(&quot;INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)&quot;,
-                    (&quot;genesis&quot;, GENESIS_DIR, GENESIS_MONTO, &quot;asignacion fundacional&quot;, time.ctime()))
+        _asiento(&quot;genesis&quot;, GENESIS_DIR, GENESIS_MONTO, &quot;asignacion fundacional&quot;)
         con.commit()
 
 genesis()
@@ -149,35 +377,153 @@ def computar_tarea(tipo: str, params: dict):
         return str(int(round(out)))
     return None
 
-app = FastAPI(title=&quot;KUKIA Core&quot;, version=&quot;0.2.0&quot;)
+# --- Modelos de referencia para tareas IA (punto 5: distribucion) ---
+MODELOS_DIR = Path(__file__).parent / &quot;modelos&quot;
+MODELOS_DIR.mkdir(parents=True, exist_ok=True)
+
+def _difusion_ref(n: int, pasos: int, seed: int) -&gt; float:
+    &quot;&quot;&quot;Valor de referencia de la difusion (float64, MISMO calculo que el worker).
+
+    AUDITORIA: en CPU (numpy) una tarea n=2048/pasos=4000 tarda ~7,4 min y la
+    cola tenia 97 tareas asi (≈530 min de CPU). Con la GPU disponible baja a
+    ~1 s. La rejilla inicial se genera con numpy default_rng (igual que el
+    worker) y la iteracion va en float64; la comparacion sigue siendo con
+    tolerancia relativa, asi que la verificacion no se debilita.
+    &quot;&quot;&quot;
+    if USAR_GPU_VERIF:
+        try:
+            import torch
+            x = torch.from_numpy(np.random.default_rng(seed).random((n, n))).to(&quot;cuda&quot;, dtype=torch.float64)
+            for _ in range(pasos):
+                x[1:-1, 1:-1] = x[1:-1, 1:-1] + 0.2 * (
+                    x[:-2, 1:-1] + x[2:, 1:-1] + x[1:-1, :-2] + x[1:-1, 2:] - 4 * x[1:-1, 1:-1])
+            return float(x.sum().item())
+        except Exception:
+            pass
+    x = np.random.default_rng(seed).random((n, n))
+    for _ in range(pasos):
+        x[1:-1, 1:-1] = x[1:-1, 1:-1] + 0.2 * (
+            x[:-2, 1:-1] + x[2:, 1:-1] + x[1:-1, :-2] + x[1:-1, 2:] - 4 * x[1:-1, 1:-1])
+    return float(x.sum())
+
+def _verificar_difusion(params, metrica):
+    &quot;&quot;&quot;Recomputa la difusion y compara con tolerancia relativa (GPU y CPU
+    redondean distinto tras cientos de pasos).&quot;&quot;&quot;
+    try:
+        n = int(params.get(&quot;n&quot;, 256))
+        pasos = int(params.get(&quot;pasos&quot;, 200))
+        seed = int(params.get(&quot;seed&quot;, 42))
+        val = float(metrica)
+        if not math.isfinite(val):
+            return False
+        ref = _difusion_ref(n, pasos, seed)
+        tol = float(params.get(&quot;tolerancia_rel&quot;, 1e-9))
+        return abs(val - ref) &lt;= tol * max(1.0, abs(ref))
+    except Exception:
+        return False
+
+def _verificar_embeddings(tipo, params, metrica):
+    &quot;&quot;&quot;Puntos 1+2: hash del modelo + recomputo CPU con tolerancia (lote: spot-check).&quot;&quot;&quot;
+    try:
+        modelo = params[&quot;model_path&quot;]
+        vecs = json.loads(metrica)
+        if not isinstance(vecs, list):
+            return False
+        h = ONNXCPU.config_hash(modelo, params[&quot;input&quot;] if tipo == &quot;embeddings&quot; else params[&quot;inputs&quot;])
+        if str(params.get(&quot;model_hash&quot;, h)) != h:
+            return False
+        tol = float(params.get(&quot;tolerancia&quot;, 1e-5))
+        if tipo == &quot;embeddings&quot;:
+            pares = [(params[&quot;input&quot;], vecs)]
+        else:
+            entradas = list(params[&quot;inputs&quot;])
+            if len(vecs) != len(entradas):
+                return False
+            if len(entradas) &gt; 3:
+                import random
+                idx = random.Random(int(params.get(&quot;seed&quot;, 0))).sample(range(len(entradas)), 3)
+                pares = [(entradas[i], vecs[i]) for i in idx]
+            else:
+                pares = list(zip(entradas, vecs))
+        for ent, rec in pares:
+            ref = ONNXCPU.ejecutar_tarea(modelo, ent)
+            if not ONNXCPU.comparar_con_tolerancia(rec, ref, tol):
+                return False
+        return True
+    except Exception:
+        return False
+
+app = FastAPI(title=&quot;KUKIA Core&quot;, version=&quot;0.3.0&quot;)
 
 # ============================================================
-#  RATE LIMIT (anti-spam: max 30 peticiones/min por IP en rutas publicas)
+#  RATE LIMIT (anti-spam)  +  AUDITORIA: un cubo POR RUTA
 # ============================================================
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarRequest
 
-RUTAS_LIMITADAS = {&quot;/registro&quot;, &quot;/nodos/registrar&quot;, &quot;/tareas/pendiente&quot;, &quot;/tareas/resultado&quot;}
-RATE_MAX = 30
+# AUDITORIA: antes era un unico contador por IP compartido por las 5 rutas:
+# un minero que pedia trabajo y entregaba resultados se autobloqueaba (429).
+LIMITES_POR_RUTA = {
+    &quot;/registro&quot;: 30,
+    &quot;/nodos/registrar&quot;: 30,
+    # Las dos rutas del minero van firmadas: el limite solo frena un bucle
+    # desbocado. Con 2 GPUs el minero hace ~240 entregas/min y con 300 se
+    # autofrenaba (429) en los picos.
+    &quot;/tareas/pendiente&quot;: 1200,
+    &quot;/tareas/resultado&quot;: 1200,
+    &quot;/transferir&quot;: 60,
+}
 RATE_WINDOW = 60.0
 _rate_hist = {}
 _rate_lock = threading.Lock()
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarRequest, call_next):
-        if request.url.path in RUTAS_LIMITADAS:
+        limite = LIMITES_POR_RUTA.get(request.url.path)
+        if limite:
             ip = request.client.host if request.client else &quot;?&quot;
+            clave = (ip, request.url.path)
             ahora = time.time()
             with _rate_lock:
-                hist = [t for t in _rate_hist.get(ip, []) if ahora - t &lt; RATE_WINDOW]
-                if len(hist) &gt;= RATE_MAX:
-                    from fastapi.responses import JSONResponse
+                if len(_rate_hist) &gt; 5000:      # AUDITORIA: no crecer sin freno
+                    for k in [k for k, v in _rate_hist.items() if not v or ahora - v[-1] &gt; RATE_WINDOW]:
+                        _rate_hist.pop(k, None)
+                hist = [t for t in _rate_hist.get(clave, []) if ahora - t &lt; RATE_WINDOW]
+                if len(hist) &gt;= limite:
                     return JSONResponse({&quot;detail&quot;: &quot;demasiadas peticiones, espera un minuto&quot;}, status_code=429)
                 hist.append(ahora)
-                _rate_hist[ip] = hist
+                _rate_hist[clave] = hist
         return await call_next(request)
 
 app.add_middleware(RateLimitMiddleware)
+
+# ============================================================
+#  AUDITORIA: guardia de Host/Origin (DNS rebinding)
+#  El Core vive en loopback, pero una web abierta en este PC podia
+#  alcanzarlo con cualquier Host. Se rechaza lo que no sea local.
+# ============================================================
+class HostGuardMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarRequest, call_next):
+        host = (request.headers.get(&quot;host&quot;) or &quot;&quot;).split(&quot;:&quot;)[0].strip().lower()
+        if host and host not in HOSTS_PERMITIDOS:
+            return JSONResponse({&quot;detail&quot;: &quot;Host no permitido por el Core&quot;}, status_code=403)
+        origen = (request.headers.get(&quot;origin&quot;) or &quot;&quot;).strip().lower()
+        if origen and not _origen_ok(origen):
+            return JSONResponse({&quot;detail&quot;: &quot;origen no permitido&quot;}, status_code=403)
+        return await call_next(request)
+
+app.add_middleware(HostGuardMiddleware)
+
+# CORS para la billetera web (lectura de saldo/estadisticas). Sin credenciales:
+# las escrituras siguen exigiendo firma Ed25519 o token de admin.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(ORIGENES_PERMITIDOS),
+    allow_origin_regex=r&quot;^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$&quot;,
+    allow_methods=[&quot;GET&quot;, &quot;POST&quot;, &quot;OPTIONS&quot;],
+    allow_headers=[&quot;*&quot;],
+    max_age=600,
+)
 
 class NodoIn(BaseModel):
     nombre: str
@@ -185,17 +531,23 @@ class NodoIn(BaseModel):
     ref: str = &quot;&quot;
     tops: float = 0.0    # potencia IA declarada (TOPS, valor oficial de la GPU)
     clave_publica: str = &quot;&quot;  # Ed25519 hex (64 bytes) para autenticar resultados
+    prueba_gpu: str = &quot;&quot;  # atestado GPU declarativo (punto 3, no criptografico)
+    tops_estimado: bool = True  # punto 1: los TOPS son estimados por VRAM, no medidos
 
 class TareaIn(BaseModel):
-    tipo: str      # &#x27;checksum&#x27; | &#x27;matriz&#x27; | &#x27;inferencia&#x27;
+    tipo: str      # &#x27;checksum&#x27; | &#x27;matriz&#x27; | &#x27;inferencia&#x27; | &#x27;embeddings&#x27; | &#x27;lote_embeddings&#x27; | &#x27;difusion_calor&#x27;
     params: dict = {}
+    cola: str = &quot;B&quot;       # A=comercial, B=investigacion KUKIA, C=voluntaria/experimental
+    campana: str = &quot;&quot;     # identificador de campana (para exclusion y trazabilidad)
+    prioridad: float = 0.0  # dentro de la cola, mayor antes
+    vram_min: int = 0     # VRAM minima (GB) que exige la tarea
 
 def tier(vram: int) -&gt; float:
     return TIER_MULT.get(vram, 1.0)
 
 # --- Calendario de emision: la ultima moneda sale el 13-04-2150 ---
 # 6 halvings en 124,28 anos -&gt; era de 20,71 anos. Tras esa fecha, emision = 0.
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 EMISSION_START = date(2026, 1, 1)
 EMISSION_END = date(2150, 4, 13)
 HALVING_YEARS = (EMISSION_END - EMISSION_START).days / 365.25 / 6  # ~20,71
@@ -209,7 +561,6 @@ def emission_mult() -&gt; float:
     return 0.5 ** era
 
 def emission_info() -&gt; dict:
-    from datetime import timedelta
     hoy = date.today()
     if hoy &gt;= EMISSION_END:
         return {&quot;era_actual&quot;: 6, &quot;multiplicador&quot;: 0.0,
@@ -226,94 +577,301 @@ def emission_info() -&gt; dict:
         &quot;halving_years&quot;: round(HALVING_YEARS, 2),
     }
 
+# ============================================================
+#  AUDITORIA: validacion de params (topes duros)
+# ============================================================
+def validar_params(tipo: str, params: dict) -&gt; dict:
+    if not isinstance(params, dict):
+        raise HTTPException(400, &quot;params debe ser un objeto&quot;)
+    if len(json.dumps(params)) &gt; LIMITE_PARAMS_BYTES:
+        raise HTTPException(400, f&quot;params demasiado grande (max {LIMITE_PARAMS_BYTES} bytes)&quot;)
+    for campo, tope in ((&quot;n&quot;, LIMITE_N), (&quot;pasos&quot;, LIMITE_PASOS)):
+        if campo in params:
+            try:
+                v = int(params[campo])
+            except Exception:
+                raise HTTPException(400, f&quot;{campo} invalido&quot;)
+            if not (1 &lt;= v &lt;= tope):
+                raise HTTPException(400, f&quot;{campo} fuera de rango (1..{tope})&quot;)
+            params[campo] = v
+    for campo in (&quot;seed&quot;,):
+        if campo in params:
+            try:
+                params[campo] = int(params[campo])
+            except Exception:
+                raise HTTPException(400, &quot;seed invalido&quot;)
+    if tipo == &quot;checksum&quot;:
+        data = str(params.get(&quot;data&quot;, &quot;kukia&quot;))
+        if len(data) &gt; 4096:
+            raise HTTPException(400, &quot;data demasiado larga (max 4096)&quot;)
+        params[&quot;data&quot;] = data
+    if &quot;model_path&quot; in params and len(str(params[&quot;model_path&quot;])) &gt; 256:
+        raise HTTPException(400, &quot;model_path demasiado largo&quot;)
+    if &quot;inputs&quot; in params:
+        try:
+            if len(params[&quot;inputs&quot;]) &gt; 256:
+                raise HTTPException(400, &quot;demasiadas entradas en el lote (max 256)&quot;)
+        except TypeError:
+            raise HTTPException(400, &quot;inputs debe ser una lista&quot;)
+    return params
+
+def tope_default(tipo: str) -&gt; int:
+    &quot;&quot;&quot;Tamano por defecto si la tarea no trae &#x27;n&#x27; (para el recalculo).&quot;&quot;&quot;
+    return 256
+
 @app.post(&quot;/nodos/registrar&quot;)
 def registrar(n: NodoIn):
+    # AUDITORIA: VRAM y TOPS son autodeclarados; se acotan para que nadie
+    # infle la dificultad de la red ni su tier con valores absurdos.
+    vram = max(0, min(int(n.vram_gb), 512))
+    tops = max(0.0, min(float(n.tops), 100_000.0))
     nid = uuid.uuid4().hex[:12]
-    con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica) VALUES(?,?,?,?,?,?,?,?,?)&quot;,
-                (nid, n.nombre, n.vram_gb, tier(n.vram_gb), 1.0, n.ref, time.ctime(), n.tops, n.clave_publica))
-    con.commit()
-    return {&quot;id&quot;: nid, &quot;tier&quot;: tier(n.vram_gb), &quot;max_supply&quot;: MAX_SUPPLY, &quot;tops_registrados&quot;: n.tops,
+    with _escritura():   # AUDITORIA: antes escribia sin lock (500 con 2 GPUs)
+        if n.prueba_gpu:
+            con.execute(&quot;INSERT INTO gpu_pruebas(nodo_id,prueba,creado) VALUES(?,?,?)&quot;,
+                        (nid, n.prueba_gpu[:2000], time.ctime()))
+        con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado) VALUES(?,?,?,?,?,?,?,?,?,?)&quot;,
+                    (nid, n.nombre[:64], vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
+                     n.clave_publica[:128], 1 if n.tops_estimado else 0))
+    return {&quot;id&quot;: nid, &quot;tier&quot;: tier(vram), &quot;max_supply&quot;: MAX_SUPPLY, &quot;tops_registrados&quot;: tops,
             &quot;autenticado&quot;: bool(n.clave_publica)}
 
 @app.get(&quot;/nodos&quot;)
 def nodos():
     return [dict(r) for r in con.execute(&quot;SELECT * FROM nodos&quot;).fetchall()]
 
+@app.get(&quot;/modelos/{nombre}&quot;)
+def descargar_modelo(nombre: str):
+    &quot;&quot;&quot;Punto 5: el Core sirve el modelo de referencia; el minero lo baja si le falta.&quot;&quot;&quot;
+    seguro = Path(nombre).name
+    ruta = MODELOS_DIR / seguro
+    if not ruta.is_file():
+        raise HTTPException(404, &quot;modelo no disponible en el Core&quot;)
+    from fastapi.responses import FileResponse
+    return FileResponse(str(ruta), filename=seguro)
+
 @app.post(&quot;/tareas/crear&quot;)
 def crear_tarea(t: TareaIn, _ok: None = Depends(exigir_admin)):
     tid = uuid.uuid4().hex[:12]
-    # los params llevan seed -&gt; la tarea es reproducible/verificable
-    con.execute(&quot;INSERT INTO tareas(id,tipo,params,estado,creado) VALUES(?,?,?,?,?)&quot;,
-                (tid, t.tipo, json.dumps(t.params), &quot;queued&quot;, time.ctime()))
-    con.commit()
+    params = validar_params(t.tipo, dict(t.params or {}))
+    cola = t.cola if t.cola in (&quot;A&quot;, &quot;B&quot;, &quot;C&quot;) else &quot;B&quot;
+    with _escritura():
+        con.execute(&quot;INSERT INTO tareas(id,tipo,params,estado,creado,cola,campana,prioridad,vram_min) &quot;
+                    &quot;VALUES(?,?,?,?,?,?,?,?,?)&quot;,
+                    (tid, t.tipo, json.dumps(params), &quot;queued&quot;, time.ctime(),
+                     cola, t.campana[:64], float(t.prioridad), int(t.vram_min)))
     return {&quot;tarea_id&quot;: tid, &quot;estado&quot;: &quot;queued&quot;}
 
+# ============================================================
+#  AUDITORIA: recuperacion en hilo propio
+#  Antes vivia SOLO dentro de /tareas/pendiente: si nadie pedia trabajo,
+#  las tareas quedaban &#x27;ejecutando&#x27; para siempre (habia 41 asi, de 50 h).
+# ============================================================
+def liberar_atascadas(max_abandonos: int = MAX_ABANDONOS, forzar: bool = False):
+    &quot;&quot;&quot;Devuelve a la cola las tareas &#x27;ejecutando&#x27; cuyo asignado es viejo
+    (o nulo, de versiones anteriores). Devuelve (recuperadas, cerradas).&quot;&quot;&quot;
+    limite = time.time() - (0 if forzar else ABANDONO_SEG)
+    with _pago_lock:
+        try:
+            con.execute(&quot;BEGIN IMMEDIATE&quot;)
+        except Exception:
+            return (0, 0)
+        try:
+            cerradas = con.execute(
+                &quot;UPDATE tareas SET estado=&#x27;fallo&#x27;, fin=? &quot;
+                &quot;WHERE estado=&#x27;ejecutando&#x27; AND COALESCE(asignado,0) &lt; ? &quot;
+                &quot;AND COALESCE(intentos,0)+1 &gt;= ?&quot;, (time.ctime(), limite, max_abandonos))
+            recuperadas = con.execute(
+                &quot;UPDATE tareas SET estado=&#x27;queued&#x27;, nodo_id=NULL, asignado=NULL, &quot;
+                &quot;intentos=COALESCE(intentos,0)+1 &quot;
+                &quot;WHERE estado=&#x27;ejecutando&#x27; AND COALESCE(asignado,0) &lt; ?&quot;, (limite,))
+            con.commit()
+            return (recuperadas.rowcount, cerradas.rowcount)
+        except Exception:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            return (0, 0)
+
+def _bucle_recuperacion():
+    while True:
+        try:
+            r, c = liberar_atascadas()
+            if r or c:
+                print(f&quot;[KUKIA Core] recuperacion: {r} a la cola, {c} cerradas como fallo&quot;, flush=True)
+        except Exception:
+            pass
+        time.sleep(60)
+
+threading.Thread(target=_bucle_recuperacion, daemon=True).start()
+
+# AUDITORIA: se acepta GET (clientes antiguos) y POST, pero en los dos casos
+# hace falta la firma del nodo. Antes bastaba un id inventado.
 @app.get(&quot;/tareas/pendiente&quot;)
-def pendiente(nodo_id: str):
+@app.post(&quot;/tareas/pendiente&quot;)
+def pendiente(nodo_id: str, excluir: str = &quot;&quot;, colas: str = &quot;&quot;, ts: float = 0.0, firma: str = &quot;&quot;):
     &quot;&quot;&quot;Asignacion ATOMICA: SELECT + UPDATE en una transaccion con lock.
 
-    Dos workers simultaneos NO pueden llevarse la misma tarea: el segundo
-    espera al lock y re-verifica que siga en &#x27;queued&#x27; antes de asignarla.
+    AUDITORIA: exige firma Ed25519 del nodo sobre &quot;pendiente:&lt;nodo_id&gt;:&lt;ts&gt;&quot;
+    (ts en segundos, valido VENTANA_FIRMA). Antes cualquiera con un id
+    inventado se llevaba tareas de la cola y las dejaba colgadas.
+
+    POLITICA DE PRIORIDAD: cola A &gt; B &gt; C; dentro de cola, mayor prioridad
+    antes; a igual, mas antigua antes. Solo tareas con vram_min &lt;= VRAM del
+    nodo y que ese nodo no haya fallado ya. &#x27;excluir&#x27; = campanas separadas
+    por comas. SIN desalojo: lo que ya ejecuta no se interrumpe.
     &quot;&quot;&quot;
+    node = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
+    if not node:
+        raise HTTPException(404, &quot;nodo no registrado&quot;)
+    if PENDIENTE_EXIGIR_FIRMA:
+        pub = (node[&quot;clave_publica&quot;] or &quot;&quot;) if &quot;clave_publica&quot; in node.keys() else &quot;&quot;
+        if not pub:
+            raise HTTPException(401, &quot;nodo sin clave registrada (firma obligatoria)&quot;)
+        if not firma:
+            raise HTTPException(401, &quot;falta firma del nodo&quot;)
+        try:
+            ts_f = float(ts)
+        except Exception:
+            raise HTTPException(401, &quot;ts invalido&quot;)
+        if abs(time.time() - ts_f) &gt; VENTANA_FIRMA:
+            raise HTTPException(401, &quot;firma caducada (revisa el reloj)&quot;)
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                bytes.fromhex(firma), f&quot;pendiente:{nodo_id}:{int(ts_f)}&quot;.encode())
+        except Exception:
+            raise HTTPException(401, &quot;firma invalida&quot;)
+    try:
+        castigo = float(node[&quot;castigado_hasta&quot;] or 0.0)
+    except Exception:
+        castigo = 0.0
+    if castigo &gt; time.time():
+        raise HTTPException(429, f&quot;nodo castigado por resultados incorrectos durante &quot;
+                                 f&quot;{int(castigo - time.time())} s&quot;)
     with _pago_lock:
         try:
             con.execute(&quot;BEGIN IMMEDIATE&quot;)
         except Exception:
             raise HTTPException(503, &quot;Core ocupado, reintentar&quot;)
         try:
-            row = con.execute(&quot;SELECT id,tipo,params FROM tareas WHERE estado=&#x27;queued&#x27; &quot;
-                              &quot;ORDER BY creado LIMIT 1&quot;).fetchone()
+            # Recuperacion oportunista (el hilo lo hace igual cada 60 s)
+            con.execute(&quot;UPDATE tareas SET estado=&#x27;queued&#x27;, nodo_id=NULL, asignado=NULL, &quot;
+                        &quot;intentos=COALESCE(intentos,0)+1 &quot;
+                        &quot;WHERE estado=&#x27;ejecutando&#x27; AND COALESCE(asignado,0) &lt; ?&quot;,
+                        (time.time() - ABANDONO_SEG,))
+            vram = int(node[&quot;vram_gb&quot;] or 0)
+            excl = [e.strip()[:64] for e in (excluir or &quot;&quot;).split(&quot;,&quot;) if e.strip()]
+            _q = (&quot;SELECT id,tipo,params,cola,campana FROM tareas WHERE estado=&#x27;queued&#x27; &quot;
+                  &quot;AND COALESCE(vram_min,0) &lt;= ? &quot;
+                  &quot;AND COALESCE(nodos_intento,&#x27;&#x27;) NOT LIKE ? &quot;)
+            _args = [vram, f&quot;%{nodo_id}%&quot;]
+            if excl:
+                _q += &quot;AND COALESCE(campana,&#x27;&#x27;) NOT IN (%s) &quot; % &quot;,&quot;.join(&quot;?&quot; * len(excl))
+                _args += excl
+            _colas = [c.strip().upper() for c in (colas or &quot;&quot;).split(&quot;,&quot;)
+                      if c.strip().upper() in (&quot;A&quot;, &quot;B&quot;, &quot;C&quot;)]
+            if _colas:
+                _q += &quot;AND COALESCE(cola,&#x27;B&#x27;) IN (%s) &quot; % &quot;,&quot;.join(&quot;?&quot; * len(_colas))
+                _args += _colas
+            _q += (&quot;ORDER BY CASE COALESCE(cola,&#x27;B&#x27;) WHEN &#x27;A&#x27; THEN 0 WHEN &#x27;B&#x27; THEN 1 ELSE 2 END, &quot;
+                   &quot;COALESCE(prioridad,0) DESC, creado LIMIT 1&quot;)
+            row = con.execute(_q, _args).fetchone()
             if not row:
                 con.execute(&quot;ROLLBACK&quot;)
                 return {&quot;tarea&quot;: None}
-            # Re-verificar DENTRO del lock que nadie la cogio antes
             chk = con.execute(&quot;SELECT estado FROM tareas WHERE id=?&quot;, (row[&quot;id&quot;],)).fetchone()
             if not chk or chk[&quot;estado&quot;] != &quot;queued&quot;:
                 con.execute(&quot;ROLLBACK&quot;)
                 return {&quot;tarea&quot;: None}
-            con.execute(&quot;UPDATE tareas SET estado=&#x27;ejecutando&#x27;, nodo_id=? WHERE id=?&quot;, (nodo_id, row[&quot;id&quot;]))
+            con.execute(&quot;UPDATE tareas SET estado=&#x27;ejecutando&#x27;, nodo_id=?, asignado=? WHERE id=?&quot;,
+                        (nodo_id, time.time(), row[&quot;id&quot;]))
+            try:
+                _cola = row[&quot;cola&quot;] or &quot;B&quot;
+            except Exception:
+                _cola = &quot;B&quot;
+            con.execute(&quot;INSERT INTO planificador_log(tarea_id,nodo_id,cola,motivo,ts) VALUES(?,?,?,?,?)&quot;,
+                        (row[&quot;id&quot;], nodo_id, _cola,
+                         f&quot;A&gt;B&gt;C,prioridad,vram_min_ok(vram={vram},excl={len(excl)})&quot;, time.ctime()))
             con.commit()
             return {&quot;tarea&quot;: {&quot;id&quot;: row[&quot;id&quot;], &quot;tipo&quot;: row[&quot;tipo&quot;], &quot;params&quot;: json.loads(row[&quot;params&quot;])}}
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             try:
                 con.execute(&quot;ROLLBACK&quot;)
             except Exception:
                 pass
-            raise HTTPException(500, f&quot;error asignando tarea: {e}&quot;)
+            raise HTTPException(500, &quot;error interno asignando tarea&quot;)
 
 @app.post(&quot;/tareas/resultado&quot;)
-def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;, firma: str = &quot;&quot;):
+def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;, firma: str = &quot;&quot;,
+              device: str = &quot;&quot;, duracion_ms: float = 0.0, telemetria: str = &quot;&quot;):
     &quot;&quot;&quot;El Core recalcula la tarea y compara el RESULTADO EXACTO (trustless).
 
-    AUTENTICACION: si el nodo registro clave_publica, el envio debe traer
-    firma Ed25519 de &quot;tid:metrica&quot;. Sin firma valida -&gt; 401. Asi nadie puede
-    suplantar a otro nodo enviando su nodo_id.
+    AUDITORIA: el orden importa. ANTES se recalculaba el resultado y DESPUES
+    se miraba la firma: cualquiera (sin firma) podia quemar la CPU del Core
+    con tareas pesadas. Ahora: 1) existe la tarea, 2) firma del nodo,
+    3) recien entonces se recalcula, 4) transaccion de pago.
+
+    Un resultado incorrecto ya NO condena la tarea a la primera: se cuenta
+    el intento, ese nodo no la vuelve a recibir, se le castiga (reputacion,
+    penalizacion en KIA y unos minutos sin tareas) y solo se cierra como
+    fallo tras MAX_FALLOS intentos distintos.
     &quot;&quot;&quot;
-    params = None
-    tipo = None
-    # 1. Lectura inicial (sin lock: solo para validar existencia y tipo)
+    # 1. Existencia y tipo (lectura sin lock)
     task = con.execute(&quot;SELECT * FROM tareas WHERE id=?&quot;, (tid,)).fetchone()
     if not task:
         raise HTTPException(404, &quot;tarea no encontrada&quot;)
     params = json.loads(task[&quot;params&quot;])
     tipo = task[&quot;tipo&quot;]
-    esperado = computar_tarea(tipo, params)
-    if esperado is None:
-        raise HTTPException(400, &quot;tipo de tarea no soportado&quot;)
-    ok = str(metrica).strip() == str(esperado).strip()
 
-    # 2. TRANSACCION ATOMICA con bloqueo de escritura inmediato.
-    # Lock de hilos (la conexion SQLite es compartida) + BEGIN IMMEDIATE
-    # (bloqueo a nivel de fichero BD contra otros procesos).
+    # 2. AUTENTICACION PRIMERO (vale para correctos E incorrectos)
+    node = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
+    if not node:
+        raise HTTPException(404, &quot;nodo no registrado&quot;)
+    pub = (node[&quot;clave_publica&quot;] or &quot;&quot;) if &quot;clave_publica&quot; in node.keys() else &quot;&quot;
+    if EXIGIR_FIRMA_GLOBAL and not pub:
+        raise HTTPException(401, &quot;nodo sin clave registrada (firma obligatoria)&quot;)
+    if pub:
+        if not firma:
+            raise HTTPException(401, &quot;falta firma del nodo (suplantacion bloqueada)&quot;)
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                bytes.fromhex(firma), f&quot;{tid}:{metrica}&quot;.encode())
+        except Exception:
+            raise HTTPException(401, &quot;firma invalida (suplantacion bloqueada)&quot;)
+    # Rechazo temprano si la tarea no es pagable (evita trabajo inutil)
+    if task[&quot;estado&quot;] == &quot;ok&quot;:
+        raise HTTPException(409, &quot;tarea ya pagada (doble pago bloqueado)&quot;)
+    if task[&quot;estado&quot;] == &quot;fallo&quot;:
+        raise HTTPException(409, &quot;tarea ya cerrada con fallo (no reintentable)&quot;)
+    if task[&quot;estado&quot;] != &quot;ejecutando&quot;:
+        raise HTTPException(409, f&quot;tarea en estado &#x27;{task[&#x27;estado&#x27;]}&#x27;, no pagable&quot;)
+    if task[&quot;nodo_id&quot;] and task[&quot;nodo_id&quot;] != nodo_id:
+        raise HTTPException(409, &quot;tarea asignada a otro nodo&quot;)
+
+    # 3. Verificacion (ya autenticado)
+    esperado = computar_tarea(tipo, params)
+    _tol = (tipo in (&quot;embeddings&quot;, &quot;lote_embeddings&quot;) and ONNXCPU is not None) or tipo == &quot;difusion_calor&quot;
+    if esperado is None and not _tol:
+        raise HTTPException(400, &quot;tipo de tarea no soportado&quot;)
+    if tipo in (&quot;embeddings&quot;, &quot;lote_embeddings&quot;) and ONNXCPU is not None:
+        ok = _verificar_embeddings(tipo, params, metrica)
+    elif tipo == &quot;difusion_calor&quot;:
+        ok = _verificar_difusion(params, metrica)
+    else:
+        ok = str(metrica).strip() == str(esperado).strip()
+
+    # 4. TRANSACCION ATOMICA con bloqueo de escritura inmediato.
     with _pago_lock:
         try:
             con.execute(&quot;BEGIN IMMEDIATE&quot;)
         except Exception:
             raise HTTPException(503, &quot;Core ocupado, reintentar&quot;)
         try:
-            # Releer DENTRO del lock (el estado pudo cambiar entre 1 y 2)
             task2 = con.execute(&quot;SELECT * FROM tareas WHERE id=?&quot;, (tid,)).fetchone()
             if task2[&quot;estado&quot;] == &quot;ok&quot;:
                 con.execute(&quot;ROLLBACK&quot;)
@@ -328,63 +886,85 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                 con.execute(&quot;ROLLBACK&quot;)
                 raise HTTPException(409, &quot;tarea asignada a otro nodo&quot;)
 
-            # AUTENTICACION PRIMERO (vale para correctos E incorrectos):
-            # nadie sin firma puede cerrar la tarea de otro (ni como fallo).
-            node = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
-            if not node:
-                con.execute(&quot;ROLLBACK&quot;)
-                raise HTTPException(404, &quot;nodo no registrado&quot;)
-            pub = None
-            try:
-                pub = node[&quot;clave_publica&quot;]
-            except Exception:
-                pub = None
-            # Politica de migracion: si EXIGIR_FIRMA_GLOBAL, sin clave no hay cobro.
-            if EXIGIR_FIRMA_GLOBAL and not pub:
-                con.execute(&quot;ROLLBACK&quot;)
-                raise HTTPException(401, &quot;nodo sin clave registrada (firma obligatoria)&quot;)
-            if pub:
-                if not firma:
-                    con.execute(&quot;ROLLBACK&quot;)
-                    raise HTTPException(401, &quot;falta firma del nodo (suplantacion bloqueada)&quot;)
-                try:
-                    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-                    Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
-                        bytes.fromhex(firma), f&quot;{tid}:{metrica}&quot;.encode())
-                except Exception:
-                    con.execute(&quot;ROLLBACK&quot;)
-                    raise HTTPException(401, &quot;firma invalida (suplantacion bloqueada)&quot;)
-
             kuki = 0.0
             info_pago = {}
             if ok:
-                # Tope calculado DENTRO de la transaccion (nadie mas puede mover el supply)
                 kuki, info_pago = recompensa_pago(node[&quot;tier&quot;])
                 con.execute(&quot;UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) &quot;
                             &quot;WHERE id=?&quot;, (nodo_id,))
                 h = hashlib.sha256(f&quot;{tid}:{nodo_id}:{metrica}&quot;.encode()).hexdigest()
-                con.execute(&quot;UPDATE tareas SET estado=&#x27;ok&#x27;, hash=?, metrica=?, fin=?, verificado=1 WHERE id=?&quot;,
-                            (h, metrica, time.ctime(), tid))
-                con.execute(&quot;INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)&quot;,
-                            (tid, nodo_id, kuki, &quot;trabajo verificado&quot;, time.ctime()))
+                con.execute(&quot;UPDATE tareas SET estado=&#x27;ok&#x27;, hash=?, metrica=?, fin=?, verificado=1, device=?, duracion_ms=? WHERE id=?&quot;,
+                            (h, metrica[:2000], time.ctime(), str(device)[:16], float(duracion_ms or 0.0), tid))
+                try:
+                    con.execute(&quot;CREATE TABLE IF NOT EXISTS gpu_telemetria(id INTEGER PRIMARY KEY AUTOINCREMENT, &quot;
+                                &quot;nodo_id TEXT, device TEXT, metricas TEXT, ts TEXT, origen TEXT)&quot;)
+                    if telemetria:
+                        con.execute(&quot;INSERT INTO gpu_telemetria(nodo_id,device,metricas,ts,origen) VALUES(?,?,?,?,?)&quot;,
+                                    (nodo_id, str(device)[:16], telemetria[:2000], time.ctime(), &quot;worker&quot;))
+                except Exception:
+                    pass
+                # Contador historico: sobrevive al archivado de tareas viejas.
+                con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;tareas_ok_total&#x27;,1) &quot;
+                            &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+1&quot;)
+                _asiento(tid, nodo_id, kuki, &quot;trabajo verificado&quot;)
             else:
-                con.execute(&quot;UPDATE tareas SET estado=&#x27;fallo&#x27;, fin=? WHERE id=?&quot;, (time.ctime(), tid))
-                con.execute(&quot;INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts) VALUES(?,?,?,?,?)&quot;,
-                            (tid, nodo_id, 0.0, &quot;resultado incorrecto (recalculado por el Core)&quot;, time.ctime()))
+                # AUDITORIA: castigo + reintento en vez de cerrar la tarea
+                intentos = int(task2[&quot;intentos&quot;] or 0) + 1
+                lista = (task2[&quot;nodos_intento&quot;] or &quot;&quot;)
+                if nodo_id not in [x for x in lista.split(&quot;,&quot;) if x]:
+                    lista = (lista + &quot;,&quot; + nodo_id).strip(&quot;,&quot;)
+                # penalizacion economica, sin dejar saldo negativo
+                saldo = float(con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?&quot;,
+                                          (nodo_id,)).fetchone()[&quot;s&quot;] or 0.0)
+                castigo_kia = min(PENALIZACION, max(0.0, saldo))
+                if castigo_kia &gt; 0:
+                    _asiento(tid, nodo_id, -castigo_kia, &quot;penalizacion por resultado incorrecto&quot;)
+                con.execute(&quot;UPDATE nodos SET reputacion=max(0,reputacion-0.5), &quot;
+                            &quot;castigado_hasta=?, fallos=COALESCE(fallos,0)+1 WHERE id=?&quot;,
+                            (time.time() + CASTIGO_SEG, nodo_id))
+                if intentos &gt;= MAX_FALLOS:
+                    con.execute(&quot;UPDATE tareas SET estado=&#x27;fallo&#x27;, fin=?, intentos=?, nodos_intento=? WHERE id=?&quot;,
+                                (time.ctime(), intentos, lista, tid))
+                else:
+                    con.execute(&quot;UPDATE tareas SET estado=&#x27;queued&#x27;, nodo_id=NULL, asignado=NULL, &quot;
+                                &quot;intentos=?, nodos_intento=? WHERE id=?&quot;, (intentos, lista, tid))
+                _asiento(tid, nodo_id, 0.0, &quot;resultado incorrecto (recalculado por el Core)&quot;)
             con.commit()
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             try:
                 con.execute(&quot;ROLLBACK&quot;)
             except Exception:
                 pass
-            raise HTTPException(500, f&quot;error interno en el pago: {e}&quot;)
+            raise HTTPException(500, &quot;error interno en el pago&quot;)
     return {&quot;ok&quot;: ok, &quot;kuki&quot;: kuki, &quot;esperado&quot;: esperado, &quot;pago&quot;: info_pago}
 
 @app.get(&quot;/ledger&quot;)
 def ledger():
     return [dict(r) for r in con.execute(&quot;SELECT * FROM ledger ORDER BY id DESC LIMIT 200&quot;).fetchall()]
+
+@app.get(&quot;/ledger/verificar&quot;)
+def verificar_ledger():
+    &quot;&quot;&quot;AUDITORIA: comprueba la cadena de hashes del ledger.
+
+    Devuelve los ids que no cuadran (alterados a mano en el .db). La cadena
+    empieza en el primer asiento que tiene hash (los anteriores, de versiones
+    sin encadenar, se ignoran).&quot;&quot;&quot;
+    prev = &quot;&quot;
+    n_hash = 0
+    alterados = []
+    for r in con.execute(&quot;SELECT id,tarea_id,nodo_id,kuki,motivo,ts,hash_prev,hash FROM ledger ORDER BY id&quot;).fetchall():
+        if not r[&quot;hash&quot;]:
+            continue
+        base = f&quot;{r[&#x27;tarea_id&#x27;]}|{r[&#x27;nodo_id&#x27;]}|{r[&#x27;kuki&#x27;]}|{r[&#x27;motivo&#x27;]}|{r[&#x27;ts&#x27;]}|{r[&#x27;hash_prev&#x27;] or &#x27;&#x27;}&quot;
+        if hashlib.sha256(base.encode()).hexdigest() != r[&quot;hash&quot;] or (r[&quot;hash_prev&quot;] or &quot;&quot;) != prev:
+            alterados.append(r[&quot;id&quot;])
+        prev = r[&quot;hash&quot;]
+        n_hash += 1
+    total = con.execute(&quot;SELECT COUNT(*) c FROM ledger&quot;).fetchone()[&quot;c&quot;]
+    return {&quot;asientos&quot;: total, &quot;encadenados&quot;: n_hash, &quot;cadena_ok&quot;: not alterados,
+            &quot;ids_alterados&quot;: alterados[:20]}
 
 # ============================================================
 #  DIFICULTAD ADAPTATIVA (potencia de LA RED KUKIA, no mundial)
@@ -407,8 +987,8 @@ def dificultad() -&gt; dict:
         &quot;tops_red&quot;: round(tops, 1),
         &quot;tops_referencia&quot;: REFERENCIA_TOPS,
         &quot;factor&quot;: round(factor, 3),
-        &quot;matriz_n&quot;: int(BASE_MATRIX_N * factor),
-        &quot;inferencia_n&quot;: int(BASE_INFER_N * factor),
+        &quot;matriz_n&quot;: min(LIMITE_N, int(BASE_MATRIX_N * factor)),
+        &quot;inferencia_n&quot;: min(LIMITE_N, int(BASE_INFER_N * factor)),
     }
 
 def supply_emitido() -&gt; float:
@@ -420,15 +1000,31 @@ def _epoch(ts: str) -&gt; float:
     except Exception:
         return time.time()
 
+def _meta_float(clave: str, defecto: float = 0.0) -&gt; float:
+    &quot;&quot;&quot;Lee un contador historico de &#x27;meta&#x27; (0/-1 si no existe o falla).&quot;&quot;&quot;
+    try:
+        row = con.execute(&quot;SELECT valor FROM meta WHERE clave=?&quot;, (clave,)).fetchone()
+        return float(row[&quot;valor&quot;]) if row else defecto
+    except Exception:
+        return defecto
+
 def tasa_tareas_seg() -&gt; float:
-    &quot;&quot;&quot;Ritmo medio real de la red (tareas OK / segundo). Minimo: 1 tarea/dia.&quot;&quot;&quot;
-    n = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;ok&#x27;&quot;).fetchone()[&quot;c&quot;]
-    if n == 0:
+    &quot;&quot;&quot;Ritmo medio real de la red (tareas OK / segundo). Minimo: 1 tarea/dia.
+
+    ARCHIVADO: usa el contador historico de &#x27;meta&#x27;, no las filas que queden en
+    &#x27;tareas&#x27;. Si contara filas, borrar tareas viejas hundiria el ritmo medido y
+    el premio por tarea se dispararia al techo (emitiria demasiado deprisa).
+    &quot;&quot;&quot;
+    n = _meta_float(&quot;tareas_ok_total&quot;, -1.0)
+    if n &lt; 0:  # base anterior al archivado: degradar a conteo real
+        n = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;ok&#x27;&quot;).fetchone()[&quot;c&quot;]
+    if n &lt;= 0:
         return 1.0 / 86400.0
-    primera = con.execute(&quot;SELECT MIN(fin) m FROM tareas WHERE estado=&#x27;ok&#x27; AND fin IS NOT NULL&quot;).fetchone()[&quot;m&quot;]
-    if not primera:
-        return 1.0 / 86400.0
-    elapsed = max(3600.0, time.time() - _epoch(primera))
+    primera = _meta_float(&quot;primera_ok_epoch&quot;, 0.0)
+    if primera &lt;= 0:
+        m = con.execute(&quot;SELECT MIN(fin) m FROM tareas WHERE estado=&#x27;ok&#x27; AND fin IS NOT NULL&quot;).fetchone()[&quot;m&quot;]
+        primera = _epoch(m) if m else time.time()
+    elapsed = max(3600.0, time.time() - primera)
     return max(1.0 / 86400.0, n / elapsed)
 
 def recompensa_pago(tier: float) -&gt; tuple:
@@ -458,37 +1054,193 @@ def stats():
     sum = con.execute(&quot;SELECT COALESCE(SUM(kuki),0) as s FROM ledger&quot;).fetchone()[&quot;s&quot;]
     sum = min(sum, MAX_SUPPLY)
     pago1, info1 = recompensa_pago(1.0)
+    total_ok = int(_meta_float(&quot;tareas_ok_total&quot;, -1.0))
+    if total_ok &lt; 0:
+        total_ok = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;ok&#x27;&quot;).fetchone()[&quot;c&quot;]
+    en_tabla = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;ok&#x27;&quot;).fetchone()[&quot;c&quot;]
     return {
         &quot;supply_emitido&quot;: sum,
         &quot;max_supply&quot;: MAX_SUPPLY,
         &quot;nodos&quot;: con.execute(&quot;SELECT COUNT(*) c FROM nodos&quot;).fetchone()[&quot;c&quot;],
-        &quot;tareas_ok&quot;: con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;ok&#x27;&quot;).fetchone()[&quot;c&quot;],
+        # Historico real (sobrevive al archivado); &#x27;en_tabla&#x27; son las que quedan
+        # guardadas por si se quiere auditar el detalle.
+        &quot;tareas_ok&quot;: total_ok,
+        &quot;tareas_ok_en_tabla&quot;: en_tabla,
+        &quot;tareas_archivadas&quot;: int(_meta_float(&quot;tareas_archivadas&quot;, 0.0)),
         &quot;tareas_pend&quot;: con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;queued&#x27;&quot;).fetchone()[&quot;c&quot;],
         &quot;registros&quot;: con.execute(&quot;SELECT COUNT(*) c FROM registros&quot;).fetchone()[&quot;c&quot;],
         &quot;emision&quot;: emission_info(),
         &quot;dificultad&quot;: dificultad(),
         &quot;recompensa_base_actual&quot;: pago1,
         &quot;detalle_pago&quot;: info1,
+        &quot;auto_tareas&quot;: {&quot;activo&quot;: AUTO_ACTIVO, &quot;objetivo_cola&quot;: AUTO_COLA_OBJETIVO,
+                        &quot;intervalo_seg&quot;: AUTO_INTERVALO},
+        &quot;archivado&quot;: {&quot;activo&quot;: ARCHIVAR_ACTIVO, &quot;retencion&quot;: RETENCION_TAREAS,
+                      &quot;lote&quot;: ARCHIVAR_LOTE, &quot;intervalo_seg&quot;: ARCHIVAR_INTERVALO},
     }
 
 @app.post(&quot;/tareas/crear_auto&quot;)
 def crear_auto(tipo: str = &quot;matriz&quot;, _ok: None = Depends(exigir_admin)):
     &quot;&quot;&quot;Crea una tarea con la dificultad ACTUAL de la red (tamano segun TOPS).&quot;&quot;&quot;
-    import secrets as _secrets
     dif = dificultad()
-    if tipo == &quot;matriz&quot;:
-        params = {&quot;n&quot;: dif[&quot;matriz_n&quot;], &quot;seed&quot;: _secrets.randbelow(100000)}
-    elif tipo == &quot;inferencia&quot;:
-        params = {&quot;n&quot;: dif[&quot;inferencia_n&quot;], &quot;seed&quot;: _secrets.randbelow(100000)}
-    elif tipo == &quot;checksum&quot;:
-        params = {&quot;data&quot;: &quot;kukia-&quot; + _secrets.token_hex(8)}
-    else:
-        raise HTTPException(400, &quot;tipo no soportado (matriz|inferencia|checksum)&quot;)
-    tid = uuid.uuid4().hex[:12]
-    con.execute(&quot;INSERT INTO tareas(id,tipo,params,estado,creado) VALUES(?,?,?,?,?)&quot;,
-                (tid, tipo, json.dumps(params), &quot;queued&quot;, time.ctime()))
-    con.commit()
+    tid = crear_tarea_auto(tipo)
     return {&quot;tarea_id&quot;: tid, &quot;estado&quot;: &quot;queued&quot;, &quot;dificultad&quot;: dif}
+
+@app.post(&quot;/admin/liberar_atascadas&quot;)
+def admin_liberar(_ok: None = Depends(exigir_admin)):
+    &quot;&quot;&quot;AUDITORIA: libera YA las tareas &#x27;ejecutando&#x27; colgadas (sin esperar 30 min).&quot;&quot;&quot;
+    forzar = True
+    r, c = liberar_atascadas(forzar=True)
+    return {&quot;devueltas_a_la_cola&quot;: r, &quot;cerradas_como_fallo&quot;: c}
+
+# ============================================================
+#  AUDITORIA 2026-10-18: generador automatico de trabajo
+#  El minero no inventa tareas: solo pide trabajo. Si la cola se vacia,
+#  la red se queda parada (paso de verdad: se quedo a 0 y el minero ocioso).
+#  Este bucle mantiene la cola llena con la dificultad actual de la red.
+#  Se apaga con KUKIA_AUTO_TAREAS=0 o desde /admin/auto_tareas.
+# ============================================================
+AUTO_ACTIVO = os.environ.get(&quot;KUKIA_AUTO_TAREAS&quot;, &quot;1&quot;) != &quot;0&quot;
+# Un colchon de 120 tareas con lote de 40 cada 10 s: el minero va a ~20
+# tareas/min, asi que nunca se queda sin trabajo (con 40/20/15 se vaciaba
+# entre pasadas y las GPUs esperaban).
+AUTO_COLA_OBJETIVO = max(0, int(os.environ.get(&quot;KUKIA_AUTO_COLA&quot;, &quot;120&quot;)))
+AUTO_INTERVALO = max(3.0, float(os.environ.get(&quot;KUKIA_AUTO_SEG&quot;, &quot;5&quot;)))
+AUTO_POR_PASADA = max(1, int(os.environ.get(&quot;KUKIA_AUTO_LOTE&quot;, &quot;40&quot;)))
+
+# Trabajo variado (todas las tareas pagan lo mismo, el pago lo fija la emision):
+# matriz e inferencia (aritmetica determinista), checksum y difusion de calor.
+MEZCLA_AUTO = (&quot;matriz&quot;, &quot;matriz&quot;, &quot;matriz&quot;, &quot;checksum&quot;, &quot;checksum&quot;,
+               &quot;checksum&quot;, &quot;difusion_calor&quot;, &quot;difusion_calor&quot;, &quot;inferencia&quot;)
+
+def params_auto(tipo: str) -&gt; dict:
+    &quot;&quot;&quot;Parametros de una tarea automatica, con el tamano que toca a la red.&quot;&quot;&quot;
+    dif = dificultad()
+    rnd = secrets.randbelow
+    if tipo == &quot;matriz&quot;:
+        return {&quot;n&quot;: max(64, min(LIMITE_N, int(dif[&quot;matriz_n&quot;]))), &quot;seed&quot;: rnd(1_000_000)}
+    if tipo == &quot;inferencia&quot;:
+        return {&quot;n&quot;: max(32, min(LIMITE_N, int(dif[&quot;inferencia_n&quot;]))), &quot;seed&quot;: rnd(1_000_000)}
+    if tipo == &quot;checksum&quot;:
+        return {&quot;data&quot;: &quot;kukia-&quot; + secrets.token_hex(12)}
+    if tipo == &quot;difusion_calor&quot;:
+        # tamano moderado: el minero tarda ~0,5 s en GPU y el Core lo verifica
+        # en mucho menos (antes una tarea n=2048/pasos=4000 costaba 7,4 min).
+        return {&quot;n&quot;: 1024, &quot;pasos&quot;: 1500, &quot;seed&quot;: rnd(1_000_000), &quot;tolerancia_rel&quot;: 1e-9}
+    raise HTTPException(400, &quot;tipo no soportado&quot;)
+
+def crear_tarea_auto(tipo: str = None, cola: str = &quot;C&quot;, prioridad: float = 0.0) -&gt; str:
+    &quot;&quot;&quot;Crea una tarea de trabajo (misma validacion que /tareas/crear).&quot;&quot;&quot;
+    if tipo is None:
+        tipo = MEZCLA_AUTO[secrets.randbelow(len(MEZCLA_AUTO))]
+    params = validar_params(tipo, params_auto(tipo))
+    tid = uuid.uuid4().hex[:12]
+    with _escritura():
+        con.execute(&quot;INSERT INTO tareas(id,tipo,params,estado,creado,cola,campana,prioridad,vram_min) &quot;
+                    &quot;VALUES(?,?,?,?,?,?,?,?,?)&quot;,
+                    (tid, tipo, json.dumps(params), &quot;queued&quot;, time.ctime(), cola, &quot;auto&quot;,
+                     float(prioridad), 0))
+    return tid
+
+def _bucle_auto_tareas():
+    &quot;&quot;&quot;Mantiene la cola con trabajo para que el minero nunca se quede parado.&quot;&quot;&quot;
+    while True:
+        try:
+            if AUTO_ACTIVO and AUTO_COLA_OBJETIVO &gt; 0:
+                en_cola = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;queued&#x27;&quot;).fetchone()[&quot;c&quot;]
+                faltan = AUTO_COLA_OBJETIVO - en_cola
+                if faltan &gt; 0:
+                    for _ in range(min(faltan, AUTO_POR_PASADA)):
+                        crear_tarea_auto()
+                    print(f&quot;[KUKIA Core] auto-tareas: cola {en_cola} -&gt; {en_cola + min(faltan, AUTO_POR_PASADA)}&quot;, flush=True)
+        except Exception as e:
+            print(f&quot;[KUKIA Core] auto-tareas error: {e}&quot;, flush=True)
+        time.sleep(AUTO_INTERVALO)
+
+threading.Thread(target=_bucle_auto_tareas, daemon=True).start()
+
+# ============================================================
+#  ARCHIVADO DE TAREAS VIEJAS
+#  A pleno ritmo (~380 tareas/min) la tabla &#x27;tareas&#x27; mete unos 500.000
+#  registros al dia (~400 MB/dia). Se borran SOLO las terminadas (ok/fallo)
+#  mas antiguas, dejando las ultimas KUKIA_RETENCION_TAREAS para auditar.
+#  El ledger (donde estan los saldos) NO se toca, y los contadores de &#x27;meta&#x27;
+#  conservan el historico. SQLite reutiliza las paginas libres, asi que el
+#  fichero deja de crecer en cuanto alcanza el tamano de la ventana.
+# ============================================================
+ARCHIVAR_ACTIVO = os.environ.get(&quot;KUKIA_ARCHIVAR&quot;, &quot;1&quot;) != &quot;0&quot;
+RETENCION_TAREAS = max(1000, int(os.environ.get(&quot;KUKIA_RETENCION_TAREAS&quot;, &quot;200000&quot;)))
+ARCHIVAR_LOTE = max(100, int(os.environ.get(&quot;KUKIA_ARCHIVAR_LOTE&quot;, &quot;20000&quot;)))
+ARCHIVAR_INTERVALO = max(30.0, float(os.environ.get(&quot;KUKIA_ARCHIVAR_SEG&quot;, &quot;120&quot;)))
+
+def archivar_tareas(retencion: int = None, lote: int = None) -&gt; dict:
+    &quot;&quot;&quot;Borra tareas terminadas antiguas, en lotes, bajo el lock de escritura.&quot;&quot;&quot;
+    ret = max(1000, int(retencion or RETENCION_TAREAS))
+    bat = max(100, int(lote or ARCHIVAR_LOTE))
+    corte = con.execute(&quot;SELECT rowid r FROM tareas WHERE estado IN (&#x27;ok&#x27;,&#x27;fallo&#x27;) &quot;
+                        &quot;ORDER BY rowid DESC LIMIT 1 OFFSET ?&quot;, (ret - 1,)).fetchone()
+    if not corte:
+        return {&quot;borradas&quot;: 0, &quot;retencion&quot;: ret, &quot;lote&quot;: bat}
+    borradas = 0
+    with _pago_lock:
+        try:
+            con.execute(&quot;BEGIN IMMEDIATE&quot;)
+        except Exception:
+            return {&quot;borradas&quot;: 0, &quot;retencion&quot;: ret, &quot;lote&quot;: bat,
+                    &quot;error&quot;: &quot;base ocupada, se reintenta&quot;}
+        try:
+            cur = con.execute(&quot;DELETE FROM tareas WHERE rowid IN (SELECT rowid FROM tareas &quot;
+                              &quot;WHERE rowid &lt; ? AND estado IN (&#x27;ok&#x27;,&#x27;fallo&#x27;) LIMIT ?)&quot;,
+                              (corte[&quot;r&quot;], bat))
+            borradas = cur.rowcount or 0
+            if borradas:
+                con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;tareas_archivadas&#x27;,?) &quot;
+                            &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+excluded.valor&quot;, (float(borradas),))
+            con.commit()
+        except Exception:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            raise
+    return {&quot;borradas&quot;: borradas, &quot;retencion&quot;: ret, &quot;lote&quot;: bat,
+            &quot;archivadas_total&quot;: int(_meta_float(&quot;tareas_archivadas&quot;, 0.0))}
+
+def _bucle_archivado():
+    while True:
+        try:
+            if ARCHIVAR_ACTIVO:
+                for _ in range(20):  # vaciar el atraso sin esperar a la siguiente vuelta
+                    r = archivar_tareas()
+                    if r.get(&quot;borradas&quot;):
+                        print(f&quot;[KUKIA Core] archivado: {r[&#x27;borradas&#x27;]} tareas viejas &quot;
+                              f&quot;(total {r[&#x27;archivadas_total&#x27;]})&quot;, flush=True)
+                    if r.get(&quot;borradas&quot;, 0) &lt; ARCHIVAR_LOTE or r.get(&quot;error&quot;):
+                        break
+                    time.sleep(1)
+        except Exception as e:
+            print(f&quot;[KUKIA Core] archivado error: {e}&quot;, flush=True)
+        time.sleep(ARCHIVAR_INTERVALO)
+
+threading.Thread(target=_bucle_archivado, daemon=True).start()
+
+@app.post(&quot;/admin/archivar&quot;)
+def admin_archivar(retencion: int = -1, lote: int = -1, _ok: None = Depends(exigir_admin)):
+    &quot;&quot;&quot;Fuerza una pasada de archivado (sin esperar al bucle).&quot;&quot;&quot;
+    return archivar_tareas(None if retencion &lt; 0 else retencion,
+                           None if lote &lt; 0 else lote)
+
+@app.post(&quot;/admin/auto_tareas&quot;)
+def admin_auto_tareas(activo: int = -1, objetivo: int = -1, _ok: None = Depends(exigir_admin)):
+    &quot;&quot;&quot;Enciende/apaga el generador de trabajo y fija el tamano de la cola.
+    activo=1/0 y objetivo=N (tareas en cola que intenta mantener).&quot;&quot;&quot;
+    global AUTO_ACTIVO, AUTO_COLA_OBJETIVO
+    if activo &gt;= 0:
+        AUTO_ACTIVO = bool(activo)
+    if objetivo &gt;= 0:
+        AUTO_COLA_OBJETIVO = int(objetivo)
+    return {&quot;activo&quot;: AUTO_ACTIVO, &quot;objetivo_cola&quot;: AUTO_COLA_OBJETIVO,
+            &quot;intervalo_seg&quot;: AUTO_INTERVALO, &quot;lote&quot;: AUTO_POR_PASADA}
 
 class RegistroIn(BaseModel):
     nombre: str
@@ -499,12 +1251,18 @@ class RegistroIn(BaseModel):
     ref: str = &quot;&quot;
 
 @app.post(&quot;/registro&quot;)
-def registro(r: RegistroIn):
-    &quot;&quot;&quot;Registro publico de la lista de espera (desde la web).&quot;&quot;&quot;
-    con.execute(&quot;INSERT INTO registros(nombre,email,gpu,tops,ceder,ip,ts) VALUES(?,?,?,?,?,?,?)&quot;,
-                (r.nombre, r.email, r.gpu, r.tops, r.ceder_potencia, r.ref, time.ctime()))
-    con.commit()
-    return {&quot;ok&quot;: True, &quot;mensaje&quot;: &quot;Registrado. Te avisaremos al lanzamiento.&quot;, &quot;posicion&quot;: con.execute(&quot;SELECT COUNT(*) c FROM registros&quot;).fetchone()[&quot;c&quot;]}
+def registro(r: RegistroIn, request: Request):
+    &quot;&quot;&quot;Registro publico de la lista de espera (desde la web).
+
+    AUDITORIA: antes el &#x27;ref&#x27; se guardaba en la columna &#x27;ip&#x27; y la IP real no
+    se guardaba nunca. Ahora cada dato va a su columna.&quot;&quot;&quot;
+    ip = request.client.host if request.client else &quot;&quot;
+    with _escritura():
+        con.execute(&quot;INSERT INTO registros(nombre,email,gpu,tops,ceder,ref,ip,ts) VALUES(?,?,?,?,?,?,?,?)&quot;,
+                    (r.nombre[:120], r.email[:160], r.gpu[:80], r.tops[:40],
+                     r.ceder_potencia[:40], r.ref[:64], ip, time.ctime()))
+    return {&quot;ok&quot;: True, &quot;mensaje&quot;: &quot;Registrado. Te avisaremos al lanzamiento.&quot;,
+            &quot;posicion&quot;: con.execute(&quot;SELECT COUNT(*) c FROM registros&quot;).fetchone()[&quot;c&quot;]}
 
 @app.get(&quot;/registros&quot;)
 def registros(_ok: None = Depends(exigir_admin)):
@@ -515,8 +1273,109 @@ def saldo(direccion: str):
     &quot;&quot;&quot;Saldo publico de una direccion (cualquiera puede consultarlo).&quot;&quot;&quot;
     s = con.execute(&quot;SELECT COALESCE(SUM(kuki),0) as s FROM ledger WHERE nodo_id=?&quot;,
                     (direccion,)).fetchone()[&quot;s&quot;]
-    # tambien sumar pagos recibidos como nodo minero
     return {&quot;direccion&quot;: direccion, &quot;saldo&quot;: s}
+
+@app.get(&quot;/saldos&quot;)
+def saldos():
+    &quot;&quot;&quot;Mapa publico direccion -&gt; saldo (solo lectura, agregados del ledger).&quot;&quot;&quot;
+    filas = con.execute(&quot;SELECT nodo_id, COALESCE(SUM(kuki),0) as s FROM ledger &quot;
+                        &quot;GROUP BY nodo_id&quot;).fetchall()
+    return {&quot;saldos&quot;: {r[&quot;nodo_id&quot;]: r[&quot;s&quot;] for r in filas},
+            &quot;direcciones&quot;: len(filas)}
+
+class TransferIn(BaseModel):
+    de_nodo: str
+    a_direccion: str
+    monto: float
+    nonce: str = &quot;&quot;
+    firma: str = &quot;&quot;
+
+@app.post(&quot;/transferir&quot;)
+def transferir(t: TransferIn):
+    &quot;&quot;&quot;Transfiere KIA entre direcciones con firma Ed25519 y anti-repeticion.
+
+    La firma es sobre &quot;transferir:de:a:monto:nonce&quot; con la clave registrada
+    del nodo emisor. El nonce solo vale una vez (tabla transferencias con
+    UNIQUE). Todo ocurre en una transaccion: sin saldo no hay debito ni
+    credito (anti-doble-gasto). No crea moneda: debito y credito se compensan.
+    &quot;&quot;&quot;
+    if not t.a_direccion or len(t.a_direccion) &gt; 128:
+        raise HTTPException(400, &quot;destino invalido&quot;)
+    if t.a_direccion == t.de_nodo:
+        raise HTTPException(400, &quot;origen y destino iguales&quot;)
+    try:
+        monto = round(float(t.monto), 4)
+    except Exception:
+        raise HTTPException(400, &quot;monto invalido&quot;)
+    # AUDITORIA: NaN esquiva &quot;monto &lt;= 0&quot; y &quot;saldo &lt; monto&quot; (NaN no es ni
+    # mayor ni menor), y acababa escribiendo asientos NULL y devolviendo 500.
+    if not math.isfinite(monto):
+        raise HTTPException(400, &quot;monto debe ser un numero finito&quot;)
+    if monto &lt;= 0:
+        raise HTTPException(400, &quot;monto debe ser positivo&quot;)
+    if monto &gt; MAX_SUPPLY:
+        raise HTTPException(400, &quot;monto mayor que el suministro total&quot;)
+    if not t.nonce or len(t.nonce) &gt; 64:
+        raise HTTPException(400, &quot;nonce invalido&quot;)
+    with _pago_lock:
+        try:
+            con.execute(&quot;BEGIN IMMEDIATE&quot;)
+        except Exception:
+            raise HTTPException(503, &quot;Core ocupado, reintentar&quot;)
+        try:
+            con.execute(&quot;CREATE TABLE IF NOT EXISTS transferencias(id INTEGER PRIMARY KEY AUTOINCREMENT, &quot;
+                        &quot;de_nodo TEXT, a_direccion TEXT, monto REAL, nonce TEXT, ts TEXT, &quot;
+                        &quot;UNIQUE(de_nodo, nonce))&quot;)
+            node = con.execute(&quot;SELECT clave_publica FROM nodos WHERE id=?&quot;, (t.de_nodo,)).fetchone()
+            pub = (node[&quot;clave_publica&quot;] if node else &quot;&quot;) or &quot;&quot;
+            if not pub:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(401, &quot;emisor sin clave registrada&quot;)
+            if not t.firma:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(401, &quot;falta firma&quot;)
+            try:
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                    bytes.fromhex(t.firma),
+                    f&quot;transferir:{t.de_nodo}:{t.a_direccion}:{monto}:{t.nonce}&quot;.encode())
+            except Exception:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(401, &quot;firma invalida&quot;)
+            saldo = float(con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?&quot;,
+                                      (t.de_nodo,)).fetchone()[&quot;s&quot;] or 0.0)
+            if saldo &lt; monto:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(409, &quot;saldo insuficiente&quot;)
+            try:
+                con.execute(&quot;INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts) VALUES(?,?,?,?,?)&quot;,
+                            (t.de_nodo, t.a_direccion, monto, t.nonce, time.ctime()))
+            except Exception:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(409, &quot;nonce ya usado (repeticion bloqueada)&quot;)
+            _asiento(f&quot;tx-{t.nonce[:12]}&quot;, t.de_nodo, -monto, &quot;transferencia salida&quot;)
+            _asiento(f&quot;tx-{t.nonce[:12]}&quot;, t.a_direccion, monto, &quot;transferencia entrada&quot;)
+            con.commit()
+            return {&quot;ok&quot;: True, &quot;de&quot;: t.de_nodo, &quot;a&quot;: t.a_direccion, &quot;monto&quot;: monto}
+        except HTTPException:
+            raise
+        except Exception:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            raise HTTPException(500, &quot;error interno en transferencia&quot;)
+
+@app.get(&quot;/red/telemetria&quot;)
+def red_telemetria():
+    &quot;&quot;&quot;Ultima telemetria por nodo/device (solo lectura, para el panel).
+    Cada fila lleva fecha (ts) y origen. La energia es ESTIMADA.&quot;&quot;&quot;
+    try:
+        filas = con.execute(&quot;SELECT nodo_id,device,metricas,ts,origen FROM gpu_telemetria &quot;
+                            &quot;ORDER BY id DESC LIMIT 200&quot;).fetchall()
+        return {&quot;telemetria&quot;: [dict(r) for r in filas]}
+    except Exception:
+        return {&quot;telemetria&quot;: []}
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300
 </code></pre>
@@ -528,14 +1387,25 @@ Core lo recalcula y compara. El worker NO puede falsificar: si el numero no
 coincide exactamente con el recalculado por el Core, no cobra.
 
 MULTI-GPU: usa TODAS las GPUs disponibles a la vez (una cola por GPU).
+
+AUDITORIA 2026-10-18:
+  - Implementado &#x27;difusion_calor&#x27; (antes devolvia el literal
+    &quot;tarea_no_soportada&quot;: habia 97 tareas de ese tipo que era imposible
+    cobrar y cada intento costaba minutos de CPU al Core).
+  - /tareas/pendiente exige firma del nodo (&quot;pendiente:&lt;id&gt;:&lt;ts&gt;&quot;).
+  - Se leen los codigos 401/403/429 del Core y se informa en claro
+    (antes un 429 reventaba con KeyError y solo ponia &quot;err&quot;).
+  - El resultado de difusion va como numero con toda la precision
+    (float64), que es lo que el Core verifica con tolerancia relativa.
 &quot;&quot;&quot;
-import hashlib, json, sys, time, threading, socket
+import hashlib, json, os, sys, time, threading, socket
 import requests
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / &quot;ledger&quot;))
 import kukia_wallet as WALLET
 
-CORE = &quot;http://127.0.0.1:8300&quot;
+# Se puede apuntar a otro Core para pruebas: KUKIA_CORE=http://127.0.0.1:8403
+CORE = os.environ.get(&quot;KUKIA_CORE&quot;, &quot;http://127.0.0.1:8300&quot;)
 
 def trabajo_local(tipo: str, params: dict, device: str = &quot;cuda:0&quot;) -&gt; str:
     &quot;&quot;&quot;Calcula la tarea EXACTAMENTE como el Core (determinista).&quot;&quot;&quot;
@@ -564,7 +1434,25 @@ def trabajo_local(tipo: str, params: dict, device: str = &quot;cuda:0&quot;) -&g
             for j in range(3):
                 out += float((x[i:n-2+i, j:n-2+j] * k[i, j]).sum().item())
         return str(int(round(out)))
+    if tipo == &quot;difusion_calor&quot;:
+        # AUDITORIA: el tipo que faltaba. La rejilla inicial tiene que ser
+        # IDENTICA a la del Core (numpy default_rng), asi que se genera con
+        # numpy en CPU y se pasa a la GPU para iterar en float64.
+        import numpy as np
+        import torch
+        n = int(params.get(&quot;n&quot;, 256))
+        pasos = int(params.get(&quot;pasos&quot;, 200))
+        seed = int(params.get(&quot;seed&quot;, 42))
+        rejilla = np.random.default_rng(seed).random((n, n))
+        x = torch.from_numpy(rejilla).to(device=device, dtype=torch.float64)
+        for _ in range(pasos):
+            x[1:-1, 1:-1] = x[1:-1, 1:-1] + 0.2 * (
+                x[:-2, 1:-1] + x[2:, 1:-1] + x[1:-1, :-2] + x[1:-1, 2:] - 4 * x[1:-1, 1:-1])
+        return repr(float(x.sum().item()))
     return &quot;tarea_no_soportada&quot;
+
+def _codigo(r):
+    return r.status_code if r is not None else 0
 
 def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
     &quot;&quot;&quot;Un hilo por GPU: registra su nodo y mina en bucle (resultados FIRMADOS).&quot;&quot;&quot;
@@ -579,27 +1467,70 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
         r = requests.post(f&quot;{CORE}/nodos/registrar&quot;,
                           json={&quot;nombre&quot;: etiqueta, &quot;vram_gb&quot;: vram_gb, &quot;tops&quot;: tops,
                                 &quot;clave_publica&quot;: pubkey}, timeout=30)
+        r.raise_for_status()
         nid = r.json()[&quot;id&quot;]
-        print(f&quot;[KUKIA] nodo {nid} ({etiqueta}) vram={vram_gb}GB listo&quot;)
+        print(f&quot;[KUKIA] nodo {nid} ({etiqueta}) vram={vram_gb}GB listo&quot;, flush=True)
     except Exception as e:
-        print(f&quot;[KUKIA] {etiqueta} error registro: {e}&quot;)
+        print(f&quot;[KUKIA] {etiqueta} error registro: {e}&quot;, flush=True)
         return
+    bloqueado_hasta = 0.0
     while True:
         try:
-            pend = requests.get(f&quot;{CORE}/tareas/pendiente&quot;, params={&quot;nodo_id&quot;: nid}, timeout=30).json()[&quot;tarea&quot;]
+            ahora = time.time()
+            if ahora &lt; bloqueado_hasta:
+                time.sleep(min(5.0, bloqueado_hasta - ahora))
+                continue
+            # AUDITORIA: peticion de trabajo FIRMADA (el Core ya no acepta
+            # un nodo_id sin prueba de que la clave es tuya).
+            ts = int(time.time())
+            firma_p = WALLET.firmar(f&quot;pendiente:{nid}:{ts}&quot;, privkey) if privkey else &quot;&quot;
+            rp = requests.get(f&quot;{CORE}/tareas/pendiente&quot;,
+                              params={&quot;nodo_id&quot;: nid, &quot;ts&quot;: ts, &quot;firma&quot;: firma_p}, timeout=30)
+            if rp.status_code == 429:
+                print(f&quot;[KUKIA] {etiqueta} limitado por el Core (429), espero 20 s&quot;, flush=True)
+                bloqueado_hasta = time.time() + 20
+                continue
+            if rp.status_code != 200:
+                print(f&quot;[KUKIA] {etiqueta} el Core rechaza la peticion de trabajo: &quot;
+                      f&quot;{rp.status_code} {rp.text[:120]}&quot;, flush=True)
+                time.sleep(10)
+                continue
+            pend = rp.json().get(&quot;tarea&quot;)
             if not pend:
                 time.sleep(3)
                 continue
-            metrica = trabajo_local(pend[&quot;tipo&quot;], pend[&quot;params&quot;], device)
+            t0 = time.time()
+            tipo = pend[&quot;tipo&quot;]
+            metrica = trabajo_local(tipo, pend[&quot;params&quot;], device)
+            duracion_ms = (time.time() - t0) * 1000.0
+            if metrica == &quot;tarea_no_soportada&quot;:
+                print(f&quot;[KUKIA] {etiqueta} tipo &#x27;{tipo}&#x27; no implementado en este worker&quot;, flush=True)
+                time.sleep(5)
+                continue
             firma = WALLET.firmar(f&quot;{pend[&#x27;id&#x27;]}:{metrica}&quot;, privkey) if privkey else &quot;&quot;
-            res = requests.post(f&quot;{CORE}/tareas/resultado&quot;,
-                                params={&quot;tid&quot;: pend[&quot;id&quot;], &quot;nodo_id&quot;: nid, &quot;metrica&quot;: metrica,
-                                        &quot;firma&quot;: firma},
-                                timeout=60).json()
-            estado = f&quot;OK +{res[&#x27;kuki&#x27;]} KIA&quot; if res.get(&quot;ok&quot;) else f&quot;RECHAZADO (esperado {res.get(&#x27;esperado&#x27;)})&quot;
-            print(f&quot;[KUKIA] {etiqueta} tarea {pend[&#x27;id&#x27;][:8]} -&gt; {estado}&quot;)
+            rr = requests.post(f&quot;{CORE}/tareas/resultado&quot;,
+                               params={&quot;tid&quot;: pend[&quot;id&quot;], &quot;nodo_id&quot;: nid, &quot;metrica&quot;: metrica,
+                                       &quot;firma&quot;: firma, &quot;device&quot;: str(device),
+                                       &quot;duracion_ms&quot;: duracion_ms},
+                               timeout=3600)
+            if rr.status_code == 429:
+                print(f&quot;[KUKIA] {etiqueta} Core saturado (429) al entregar, espero 20 s&quot;, flush=True)
+                bloqueado_hasta = time.time() + 20
+                continue
+            if rr.status_code != 200:
+                print(f&quot;[KUKIA] {etiqueta} entrega rechazada: {rr.status_code} {rr.text[:140]}&quot;, flush=True)
+                if rr.status_code in (429, 403):
+                    bloqueado_hasta = time.time() + 30
+                continue
+            res = rr.json()
+            if res.get(&quot;ok&quot;):
+                print(f&quot;[KUKIA] {etiqueta} tarea {pend[&#x27;id&#x27;][:8]} {tipo} -&gt; OK +{res.get(&#x27;kuki&#x27;)} KIA &quot;
+                      f&quot;({duracion_ms:.0f} ms)&quot;, flush=True)
+            else:
+                print(f&quot;[KUKIA] {etiqueta} tarea {pend[&#x27;id&#x27;][:8]} {tipo} -&gt; RECHAZADO &quot;
+                      f&quot;(esperado {res.get(&#x27;esperado&#x27;)}, enviado {metrica[:40]})&quot;, flush=True)
         except Exception as e:
-            print(f&quot;[KUKIA] {etiqueta} err: {e}&quot;)
+            print(f&quot;[KUKIA] {etiqueta} err: {e}&quot;, flush=True)
             time.sleep(5)
 
 def main():
@@ -611,11 +1542,11 @@ def main():
         n_gpus = 0
 
     if n_gpus == 0:
-        print(&quot;[KUKIA] Sin GPUs CUDA - usando CPU (mas lento)&quot;)
+        print(&quot;[KUKIA] Sin GPUs CUDA - usando CPU (mas lento)&quot;, flush=True)
         ciclo_worker(nombre, &quot;cpu&quot;, 0, 0.0)
         return
 
-    print(f&quot;[KUKIA] {n_gpus} GPU(s) detectada(s) - minando en TODAS a la vez&quot;)
+    print(f&quot;[KUKIA] {n_gpus} GPU(s) detectada(s) - minando en TODAS a la vez&quot;, flush=True)
     hilos = []
     for g in range(n_gpus):
         try:
@@ -623,6 +1554,7 @@ def main():
             vram = props.total_memory // (1024**3)
             # TOPS aproximados por clase de GPU (referencia NVIDIA)
             tops_est = {8: 60.0, 12: 300.0, 16: 760.0, 24: 1300.0}.get(int(vram), 100.0)
+            print(f&quot;[KUKIA] GPU{g}: {props.name} ({vram} GB)&quot;, flush=True)
         except Exception:
             vram, tops_est = 0, 0.0
         t = threading.Thread(target=ciclo_worker, args=(nombre, f&quot;cuda:{g}&quot;, vram, tops_est), daemon=True)
@@ -638,14 +1570,26 @@ if __name__ == &quot;__main__&quot;:
 <pre><code>&quot;&quot;&quot;KUKIA Wallet - billetera con criptografia REAL (Ed25519) + recuperacion.
 
 - Clave privada Ed25519 (256 bits) DERIVADA de: contrasena + 20 palabras unicas
-- Derivacion: PBKDF2-HMAC-SHA512 (200.000 iteraciones, salt fijo de KUKIA)
+- Derivacion: PBKDF2-HMAC-SHA512 (200.000 iteraciones)
 - Las 20 palabras salen de la lista oficial BIP39 en espanol (2048 palabras)
 - Con la contrasena + las 20 palabras se recupera la MISMA billetera en
   cualquier equipo (Python, movil, web). Sin ellas, imposible.
 - Direccion = KUK + SHA256(clave publica), derivada de la publica.
 - La clave privada nunca sale del equipo del usuario.
+
+AUDITORIA 2026-10-18:
+  - Antes TODAS las billeteras usaban la misma sal fija (&quot;kukia-wallet-v1&quot;),
+    lo que permite tablas precalculadas entre usuarios. Las billeteras
+    NUEVAS usan v2: sal derivada de las propias 20 palabras (unica por
+    billetera y sin tener que guardarla, asi que la recuperacion sigue
+    funcionando en cualquier equipo).
+  - Las billeteras ya creadas son v1 y NO cambian: si se re-derivaran,
+    cambiaria su direccion y perderian el saldo.
+  - `saldo_real()` consulta el saldo al Core: el campo &#x27;saldo&#x27; del JSON es
+    solo una copia local y no coincidia con el ledger (decia 0 mientras el
+    Core tenia 15M).
 &quot;&quot;&quot;
-import json, hashlib, os, secrets, time
+import json, hashlib, os, secrets, time, urllib.request, urllib.error, urllib.parse
 from pathlib import Path
 
 WALLET_DIR = Path(__file__).parent.parent / &quot;ledger&quot; / &quot;wallet&quot;
@@ -653,7 +1597,9 @@ WALLET_DIR.mkdir(parents=True, exist_ok=True)
 WORDLIST_FILE = Path(__file__).parent / &quot;wordlist_es.txt&quot;
 
 PBKDF2_ITER = 200_000
-KUKIA_SALT = b&quot;kukia-wallet-v1&quot;
+KUKIA_SALT = b&quot;kukia-wallet-v1&quot;     # v1 (compatibilidad con billeteras antiguas)
+KDF_ACTUAL = 2                      # billeteras nuevas
+CORE = &quot;http://127.0.0.1:8300&quot;
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -671,59 +1617,67 @@ def _wordlist():
     return words
 
 def generar_mnemonico(n_palabras: int = 20) -&gt; list:
-    &quot;&quot;&quot;20 palabras unicas aleatorias (CSPRNG) de la lista BIP39 espanol.&quot;&quot;&quot;
+    &quot;&quot;&quot;20 palabras aleatorias (CSPRNG) de la lista BIP39 espanol.&quot;&quot;&quot;
     words = _wordlist()
     return [secrets.choice(words) for _ in range(n_palabras)]
 
-def derivar_clave(password: str, mnemonico: list) -&gt; bytes:
+def _salt_de(mnemonico: list, version: int) -&gt; bytes:
+    &quot;&quot;&quot;v1 = sal fija historica. v2 = sal unica por billetera, derivada de las
+    palabras (determinista: se puede recalcular en cualquier equipo).&quot;&quot;&quot;
+    if version &gt;= 2:
+        material = (&quot;kukia-wallet-v2|&quot; + &quot; &quot;.join(mnemonico)).encode(&quot;utf-8&quot;)
+        return hashlib.sha256(material).digest()
+    return KUKIA_SALT
+
+def derivar_clave(password: str, mnemonico: list, version: int = KDF_ACTUAL) -&gt; bytes:
     &quot;&quot;&quot;Deriva 64 bytes via PBKDF2 (los 32 primeros = semilla Ed25519).&quot;&quot;&quot;
     if isinstance(mnemonico, str):
         mnemonico = mnemonico.strip().split()
     material = (&quot; &quot;.join(mnemonico) + &quot;|&quot; + password).encode(&quot;utf-8&quot;)
+    salt = _salt_de(mnemonico, version)
     if CRYPTO_REAL:
         kdf = PBKDF2HMAC(algorithm=hashes.SHA512(), length=64,
-                         salt=KUKIA_SALT, iterations=PBKDF2_ITER)
+                         salt=salt, iterations=PBKDF2_ITER)
         return kdf.derive(material)
-    # fallback (no deberia ocurrir)
-    return hashlib.pbkdf2_hmac(&quot;sha512&quot;, material, KUKIA_SALT, PBKDF2_ITER, 64)
+    return hashlib.pbkdf2_hmac(&quot;sha512&quot;, material, salt, PBKDF2_ITER, 64)
 
-def crear_billetera(nombre, password: str = &quot;&quot;, mnemonico: list = None):
-    &quot;&quot;&quot;Crea (o recupera) la billetera. Sin password/mnemonico genera unos nuevos.&quot;&quot;&quot;
-    f = WALLET_DIR / f&quot;{nombre}.json&quot;
-    if f.exists():
-        d = json.loads(f.read_text(encoding=&quot;utf-8&quot;))
-        # migrar billeteras viejas sin mnemonico: conservar direccion y saldo
-        if &quot;mnemonico&quot; not in d:
-            d[&quot;mnemonico&quot;] = None
-            d[&quot;tiene_recuperacion&quot;] = False
-        return d
-
-    if mnemonico is None:
-        mnemonico = generar_mnemonico(20)
-    if not password:
-        # si no dan contrasena, se genera una (hay que guardarla bien)
-        password = secrets.token_hex(16)
-
-    semilla = derivar_clave(password, mnemonico)[:32]
+def _direccion_y_claves(semilla: bytes):
     if CRYPTO_REAL:
         priv = Ed25519PrivateKey.from_private_bytes(semilla)
         pub_bytes = priv.public_key().public_bytes(
             encoding=serialization.Encoding.Raw,
             format=serialization.PublicFormat.Raw)
-        clave_privada = semilla.hex()
-        clave_publica = pub_bytes.hex()
-        direccion = &quot;KUK&quot; + hashlib.sha256(pub_bytes).hexdigest()[:38].upper()
-        esquema = &quot;ed25519-pbkdf2&quot;
-    else:
-        clave_privada = semilla.hex()
-        clave_publica = &quot;&quot;
-        direccion = &quot;KUK&quot; + hashlib.sha256(semilla).hexdigest()[:38].upper()
-        esquema = &quot;sha256-fallback&quot;
+        return pub_bytes.hex(), &quot;KUK&quot; + hashlib.sha256(pub_bytes).hexdigest()[:38].upper(), &quot;ed25519-pbkdf2&quot;
+    return &quot;&quot;, &quot;KUK&quot; + hashlib.sha256(semilla).hexdigest()[:38].upper(), &quot;sha256-fallback&quot;
+
+def crear_billetera(nombre, password: str = &quot;&quot;, mnemonico: list = None):
+    &quot;&quot;&quot;Crea (o recupera) la billetera. Sin password/mnemonico genera unos nuevos.
+
+    Devuelve el diccionario, o (diccionario, password) si la ha creado ahora.
+    &quot;&quot;&quot;
+    f = WALLET_DIR / f&quot;{nombre}.json&quot;
+    if f.exists():
+        d = json.loads(f.read_text(encoding=&quot;utf-8&quot;))
+        if &quot;mnemonico&quot; not in d:
+            d[&quot;mnemonico&quot;] = None
+            d[&quot;tiene_recuperacion&quot;] = False
+        d.setdefault(&quot;kdf&quot;, 1)   # AUDITORIA: las antiguas son v1
+        return d
+
+    if mnemonico is None:
+        mnemonico = generar_mnemonico(20)
+    if not password:
+        password = secrets.token_hex(16)
+
+    semilla = derivar_clave(password, mnemonico, KDF_ACTUAL)[:32]
+    clave_publica, direccion, esquema = _direccion_y_claves(semilla)
 
     d = {&quot;nombre&quot;: nombre, &quot;direccion&quot;: direccion, &quot;esquema&quot;: esquema,
-         &quot;clave_privada&quot;: clave_privada, &quot;clave_publica&quot;: clave_publica,
+         &quot;kdf&quot;: KDF_ACTUAL,
+         &quot;clave_privada&quot;: semilla.hex(), &quot;clave_publica&quot;: clave_publica,
          &quot;mnemonico&quot;: mnemonico, &quot;tiene_recuperacion&quot;: True,
-         &quot;saldo&quot;: 0.0, &quot;creada&quot;: time.ctime()}
+         &quot;saldo&quot;: 0.0, &quot;saldo_nota&quot;: &quot;copia local; el saldo real lo manda el Core&quot;,
+         &quot;creada&quot;: time.ctime()}
     f.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
     return d, password
 
@@ -733,33 +1687,29 @@ def recuperar_billetera(nombre, password: str, mnemonico: list):
         mnemonico = mnemonico.strip().split()
     if len(mnemonico) != 20:
         raise ValueError(&quot;se necesitan las 20 palabras&quot;)
-    semilla = derivar_clave(password, mnemonico)[:32]
-    if CRYPTO_REAL:
-        priv = Ed25519PrivateKey.from_private_bytes(semilla)
-        pub_bytes = priv.public_key().public_bytes(
-            encoding=serialization.Encoding.Raw,
-            format=serialization.PublicFormat.Raw)
-        direccion = &quot;KUK&quot; + hashlib.sha256(pub_bytes).hexdigest()[:38].upper()
-    else:
-        direccion = &quot;KUK&quot; + hashlib.sha256(semilla).hexdigest()[:38].upper()
     f = WALLET_DIR / f&quot;{nombre}.json&quot;
+    version = KDF_ACTUAL
+    if f.exists():
+        version = int(json.loads(f.read_text(encoding=&quot;utf-8&quot;)).get(&quot;kdf&quot;, 1))
+    semilla = derivar_clave(password, mnemonico, version)[:32]
+    clave_publica, direccion, esquema = _direccion_y_claves(semilla)
     if f.exists():
         d = json.loads(f.read_text(encoding=&quot;utf-8&quot;))
         if d.get(&quot;direccion&quot;) != direccion:
             raise ValueError(&quot;las palabras/contrasena no coinciden con esta billetera&quot;)
         return d
-    d = {&quot;nombre&quot;: nombre, &quot;direccion&quot;: direccion, &quot;esquema&quot;: &quot;ed25519-pbkdf2&quot;,
-         &quot;clave_privada&quot;: semilla.hex(),
-         &quot;clave_publica&quot;: pub_bytes.hex() if CRYPTO_REAL else &quot;&quot;,
+    d = {&quot;nombre&quot;: nombre, &quot;direccion&quot;: direccion, &quot;esquema&quot;: esquema, &quot;kdf&quot;: version,
+         &quot;clave_privada&quot;: semilla.hex(), &quot;clave_publica&quot;: clave_publica,
          &quot;mnemonico&quot;: mnemonico, &quot;tiene_recuperacion&quot;: True,
-         &quot;saldo&quot;: 0.0, &quot;creada&quot;: time.ctime(), &quot;recuperada&quot;: True}
+         &quot;saldo&quot;: 0.0, &quot;saldo_nota&quot;: &quot;copia local; el saldo real lo manda el Core&quot;,
+         &quot;creada&quot;: time.ctime(), &quot;recuperada&quot;: True}
     f.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
     return d
 
 def firmar(datos, clave_privada_hex):
     &quot;&quot;&quot;Firma un mensaje con la clave privada Ed25519 (firma digital real).&quot;&quot;&quot;
     if not CRYPTO_REAL:
-        return hashlib.sha256(f&quot;{datos}:{clave_privada_hex}&quot;.encode()).hexdigest()
+        raise RuntimeError(&quot;falta &#x27;cryptography&#x27;: una firma falsa no cobra en el Core&quot;)
     priv = Ed25519PrivateKey.from_private_bytes(bytes.fromhex(clave_privada_hex))
     return priv.sign(datos.encode()).hex()
 
@@ -775,39 +1725,63 @@ def verificar_firma(datos, firma_hex, clave_publica_hex):
         return False
 
 def ver_saldo(nombre):
+    &quot;&quot;&quot;Saldo LOCAL (copia en el JSON). Para el de verdad, usa saldo_real().&quot;&quot;&quot;
     d = crear_billetera(nombre)
     if isinstance(d, tuple):
         d = d[0]
-    return d[&quot;saldo&quot;]
+    return d.get(&quot;saldo&quot;, 0.0)
+
+def saldo_real(direccion: str, core: str = CORE, timeout: float = 5.0):
+    &quot;&quot;&quot;AUDITORIA: saldo de verdad, preguntando al Core. Devuelve None si el
+    Core no responde (asi no se confunde &#x27;sin red&#x27; con &#x27;saldo cero&#x27;).&quot;&quot;&quot;
+    try:
+        url = f&quot;{core.rstrip(&#x27;/&#x27;)}/saldo/{urllib.parse.quote(direccion)}&quot;
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return json.loads(r.read().decode()).get(&quot;saldo&quot;)
+    except Exception:
+        return None
 
 def abonar(nombre, monto, motivo):
+    &quot;&quot;&quot;Anota un movimiento en la copia local (el Core es la autoridad).&quot;&quot;&quot;
     d = crear_billetera(nombre)
     if isinstance(d, tuple):
         d = d[0]
-    d[&quot;saldo&quot;] = round(d[&quot;saldo&quot;] + monto, 4)
+    d[&quot;saldo&quot;] = round(d.get(&quot;saldo&quot;, 0.0) + monto, 4)
     f = WALLET_DIR / f&quot;{nombre}.json&quot;
     f.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
     hist = WALLET_DIR / f&quot;{nombre}_hist.json&quot;
     h = json.loads(hist.read_text(encoding=&quot;utf-8&quot;)) if hist.exists() else []
     h.append({&quot;ts&quot;: time.ctime(), &quot;monto&quot;: monto, &quot;motivo&quot;: motivo})
-    hist.write_text(json.dumps(h[-200:], indent=2, encoding=&quot;utf-8&quot;) if False else json.dumps(h[-200:], indent=2), encoding=&quot;utf-8&quot;)
+    hist.write_text(json.dumps(h[-200:], indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
     return d[&quot;saldo&quot;]
 
 if __name__ == &quot;__main__&quot;:
     import sys
+    import urllib.parse
+    try:
+        sys.stdout.reconfigure(encoding=&quot;utf-8&quot;)
+    except Exception:
+        pass
     nombre = sys.argv[1] if len(sys.argv) &gt; 1 else &quot;nodo_fundador&quot;
     password = sys.argv[2] if len(sys.argv) &gt; 2 else &quot;&quot;
     res = crear_billetera(nombre, password)
     if isinstance(res, tuple):
         w, pwd = res
         print(f&quot;[KUKIA Wallet] {w[&#x27;direccion&#x27;]}&quot;)
-        print(f&quot;  esquema: {w[&#x27;esquema&#x27;]}&quot;)
-        print(f&quot;  saldo: {w[&#x27;saldo&#x27;]} KIA&quot;)
+        print(f&quot;  esquema: {w[&#x27;esquema&#x27;]} (kdf v{w.get(&#x27;kdf&#x27;, 1)})&quot;)
         print(f&quot;  PASSWORD: {pwd}&quot;)
         print(f&quot;  20 PALABRAS: {&#x27; &#x27;.join(w[&#x27;mnemonico&#x27;])}&quot;)
         print(&quot;  GUARDA password + 20 palabras: sin ellas NO se recupera.&quot;)
     else:
-        print(f&quot;[KUKIA Wallet] {res[&#x27;direccion&#x27;]} (existente)&quot;)
+        w = res
+        print(f&quot;[KUKIA Wallet] {w[&#x27;direccion&#x27;]} (existente, kdf v{w.get(&#x27;kdf&#x27;, 1)})&quot;)
+    real = saldo_real(w[&quot;direccion&quot;])
+    if real is None:
+        print(f&quot;  saldo: {w.get(&#x27;saldo&#x27;, 0.0)} KIA (copia local; el Core no responde)&quot;)
+    else:
+        print(f&quot;  saldo REAL en el Core: {real} KIA&quot;)
+        if abs(float(real) - float(w.get(&quot;saldo&quot;, 0.0))) &gt; 1e-9:
+            print(f&quot;  (la copia local decia {w.get(&#x27;saldo&#x27;, 0.0)}: el valido es el del Core)&quot;)
 </code></pre>
 <h2>Dashboard - kukia_dash.py</h2>
 <pre><code>&quot;&quot;&quot;KUKIA Dashboard - estado de la red en vivo (heartbeat, mejora 7).&quot;&quot;&quot;
