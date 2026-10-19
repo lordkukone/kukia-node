@@ -65,7 +65,6 @@ li { margin:.35rem 0; }
     <div class="tile"><span class="l">Nodos</span><span class="v" id="tNodos">—</span><span class="n">registrados</span></div>
     <div class="tile"><span class="l">En cola</span><span class="v" id="tCola">—</span><span class="n">esperando</span></div>
     <div class="tile"><span class="l">KIA emitidos</span><span class="v" id="tSupply">—</span><span class="n" id="nSupply">+— /min</span></div>
-    <div class="tile"><span class="l">Potencia</span><span class="v" id="tTops">—</span><span class="n">TOPS en la red</span></div>
   </div>
 </div>
 
@@ -206,7 +205,6 @@ python -u kukia_worker.py mi_nombre</code><button class="copiar" data-copia>copi
       set('tNodos', num(s.nodos));
       set('tCola', num(s.tareas_pend));
       set('tSupply', num(s.supply_emitido));
-      set('tTops', num(salud.tops));
       var em = salud.emision_por_min;
       $('nSupply').textContent = (typeof em === 'number')
         ? '+' + Math.max(0, Math.round(em)).toLocaleString('es-ES') + ' KIA/min'
