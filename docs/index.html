@@ -46,6 +46,9 @@ section { padding:5rem 1.5rem; max-width:1100px; margin:auto; }
 .chartCab { display:flex; justify-content:space-between; align-items:baseline; gap:.6rem; margin-bottom:.5rem; font-size:.85rem; color:var(--text); }
 .chartHoy { color:var(--gold); font-weight:700; font-size:.8rem; }
 .chart canvas { width:100%; height:170px; display:block; }
+.chartAncho { grid-column:1 / -1; }
+.chartPie { margin-top:.45rem; font-size:.75rem; color:#9db6dd; text-align:center; letter-spacing:.2px; }
+.chartPie b { font-weight:700; }
 h2 { color:var(--gold); font-size:clamp(1.6rem,4vw,2.3rem); margin-bottom:2.5rem; text-align:center; }
 h2::after { content:''; display:block; width:70px; height:3px; background:linear-gradient(90deg,transparent,var(--gold),transparent); margin:.8rem auto 0; }
 .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:1.5rem; }
@@ -164,7 +167,8 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
 
 <section id="graficas" class="reveal">
   <h2>La red, minuto a minuto</h2>
-  <p style="text-align:center;color:var(--text);max-width:720px;margin:0 auto 2rem;line-height:1.7;">Dos gráficas con datos reales del ledger, una muestra cada 20 segundos. Si el minero se apaga, las líneas se quedan planas: eso también es información.</p>
+  <p style="text-align:center;color:var(--text);max-width:760px;margin:0 auto 2rem;line-height:1.7;">Gráficas con datos reales del ledger, una muestra cada 20 segundos. Si el minero se apaga, las líneas se quedan planas: eso también es información.</p>
+  <p id="potenciaNota" style="display:none;text-align:center;color:#789;font-size:.8rem;max-width:760px;margin:0 auto 1.5rem;line-height:1.6;">La potencia no es una estimación ni lo que el nodo declara al registrarse: es <strong style="color:var(--text);">FLOPs de cada tarea verificada ÷ segundos que tardó la GPU</strong> que la resolvió, medidos por GPU. Si una gráfica baja, es que se está calculando menos, no que el número esté maquillado.</p>
   <div class="charts">
     <div class="chart">
       <div class="chartCab"><span>KIA emitidos</span><span class="chartHoy" id="chSupplyInfo">recopilando…</span></div>
@@ -173,6 +177,11 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <div class="chart">
       <div class="chartCab"><span>Tareas por minuto</span><span class="chartHoy" id="chRateInfo">recopilando…</span></div>
       <canvas id="chRate" height="170"></canvas>
+    </div>
+    <div class="chart chartAncho" id="bloquePotencia" style="display:none">
+      <div class="chartCab"><span>Potencia medida (GFLOPS)</span><span class="chartHoy" id="chPowerInfo">recopilando…</span></div>
+      <canvas id="chPower" height="170"></canvas>
+      <div class="chartPie" id="chPowerPie"></div>
     </div>
   </div>
   <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.8rem;">El histórico lo guarda el relé público, no el ledger. La gráfica arranca en cuanto hay dos muestras (≈20 s).</p>
@@ -538,18 +547,32 @@ counters.forEach(c => cio.observe(c));
   }
   // --- Graficas en vivo (canvas, sin librerias) -------------------------
   var serie = [], MAXP = 400;
+  // Potencia por GPU que viene en salud: [{"d":"cuda:0","gflops":12.3}, ...]
+  function potDeSalud(salud){
+    var o = {}, arr = (salud && Array.isArray(salud.gflops_gpus)) ? salud.gflops_gpus : [];
+    for(var i=0; i<arr.length && i<4; i++){
+      if(arr[i] && typeof arr[i].d === 'string' && typeof arr[i].gflops === 'number' && arr[i].gflops >= 0){
+        o[arr[i].d] = arr[i].gflops;
+      }
+    }
+    return Object.keys(o).length ? o : null;
+  }
+  function uno(v){ return Number(v).toLocaleString('es-ES', {minimumFractionDigits:1, maximumFractionDigits:1}); }
   function graficar(d, s, salud){
     var pts = (d && Array.isArray(d.serie) && d.serie.length) ? d.serie : null;
+    var potAhora = potDeSalud(salud);
     if(pts){
       serie = pts.map(function(x){
         return {t: Number(x.t), supply: Number(x.supply), tareas: Number(x.tareas),
-                rate: (typeof x.rate === 'number' && isFinite(x.rate) && x.rate > 0) ? x.rate : null};
+                rate: (typeof x.rate === 'number' && isFinite(x.rate) && x.rate > 0) ? x.rate : null,
+                pot: (x.pot && typeof x.pot === 'object' && !Array.isArray(x.pot)) ? x.pot : null};
       }).filter(function(x){ return isFinite(x.t) && isFinite(x.supply); });
     } else {
       var t = Math.round(Date.now()/1000);
       if(!serie.length || t - serie[serie.length-1].t >= 20){
         serie.push({t: t, supply: Number(s.supply_emitido), tareas: Number(s.tareas_ok),
-                    rate: (typeof salud.tareas_por_min === 'number') ? salud.tareas_por_min : null});
+                    rate: (typeof salud.tareas_por_min === 'number') ? salud.tareas_por_min : null,
+                    pot: potAhora});
         if(serie.length > MAXP) serie.shift();
       }
     }
@@ -573,10 +596,104 @@ counters.forEach(c => cio.observe(c));
         ? Math.round(conRitmo[conRitmo.length-1].rate).toLocaleString('es-ES') + '/min ahora'
         : 'recopilando…';
     }
+    var iP = porId('chPowerInfo');
+    var ultPot = serie.length ? serie[serie.length-1].pot : potAhora;
+    var total = null;
+    if(ultPot){ total = 0; for(var k in ultPot) total += Number(ultPot[k]) || 0; }
+    else if(salud && typeof salud.gflops === 'number'){ total = salud.gflops; }
+    if(iP) iP.textContent = (total === null)
+      ? 'recopilando…'
+      : (uno(total) + ' GFLOPS ahora');
   }
   function pintarSerie(){
     dibujar(porId('chSupply'), serie.map(function(x){ return x.supply; }).filter(function(v){ return v !== null; }), 'supply');
     dibujar(porId('chRate'), serie.filter(function(x){ return x.rate !== null; }).map(function(x){ return x.rate; }), 'rate');
+    pintarPot();
+  }
+  // Potencia: una linea por GPU, misma escala, misma ventana de tiempo.
+  function pintarPot(){
+    var cv = porId('chPower'); if(!cv) return;
+    var claves = [];
+    serie.forEach(function(x){
+      if(!x.pot) return;
+      for(var k in x.pot){ if(claves.indexOf(k) < 0) claves.push(k); }
+    });
+    claves.sort();
+    // El bloque de potencia solo aparece cuando el rele manda datos: mientras
+    // no los mande, se queda oculto en vez de ensenar una grafica vacia.
+    var hayPot = claves.length > 0;
+    var contPot = porId('bloquePotencia'), notaPot = porId('potenciaNota');
+    if(contPot) contPot.style.display = hayPot ? '' : 'none';
+    if(notaPot) notaPot.style.display = hayPot ? '' : 'none';
+    if(!hayPot) return;
+    var colores = ['#00ff88','#00e5ff','#d4af37','#ff7ad9'];
+    var series = claves.map(function(k, i){
+      return {color: colores[i % colores.length],
+              vals: serie.map(function(x){ return (x.pot && typeof x.pot[k] === 'number') ? x.pot[k] : null; })};
+    });
+    dibujarVarias(cv, series);
+    var pie = porId('chPowerPie');
+    var ult = serie.length ? serie[serie.length-1].pot : null;
+    if(pie){
+      pie.innerHTML = (ult && claves.length)
+        ? claves.map(function(k, i){
+            return '<span style="color:' + colores[i % colores.length] + '">&#9679; ' + k +
+                   ' <b>' + uno(ult[k] || 0) + '</b> GFLOPS</span>';
+          }).join(' &nbsp;·&nbsp; ')
+        : '';
+    }
+  }
+  function dibujarVarias(cv, series){
+    if(!cv) return;
+    var todos = [];
+    series.forEach(function(s){ s.vals.forEach(function(v){ if(v !== null) todos.push(v); }); });
+    var dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 320, h = 170;
+    cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+    var ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.font = '11px Segoe UI, system-ui, sans-serif';
+    if(todos.length < 2){
+      ctx.fillStyle = '#9db6dd'; ctx.textAlign = 'center';
+      ctx.fillText('recopilando datos… (una muestra cada 20 s)', w/2, h/2);
+      return;
+    }
+    var n = 0;
+    series.forEach(function(s){ n = Math.max(n, s.vals.length); });
+    var min = Math.min.apply(null, todos), max = Math.max.apply(null, todos);
+    if(max - min < 1e-9) max = min + 1;
+    var pad = (max - min) * 0.12;
+    min -= pad; max += pad;
+    if(min < 0 && Math.min.apply(null, todos) >= 0) min = 0;
+    var x = function(i){ return 6 + i * (w - 12) / Math.max(1, n - 1); };
+    var y = function(v){ return (h - 18) - ((v - min) / (max - min)) * (h - 34); };
+    ctx.strokeStyle = 'rgba(157,182,221,.16)'; ctx.lineWidth = 1;
+    for(var g=0; g<3; g++){
+      var yy = 10 + g * (h - 34) / 2;
+      ctx.beginPath(); ctx.moveTo(6, yy); ctx.lineTo(w - 6, yy); ctx.stroke();
+    }
+    series.forEach(function(s){
+      var prev = -1;
+      ctx.beginPath();
+      for(var i=0; i<s.vals.length; i++){
+        var v = s.vals[i];
+        if(v === null){ prev = -1; continue; }
+        if(prev < 0) ctx.moveTo(x(i), y(v)); else ctx.lineTo(x(i), y(v));
+        prev = i;
+      }
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+    });
+    series.forEach(function(s){
+      for(var i=s.vals.length-1; i>=0; i--){
+        if(s.vals[i] !== null){
+          ctx.beginPath(); ctx.arc(x(i), y(s.vals[i]), 3, 0, 6.283);
+          ctx.fillStyle = s.color; ctx.fill(); break;
+        }
+      }
+    });
+    ctx.fillStyle = '#9db6dd'; ctx.textAlign = 'left';
+    ctx.fillText(Math.round(max).toLocaleString('es-ES') + ' GFLOPS', 6, 11);
+    ctx.fillText(Math.round(min).toLocaleString('es-ES'), 6, h - 20);
   }
   function dibujar(cv, vals, tipo){
     if(!cv) return;
