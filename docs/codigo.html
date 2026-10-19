@@ -53,7 +53,7 @@ AUDITORIA 2026-10-18 (todas las marcas &quot;AUDITORIA&quot; son de esta revisio
   - monto de transferencia finito (NaN daba 500 despues de escribir).
   - /registro guarda la IP real (antes guardaba el &#x27;ref&#x27; en su columna).
 &quot;&quot;&quot;
-import hashlib, json, math, os, secrets, sqlite3, threading, uuid, time, sys, urllib.parse
+import collections, hashlib, json, math, os, secrets, sqlite3, threading, uuid, time, sys, urllib.parse
 from contextlib import contextmanager
 from pathlib import Path
 import numpy as np
@@ -961,6 +961,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                 con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;tareas_ok_total&#x27;,1) &quot;
                             &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+1&quot;)
                 _asiento(tid, _cuenta_de(nodo_id), kuki, &quot;trabajo verificado&quot;)
+                _marcar_ok()
             else:
                 # AUDITORIA: castigo + reintento en vez de cerrar la tarea
                 intentos = int(task2[&quot;intentos&quot;] or 0) + 1
@@ -1081,6 +1082,33 @@ def tasa_tareas_seg() -&gt; float:
     elapsed = max(3600.0, time.time() - primera)
     return max(1.0 / 86400.0, n / elapsed)
 
+
+# Marcas de tiempo de las tareas OK recientes: sirven para medir el ritmo de
+# AHORA. La media historica no vale: si la red acelera, la media va por detras
+# y el objetivo de calendario sale alto (se emitia 18x de mas).
+_ok_reciente = collections.deque(maxlen=20000)
+
+
+def _marcar_ok() -&gt; None:
+    _ok_reciente.append(time.time())
+
+
+def tasa_reciente(ventana: float = 180.0) -&gt; float:
+    &quot;&quot;&quot;Tareas OK por segundo en los ultimos `ventana` segundos.
+
+    Con menos de 20 muestras cae a la media historica (arranque del Core).
+    Ventana corta a proposito: con 10 min el ritmo subia antes de que la
+    ventana lo viera y se emitia de mas (1,52 KIA/min medidos frente a 1,31
+    de presupuesto).
+    &quot;&quot;&quot;
+    ahora = time.time()
+    while _ok_reciente and ahora - _ok_reciente[0] &gt; ventana:
+        _ok_reciente.popleft()
+    if len(_ok_reciente) &gt;= 20:
+        span = max(1.0, ahora - _ok_reciente[0])
+        return len(_ok_reciente) / span
+    return tasa_tareas_seg()
+
 def recompensa_pago(tier: float) -&gt; tuple:
     &quot;&quot;&quot;Pago que garantiza: (1) nunca pasar de 100M, (2) agotar justo el 13-04-2150.
 
@@ -1094,14 +1122,20 @@ def recompensa_pago(tier: float) -&gt; tuple:
         return 0.0, {&quot;agotado&quot;: True}
     fin_dt = datetime(EMISSION_END.year, EMISSION_END.month, EMISSION_END.day)
     seg_rest = max(1.0, (fin_dt - datetime.now()).total_seconds())
-    tasa = tasa_tareas_seg()
+    tasa = tasa_reciente()
     tareas_rest = max(1.0, tasa * seg_rest)
     objetivo = restante / tareas_rest
     techo = REWARD_BASE * emission_mult()
-    base = min(max(objetivo, techo * 0.1), techo * 10.0)
-    pago = round(min(base * tier, restante), 4)
-    return pago, {&quot;objetivo&quot;: round(objetivo, 4), &quot;techo_halving&quot;: round(techo, 4),
-                  &quot;tasa_dia&quot;: round(tasa * 86400, 2), &quot;restante&quot;: round(restante, 2)}
+    # Pago = objetivo de calendario, punto. El techo (10 KIA x era) solo recorta
+    # el caso raro de red parada; NO hay suelo. El antiguo suelo de
+    # techo*0.1 (=1 KIA/tarea) era lo que agotaba los 100M en meses: con
+    # ~300 tareas/min son 430.000 KIA/dia, o sea 197 dias para los 85M que
+    # quedan, en vez de llegar al 13-04-2150.
+    base = min(objetivo, techo) if techo &gt; 0 else 0.0
+    pago = round(min(base * tier, restante), 6)
+    return pago, {&quot;objetivo&quot;: round(objetivo, 6), &quot;techo_halving&quot;: round(techo, 4),
+                  &quot;tasa_dia&quot;: round(tasa * 86400, 2), &quot;restante&quot;: round(restante, 2),
+                  &quot;emision_por_min&quot;: round(restante / (seg_rest / 60.0), 4)}
 
 @app.get(&quot;/stats&quot;)
 def stats():
@@ -1126,6 +1160,8 @@ def stats():
         &quot;emision&quot;: emission_info(),
         &quot;dificultad&quot;: dificultad(),
         &quot;recompensa_base_actual&quot;: pago1,
+        &quot;pago_por_tarea&quot;: pago1,
+        &quot;emision_por_min&quot;: info1.get(&quot;emision_por_min&quot;),
         &quot;detalle_pago&quot;: info1,
         &quot;auto_tareas&quot;: {&quot;activo&quot;: AUTO_ACTIVO, &quot;objetivo_cola&quot;: AUTO_COLA_OBJETIVO,
                         &quot;intervalo_seg&quot;: AUTO_INTERVALO},
@@ -1726,7 +1762,10 @@ def main():
     for g in range(n_gpus):
         try:
             props = torch.cuda.get_device_properties(g)
-            vram = props.total_memory // (1024**3)
+            # AUDITORIA 2026-10-19: era // (division entera), asi que una GPU
+            # de 12 GB declaraba 11 y se quedaba en el tier de 100 TOPS. Hay que
+            # redondear para que case con la clase real de la GPU.
+            vram = int(round(props.total_memory / (1024**3)))
             # TOPS aproximados por clase de GPU (referencia NVIDIA)
             tops_est = {8: 60.0, 12: 300.0, 16: 760.0, 24: 1300.0}.get(int(vram), 100.0)
             print(f&quot;[KUKIA] GPU{g}: {props.name} ({vram} GB)&quot;, flush=True)
@@ -2084,6 +2123,50 @@ function num(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Potencia medida por GPU: {&quot;cuda:0&quot;: 12.3, &quot;cuda:1&quot;: 15.1}
+function limpiaPot(v) {
+  const out = {};
+  if (!v || typeof v !== &#x27;object&#x27; || Array.isArray(v)) return null;
+  let n = 0;
+  for (const [k, val] of Object.entries(v)) {
+    if (n &gt;= 4) break;
+    if (typeof k !== &#x27;string&#x27; || !/^(cuda|cpu):?\d*$/.test(k)) continue;
+    const x = num(val);
+    if (x === null || x &lt; 0 || x &gt; 1e6) continue;
+    out[k] = Math.round(x * 100) / 100;
+    n++;
+  }
+  return n ? out : null;
+}
+
+function limpiaGpusPot(v) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (const x of v.slice(0, 4)) {
+    const d = x &amp;&amp; typeof x.d === &#x27;string&#x27; ? x.d.trim() : &#x27;&#x27;;
+    const g = num(x &amp;&amp; x.gflops);
+    if (!/^(cuda|cpu):?\d*$/.test(d) || g === null || g &lt; 0 || g &gt; 1e6) continue;
+    out.push({ d: d, gflops: Math.round(g * 100) / 100 });
+  }
+  return out;
+}
+
+function limpiaSerie(v) {
+  if (!Array.isArray(v)) return [];
+  return v.slice(-200).map(function (x) {
+    return {
+      t: num(x &amp;&amp; x.t),
+      supply: num(x &amp;&amp; x.supply),
+      tareas: num(x &amp;&amp; x.tareas),
+      rate: num(x &amp;&amp; x.rate),
+      gpus: num(x &amp;&amp; x.gpus),
+      pot: limpiaPot(x &amp;&amp; x.pot),
+    };
+  }).filter(function (x) {
+    return x.t !== null &amp;&amp; x.supply !== null;
+  });
+}
+
 function limpiaSaldos(v) {
   const out = {};
   if (!v || typeof v !== &#x27;object&#x27;) return out;
@@ -2121,8 +2204,35 @@ function autorizado(req, env) {
   return dif === 0;
 }
 
+// Cache de borde (3 s): la pagina refresca cada 5 s y con esto un bot que
+// martillee /api/metricas no genera una lectura de R2 por peticion. La clave
+// ignora el ?_= de la pagina, que si no anularia la cache.
+async function cacheado(ctx, clave, ttl, crear) {
+  // La cache es una optimizacion, NUNCA un requisito: si el entorno no la
+  // soporta o falla, se responde igual desde R2.
+  let cache = null;
+  try { cache = caches.default; } catch (e) { cache = null; }
+  if (cache) {
+    try {
+      const hit = await cache.match(clave);
+      if (hit) return hit;
+    } catch (e) { /* seguimos sin cache */ }
+  }
+  const res = await crear();
+  if (cache &amp;&amp; ctx &amp;&amp; res.status === 200) {
+    try {
+      const copia = res.clone();
+      const cabeceras = new Headers(copia.headers);
+      cabeceras.set(&#x27;cache-control&#x27;, `public, max-age=${ttl}`);
+      const guardable = new Response(copia.body, { status: 200, headers: cabeceras });
+      ctx.waitUntil(cache.put(clave, guardable).catch(function () {}));
+    } catch (e) { /* sin cache */ }
+  }
+  return res;
+}
+
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
 
     if (req.method === &#x27;OPTIONS&#x27;) {
@@ -2153,10 +2263,16 @@ export default {
           tareas_ok: num(s.tareas_ok),
           tareas_pend: num(s.tareas_pend),
         },
+        serie: limpiaSerie(d.serie),
         salud: {
           gpus: num(d.salud &amp;&amp; d.salud.gpus),
           tareas_por_min: num(d.salud &amp;&amp; d.salud.tareas_por_min),
+          emision_por_min: num(d.salud &amp;&amp; d.salud.emision_por_min),
+          tops: num(d.salud &amp;&amp; d.salud.tops),
           ultima_tarea_hace: num(d.salud &amp;&amp; d.salud.ultima_tarea_hace),
+          // Potencia medida en GFLOPS (FLOPs verificados / segundo).
+          gflops: num(d.salud &amp;&amp; d.salud.gflops),
+          gflops_gpus: limpiaGpusPot(d.salud &amp;&amp; d.salud.gflops_gpus),
         },
         saldos: limpiaSaldos(d.saldos),
       };
@@ -2165,22 +2281,26 @@ export default {
     }
 
     if (req.method === &#x27;GET&#x27; &amp;&amp; url.pathname === &#x27;/api/metricas&#x27;) {
-      const d = await leer(env);
-      if (!d) return json({ error: &#x27;sin datos todavia&#x27; }, 503);
-      return json(d);
+      return cacheado(ctx, new Request(url.origin + &#x27;/api/metricas&#x27;), 3, async () =&gt; {
+        const d = await leer(env);
+        if (!d) return json({ error: &#x27;sin datos todavia&#x27; }, 503);
+        return json(d);
+      });
     }
 
     if (req.method === &#x27;GET&#x27; &amp;&amp; url.pathname.startsWith(&#x27;/api/saldo/&#x27;)) {
       const dir = decodeURIComponent(url.pathname.slice(&#x27;/api/saldo/&#x27;.length)).trim().toUpperCase();
       if (!dir) return json({ error: &#x27;falta la direccion&#x27; }, 400);
-      const d = await leer(env);
-      if (!d) return json({ error: &#x27;sin datos todavia&#x27; }, 503);
-      const saldo = d.saldos ? d.saldos[dir] : undefined;
-      return json({
-        direccion: dir,
-        saldo: typeof saldo === &#x27;number&#x27; ? saldo : 0,
-        conocido: typeof saldo === &#x27;number&#x27;,
-        ts: d.ts,
+      return cacheado(ctx, new Request(url.origin + &#x27;/api/saldo/&#x27; + encodeURIComponent(dir)), 3, async () =&gt; {
+        const d = await leer(env);
+        if (!d) return json({ error: &#x27;sin datos todavia&#x27; }, 503);
+        const saldo = d.saldos ? d.saldos[dir] : undefined;
+        return json({
+          direccion: dir,
+          saldo: typeof saldo === &#x27;number&#x27; ? saldo : 0,
+          conocido: typeof saldo === &#x27;number&#x27;,
+          ts: d.ts,
+        });
       });
     }
 
@@ -2225,8 +2345,14 @@ from pathlib import Path
 
 AQUI = Path(__file__).parent
 IDENTIDAD = AQUI.parent / &quot;worker&quot; / &quot;identidad_minero.json&quot;
+# Log del minero: cada linea trae la GPU, el tipo de tarea y los ms que tardo.
+# De ahi sale la potencia medida (ver flops_de / potencia mas abajo).
+LOG_MINERO = Path(os.environ.get(
+    &quot;KUKIA_LOG_MINERO&quot;, str(AQUI.parent / &quot;worker&quot; / &quot;minero_ok.out.log&quot;)))
 CORE = os.environ.get(&quot;KUKIA_CORE&quot;, &quot;http://127.0.0.1:8300&quot;).rstrip(&quot;/&quot;)
-INTERVALO = float(os.environ.get(&quot;KUKIA_PUBLICAR_SEG&quot;, &quot;10&quot;))
+# 5 s: la web refresca cada 5 s, asi que publicar cada 10 hacia que el dato
+# llegara con 10-15 s de retraso y pareciera que los numeros no se mueven.
+INTERVALO = float(os.environ.get(&quot;KUKIA_PUBLICAR_SEG&quot;, &quot;5&quot;))
 
 
 def leer_fichero(nombre: str) -&gt; str:
@@ -2243,8 +2369,12 @@ def get_json(ruta: str):
 
 # Ventana movil de tareas: sirve para que la web sepa si el minero esta
 # minando AHORA (una tarea de hace 2 minutos no es &quot;en vivo&quot;).
-_hist = collections.deque()      # (momento, tareas_ok)
+_hist = collections.deque()      # (momento, tareas_ok, supply_emitido)
 _ultimo_cambio = 0.0
+# Serie para las graficas de la web: un punto cada 20 s, 1 hora de historia.
+_serie = collections.deque(maxlen=180)
+_ultimo_punto = 0.0
+CADA_PUNTO = 20.0
 
 
 def _gpus_de_identidad():
@@ -2257,15 +2387,142 @@ def _gpus_de_identidad():
         return None
 
 
-def salud(nodos: list) -&gt; dict:
+def _potencia_tops(nodos: list) -&gt; float:
+    &quot;&quot;&quot;TOPS de los nodos que estan minando AHORA (los del fichero de identidad).
+
+    No se usa stats.dificultad.tops_red porque incluye nodos viejos de prueba y
+    estaria inflado (hoy: 11.192 TOPS frente a 1.747 reales).
+    &quot;&quot;&quot;
+    ids = _ids_de_identidad()
+    if not ids:
+        return 0.0
+    return round(sum(float(n.get(&quot;tops&quot;) or 0.0) for n in nodos if n.get(&quot;id&quot;) in ids), 1)
+
+
+def _ids_de_identidad():
+    try:
+        d = json.loads(IDENTIDAD.read_text(encoding=&quot;utf-8&quot;))
+        return {v.get(&quot;id&quot;) for v in d.values() if isinstance(v, dict) and v.get(&quot;id&quot;)}
+    except Exception:
+        return set()
+
+
+# --- Potencia medida: FLOPs verificados / segundo, por GPU ---------------
+# NO se usan los TOPS que el nodo declara al registrarse (son autodeclarados y
+# estaban inflados). Se usa el trabajo real: cada tarea lleva un tamano fijado
+# por el Core y un tiempo de GPU. FLOPs de la tarea / segundos = potencia.
+VENTANA_POT = float(os.environ.get(&quot;KUKIA_POT_VENTANA_SEG&quot;, &quot;120&quot;))
+# Formato del minero:
+#   [KUKIA] kuki_minero[cuda:0] tarea 9009caad matriz -&gt; OK +1.0 KIA (4 ms)
+_RE_TAREA = re.compile(
+    r&quot;\[KUKIA\]\s+\S+\[(?P&lt;dev&gt;[^\]]+)\]\s+tarea\s+[0-9a-f]+\s+&quot;
+    r&quot;(?P&lt;tipo&gt;[A-Za-z_]+)\s+-&gt;\s+OK\s+\+?[\d.]+\s+KIA\s+\((?P&lt;ms&gt;\d+)\s*ms\)&quot;)
+_log_pos = 0
+_log_resto = &quot;&quot;
+_muestras = collections.deque()      # (momento, gpu, flops, segundos)
+_ultima_pot = {&quot;gflops&quot;: None, &quot;gpus&quot;: []}
+
+
+def flops_de(tipo: str, dif: dict) -&gt; float:
+    &quot;&quot;&quot;FLOPs de una tarea, con la misma formula que usa el Core.
+
+    matriz: 2*n^3 (producto de matrices). inferencia: 2*9*(n-2)^2 (convolucion
+    3x3). difusion_calor: 2*5*(n-2)^2*pasos, con n=1024 y pasos=1500 fijos en
+    el generador del Core. checksum/embeddings: sin FLOPs utiles (0).
+    &quot;&quot;&quot;
+    try:
+        if tipo == &quot;matriz&quot;:
+            n = float(dif.get(&quot;matriz_n&quot;) or 0)
+            return 2.0 * n ** 3
+        if tipo == &quot;inferencia&quot;:
+            n = float(dif.get(&quot;inferencia_n&quot;) or 0)
+            return 2.0 * 9.0 * max(0.0, n - 2) ** 2
+        if tipo == &quot;difusion_calor&quot;:
+            return 2.0 * 5.0 * (1024 - 2) ** 2 * 1500
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0
+
+
+def _leer_log(dif: dict) -&gt; None:
+    &quot;&quot;&quot;Lee solo lo nuevo del log. En el primer arranque salta al final: el
+    historico no se cuenta como si acabara de ocurrir.&quot;&quot;&quot;
+    global _log_pos, _log_resto
+    try:
+        tam = LOG_MINERO.stat().st_size
+    except OSError:
+        return
+    if _log_pos == 0:
+        _log_pos = tam
+        return
+    if tam &lt; _log_pos:              # log rotado o truncado
+        _log_pos, _log_resto = 0, &quot;&quot;
+        return
+    if tam == _log_pos:
+        return
+    try:
+        with LOG_MINERO.open(&quot;rb&quot;) as f:
+            f.seek(_log_pos)
+            crudo = f.read(tam - _log_pos)
+    except OSError:
+        return
+    _log_pos = tam
+    texto = _log_resto + crudo.decode(&quot;utf-8&quot;, &quot;ignore&quot;)
+    lineas = texto.replace(&quot;\r\n&quot;, &quot;\n&quot;).replace(&quot;\r&quot;, &quot;\n&quot;).split(&quot;\n&quot;)
+    _log_resto = lineas.pop() if lineas else &quot;&quot;
+    ahora = time.time()
+    for linea in lineas:
+        m = _RE_TAREA.search(linea)
+        if not m:
+            continue
+        seg = int(m.group(&quot;ms&quot;)) / 1000.0
+        flops = flops_de(m.group(&quot;tipo&quot;), dif)
+        if seg &lt;= 0 or flops &lt;= 0:
+            continue                # checksum: no mide potencia, solo tareas
+        _muestras.append((ahora, m.group(&quot;dev&quot;).strip(), flops, seg))
+    limite = ahora - VENTANA_POT - 60
+    while _muestras and _muestras[0][0] &lt; limite:
+        _muestras.popleft()
+
+
+def potencia() -&gt; dict:
+    &quot;&quot;&quot;GFLOPS por GPU en la ventana. 0 si el minero paro; None si no hay log.&quot;&quot;&quot;
+    global _ultima_pot
+    ahora = time.time()
+    desde = ahora - VENTANA_POT
+    acum = {}
+    for t, dev, flops, seg in _muestras:
+        if t &lt; desde:
+            continue
+        a = acum.setdefault(dev, [0.0, 0.0])
+        a[0] += flops
+        a[1] += seg
+    gpus = [{&quot;d&quot;: d, &quot;gflops&quot;: round(f / s / 1e9, 2)}
+            for d, (f, s) in sorted(acum.items()) if s &gt; 0]
+    if gpus:
+        # Potencia TOTAL de la maquina = suma de lo que rinde cada GPU.
+        # (Dividir FLOPs totales entre segundos totales daria la MEDIA entre
+        # tarjetas, no el total: con 2 GPUs a 29 GFLOPS la media es 29, no 58.)
+        total = sum(f / s / 1e9 for f, s in acum.values() if s &gt; 0)
+        _ultima_pot = {&quot;gflops&quot;: round(total, 2), &quot;gpus&quot;: gpus}
+    else:
+        _ultima_pot = {&quot;gflops&quot;: (0.0 if _muestras else None), &quot;gpus&quot;: []}
+    return _ultima_pot
+
+
+def salud(nodos: list, supply: float = 0.0) -&gt; dict:
     &quot;&quot;&quot;Estado del minero calculado en local (el rele no ve tu Core).&quot;&quot;&quot;
     global _ultimo_cambio
     ahora = time.time()
     ok = float(_hist[-1][1]) if _hist else 0.0
     base = _hist[0][1] if _hist else ok
+    sup_base = _hist[0][2] if _hist else supply
     seg = (ahora - _hist[0][0]) if _hist else 0.0
     # Tareas por minuto normalizadas a la ventana que haya (hasta 60 s).
     por_min = ((ok - base) / seg * 60.0) if seg &gt; 1 else 0.0
+    # Lo mismo con las monedas: asi la web puede mostrar &quot;+N KIA/min&quot; y se ve
+    # que el suministro crece aunque el total redondeado parezca quieto.
+    emision = ((supply - sup_base) / seg * 60.0) if seg &gt; 1 else 0.0
     gpus = _gpus_de_identidad()
     if gpus is None:
         # Sin fichero de identidad: cuenta los nodos con nombre de GPU (puede
@@ -2275,25 +2532,48 @@ def salud(nodos: list) -&gt; dict:
     return {
         &quot;gpus&quot;: gpus,
         &quot;tareas_por_min&quot;: int(round(por_min)),
+        &quot;emision_por_min&quot;: round(max(0.0, emision), 2),
+        &quot;tops&quot;: _potencia_tops(nodos),
         &quot;ultima_tarea_hace&quot;: int(max(0, ahora - _ultimo_cambio)) if _ultimo_cambio else None,
     }
 
 
 def publicar(relay: str, clave: str) -&gt; dict:
-    global _ultimo_cambio
+    global _ultimo_cambio, _ultimo_punto
     stats = get_json(&quot;/stats&quot;)
     saldos = get_json(&quot;/saldos&quot;)
     nodos = get_json(&quot;/nodos&quot;)
     ok = float(stats.get(&quot;tareas_ok&quot;) or 0)
+    supply = float(stats.get(&quot;supply_emitido&quot;) or 0)
     ahora = time.time()
     if not _hist or ok != _hist[-1][1]:
         _ultimo_cambio = ahora
-    _hist.append((ahora, ok))
+    _hist.append((ahora, ok, supply))
     while _hist and ahora - _hist[0][0] &gt; 60:
         _hist.popleft()
+    sal = salud(nodos, supply)
+    _leer_log(stats.get(&quot;dificultad&quot;) or {})
+    pot = potencia()
+    sal[&quot;gflops&quot;] = pot[&quot;gflops&quot;]
+    sal[&quot;gflops_gpus&quot;] = pot[&quot;gpus&quot;]
+    if ahora - _ultimo_punto &gt;= CADA_PUNTO:
+        _serie.append({
+            &quot;t&quot;: int(ahora),
+            &quot;supply&quot;: round(supply, 2),
+            &quot;tareas&quot;: int(ok),
+            # El primer punto de cada arranque no tiene ventana suficiente: se
+            # manda sin ritmo para que la web no dibuje un pico falso.
+            &quot;rate&quot;: (int(sal.get(&quot;tareas_por_min&quot;) or 0)
+                     if (_hist and (ahora - _hist[0][0]) &gt;= 19) else None),
+            &quot;gpus&quot;: int(sal.get(&quot;gpus&quot;) or 0),
+            # Potencia por GPU en este instante: {&quot;cuda:0&quot;: 12.3, ...}
+            &quot;pot&quot;: ({g[&quot;d&quot;]: g[&quot;gflops&quot;] for g in pot[&quot;gpus&quot;]} or None),
+        })
+        _ultimo_punto = ahora
     cuerpo = json.dumps({
         &quot;stats&quot;: stats,
-        &quot;salud&quot;: salud(nodos),
+        &quot;salud&quot;: sal,
+        &quot;serie&quot;: list(_serie),
         &quot;saldos&quot;: saldos.get(&quot;saldos&quot;, {}),
     }).encode(&quot;utf-8&quot;)
     req = urllib.request.Request(
