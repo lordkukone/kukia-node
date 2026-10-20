@@ -5925,7 +5925,46 @@ assert.equal(r.status, 200);
 r = await pedir(&#x27;GET&#x27;, &#x27;/api/metricas&#x27;);
 assert.equal((await r.json()).ancla, null, &#x27;ancla incompleta debe quedar en null&#x27;);
 
-console.log(&#x27;relay OK: ancla firmada con legado, 401 sin clave, saldo por direccion&#x27;);
+// 6) Serie por GPU medida: se publica acotada y sin basura.
+r = await pedir(&#x27;POST&#x27;, &#x27;/api/publicar&#x27;, {
+  stats: { supply_emitido: 1 },
+  gpu_serie: {
+    minutos: 60,
+    devices: [&#x27;cuda:0&#x27;, &#x27;cuda:1&#x27;, &#x27;EVIL &lt;script&gt;&#x27;, &#x27;cuda:0&#x27;],
+    tipos: { matriz: 10, difusion_calor: 4, &#x27;&lt;img onerror=x&gt;&#x27;: 2, malo: &#x27;no-numero&#x27; },
+    puntos: [
+      { t: 1000, gpus: {
+          &#x27;cuda:0&#x27;: { gflops: 21.234, ms: 336.66, tareas: 81 },
+          &#x27;cuda:1&#x27;: { gflops: null, ms: null },
+          &#x27;x;DROP&#x27;: { gflops: 5 } } },
+      { t: 0, gpus: { &#x27;cuda:0&#x27;: { gflops: 1 } } },        // t invalido: fuera
+      { t: 1060, gpus: { &#x27;cuda:0&#x27;: { gflops: -3 } } },    // valor imposible: fuera
+    ],
+  },
+}, &#x27;clave-de-prueba&#x27;);
+assert.equal(r.status, 200, &#x27;publicar con gpu_serie debe aceptarse&#x27;);
+r = await pedir(&#x27;GET&#x27;, &#x27;/api/metricas&#x27;);
+const gs = (await r.json()).gpu_serie;
+assert.ok(gs &amp;&amp; Array.isArray(gs.puntos), &#x27;gpu_serie debe publicarse&#x27;);
+assert.equal(gs.puntos.length, 1, &#x27;solo el punto con datos validos&#x27;);
+assert.deepEqual(Object.keys(gs.puntos[0].gpus), [&#x27;cuda:0&#x27;], &#x27;solo GPUs con dato&#x27;);
+assert.equal(gs.puntos[0].gpus[&#x27;cuda:0&#x27;].gflops, 21.23, &#x27;GFLOPS redondeados a 2 decimales&#x27;);
+assert.equal(gs.puntos[0].gpus[&#x27;cuda:0&#x27;].ms, 336.7, &#x27;latencia redondeada a 1 decimal&#x27;);
+assert.deepEqual(gs.devices, [&#x27;cuda:0&#x27;, &#x27;cuda:1&#x27;], &#x27;devices validos, sin repetir y sin HTML&#x27;);
+assert.deepEqual(Object.keys(gs.tipos), [&#x27;matriz&#x27;, &#x27;difusion_calor&#x27;], &#x27;solo tipos numericos y con nombre simple&#x27;);
+
+// 7) Mas de 60 puntos se recortan (la web no puede recibir historia infinita).
+r = await pedir(&#x27;POST&#x27;, &#x27;/api/publicar&#x27;, {
+  stats: { supply_emitido: 1 },
+  gpu_serie: { minutos: 60, devices: [&#x27;cuda:0&#x27;], tipos: { matriz: 1 },
+    puntos: Array.from({ length: 65 }, (_, i) =&gt; ({
+      t: 2000 + i * 60, gpus: { &#x27;cuda:0&#x27;: { gflops: 10, ms: 100, tareas: 3 } } })) },
+}, &#x27;clave-de-prueba&#x27;);
+assert.equal(r.status, 200);
+r = await pedir(&#x27;GET&#x27;, &#x27;/api/metricas&#x27;);
+assert.equal((await r.json()).gpu_serie.puntos.length, 60, &#x27;maximo 60 puntos&#x27;);
+
+console.log(&#x27;relay OK: ancla firmada con legado, 401 sin clave, saldo por direccion, serie por GPU saneada&#x27;);
 </code></pre>
 
 <h2>Dashboard (panel de operaciones) - dashboard/kukia_dash.py</h2>
@@ -8014,6 +8053,77 @@ function limpiaSerie(v) {
   });
 }
 
+// Serie por GPU medida (GFLOPS y latencia de cada tarjeta, minuto a minuto).
+// Se acota TODO: numero de puntos, de GPUs y de tipos de tarea, y cada valor
+// tiene que ser un numero razonable. Un publicador con la clave comprometida
+// no puede convertir el rele en un vertedero ni colar texto en la web.
+function limpiaGpuSerie(v) {
+  if (!v || typeof v !== &#x27;object&#x27; || Array.isArray(v)) return null;
+  const puntos = [];
+  const entrada = Array.isArray(v.puntos) ? v.puntos.slice(-60) : [];
+  for (const p of entrada) {
+    const t = num(p &amp;&amp; p.t);
+    if (t === null || t &lt;= 0) continue;
+    const gpus = {};
+    let n = 0;
+    const gp = (p.gpus &amp;&amp; typeof p.gpus === &#x27;object&#x27; &amp;&amp; !Array.isArray(p.gpus)) ? p.gpus : {};
+    for (const [k, x] of Object.entries(gp)) {
+      if (n &gt;= 4) break;
+      if (typeof k !== &#x27;string&#x27; || !/^(cuda|cpu):?\d*$/.test(k)) continue;
+      if (!x || typeof x !== &#x27;object&#x27; || Array.isArray(x)) continue;
+      const item = {};
+      // OJO: num(null) es 0, y aqui null significa &quot;ese minuto no hubo tarea
+      // de computo&quot;. Si se convirtiera en 0, la web dibujaria una GPU
+      // rindiendo cero cuando en realidad no habia nada que medir.
+      const estricto = function (w) {
+        return (w === null || w === undefined || w === &#x27;&#x27;) ? null : num(w);
+      };
+      const g = estricto(x.gflops), ms = estricto(x.ms), ta = estricto(x.tareas);
+      if (g !== null) {
+        if (g &lt; 0 || g &gt; 1e6) continue;
+        item.gflops = Math.round(g * 100) / 100;
+      }
+      if (ms !== null) {
+        if (ms &lt; 0 || ms &gt; 1e7) continue;
+        item.ms = Math.round(ms * 10) / 10;
+      }
+      if (ta !== null) {
+        if (ta &lt; 0 || ta &gt; 1e9) continue;
+        item.tareas = Math.round(ta);
+      }
+      if (!Object.keys(item).length) continue;
+      gpus[k] = item;
+      n++;
+    }
+    if (n) puntos.push({ t: Math.round(t), gpus });
+  }
+  const devices = [];
+  for (const d of (Array.isArray(v.devices) ? v.devices.slice(0, 4) : [])) {
+    const s = typeof d === &#x27;string&#x27; ? d.trim() : &#x27;&#x27;;
+    if (/^(cuda|cpu):?\d*$/.test(s) &amp;&amp; devices.indexOf(s) &lt; 0) devices.push(s);
+  }
+  const tipos = {};
+  let nt = 0;
+  const tv = (v.tipos &amp;&amp; typeof v.tipos === &#x27;object&#x27; &amp;&amp; !Array.isArray(v.tipos)) ? v.tipos : {};
+  for (const [k, x] of Object.entries(tv)) {
+    if (nt &gt;= 8) break;
+    // Solo nombres de tarea simples: nada de HTML ni de texto libre.
+    const nombre = (typeof k === &#x27;string&#x27; &amp;&amp; /^[a-z_]{1,24}$/i.test(k)) ? k : &#x27;&#x27;;
+    const c = num(x);
+    if (!nombre || c === null || c &lt; 0 || c &gt; 1e9) continue;
+    tipos[nombre] = Math.round(c);
+    nt++;
+  }
+  if (!puntos.length) return null;
+  const minutos = num(v.minutos);
+  return {
+    minutos: Math.min(180, Math.max(5, minutos === null ? 60 : Math.round(minutos))),
+    devices: devices,
+    puntos: puntos,
+    tipos: tipos,
+  };
+}
+
 function limpiaSaldos(v) {
   const entradas = [];
   if (!v || typeof v !== &#x27;object&#x27;) return { saldos: {}, total: 0, truncado: false };
@@ -8165,6 +8275,8 @@ export default {
           tareas_pend: num(s.tareas_pend),
         },
         serie: limpiaSerie(d.serie),
+        // Serie por GPU medida: sin esto la web no tiene latencia ni mezcla.
+        gpu_serie: limpiaGpuSerie(d.gpu_serie),
         salud: {
           gpus: num(d.salud &amp;&amp; d.salud.gpus),
           tareas_por_min: num(d.salud &amp;&amp; d.salud.tareas_por_min),
@@ -8453,6 +8565,65 @@ def potencia() -&gt; dict:
     return _ultima_pot
 
 
+# --- Serie por GPU medida: GFLOPS y LATENCIA reales de cada tarjeta -------
+# Antes la web solo podia dibujar la potencia que se deducia del log del
+# minero; la latencia por GPU no llegaba a la web. Ahora se pide al Core
+# (/red/serie_gpu), que la agrupa de la telemetria que manda el minero en
+# CADA tarea: tiempo cronometrado en la GPU y FLOPs de esa tarea. Nada de
+# medias declaradas ni de numeros que el minero pueda inflar.
+_gpu_serie = {&quot;dato&quot;: None, &quot;ts&quot;: 0.0}
+
+
+def gpu_serie_publica() -&gt; dict:
+    &quot;&quot;&quot;Serie compacta (60 min) para las graficas de la web publica.&quot;&quot;&quot;
+    global _gpu_serie
+    ahora = time.time()
+    if _gpu_serie[&quot;dato&quot;] is not None and ahora - _gpu_serie[&quot;ts&quot;] &lt; CADA_PUNTO:
+        return _gpu_serie[&quot;dato&quot;]
+    try:
+        d = get_json(&quot;/red/serie_gpu?minutos=60&quot;)
+    except Exception:
+        return _gpu_serie[&quot;dato&quot;]
+    puntos = []
+    for p in (d.get(&quot;puntos&quot;) or [])[-60:]:
+        if not isinstance(p, dict):
+            continue
+        gpus = {}
+        for dev, v in (p.get(&quot;gpus&quot;) or {}).items():
+            if not isinstance(v, dict):
+                continue
+            fila = {}
+            gf, ms, n = v.get(&quot;gflops&quot;), v.get(&quot;ms&quot;), v.get(&quot;tareas&quot;)
+            if isinstance(gf, (int, float)) and not isinstance(gf, bool):
+                fila[&quot;gflops&quot;] = round(float(gf), 2)
+            if isinstance(ms, (int, float)) and not isinstance(ms, bool):
+                fila[&quot;ms&quot;] = round(float(ms), 1)
+            if isinstance(n, (int, float)) and not isinstance(n, bool):
+                fila[&quot;tareas&quot;] = int(n)
+            if fila:
+                gpus[str(dev)[:16]] = fila
+        try:
+            t = int(p.get(&quot;t&quot;) or 0)
+        except (TypeError, ValueError):
+            continue
+        if gpus and t &gt; 0:
+            puntos.append({&quot;t&quot;: t, &quot;gpus&quot;: gpus})
+    tipos = {}
+    for k, v in (d.get(&quot;tipos&quot;) or {}).items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v &gt;= 0:
+            tipos[str(k)[:24]] = int(v)
+    dato = {
+        &quot;minutos&quot;: 60,
+        &quot;devices&quot;: [str(x)[:16] for x in (d.get(&quot;devices&quot;) or [])][:4],
+        &quot;puntos&quot;: puntos[-60:],
+        # Mezcla de trabajo de la ventana: que se estaba calculando de verdad.
+        &quot;tipos&quot;: dict(sorted(tipos.items(), key=lambda kv: -kv[1])[:8]),
+        &quot;fuente&quot;: &quot;tiempo y FLOPs medidos por el minero en cada tarea&quot;,
+    }
+    _gpu_serie = {&quot;dato&quot;: dato, &quot;ts&quot;: ahora}
+    return dato
+
+
 def salud(nodos: list, supply: float = 0.0) -&gt; dict:
     &quot;&quot;&quot;Estado del minero calculado en local (el rele no ve tu Core).&quot;&quot;&quot;
     global _ultimo_cambio
@@ -8517,6 +8688,8 @@ def publicar(relay: str, clave: str) -&gt; dict:
         &quot;stats&quot;: stats,
         &quot;salud&quot;: sal,
         &quot;serie&quot;: list(_serie),
+        # Por GPU y minuto: GFLOPS y latencia MEDIDOS en la tarjeta.
+        &quot;gpu_serie&quot;: gpu_serie_publica(),
         &quot;saldos&quot;: saldos.get(&quot;saldos&quot;, {}),
         &quot;ancla&quot;: sello_actual(),
     }).encode(&quot;utf-8&quot;)
@@ -8551,7 +8724,9 @@ def main() -&gt; int:
             if estado != &quot;ok&quot; or ahora - ultimo_aviso &gt;= 60:
                 s = get_json(&quot;/stats&quot;)
                 print(f&quot;[KUKIA] metricas publicadas: {s[&#x27;nodos&#x27;]} nodos, &quot;
-                      f&quot;{s[&#x27;tareas_ok&#x27;]} tareas ok, {j.get(&#x27;saldos&#x27;)} saldos&quot;, flush=True)
+                      f&quot;{s[&#x27;tareas_ok&#x27;]} tareas ok, {j.get(&#x27;saldos&#x27;)} saldos, &quot;
+                      f&quot;gpu_serie={len((gpu_serie_publica() or {}).get(&#x27;puntos&#x27;) or [])} puntos&quot;,
+                      flush=True)
                 ultimo_aviso = ahora
             estado = &quot;ok&quot;
         except urllib.error.HTTPError as e:

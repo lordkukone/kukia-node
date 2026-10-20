@@ -10,6 +10,9 @@
 <meta property="og:description" content="Every GPU. One intelligence network. Tu GPU puede generar inteligencia y KIA verificado.">
 <meta property="og:image" content="moneda.jpg">
 <meta name="twitter:card" content="summary_large_image">
+<!-- Version del HTML: se compara con version.json para que nadie se quede
+     viendo una copia vieja de la web por la cache del navegador. -->
+<meta name="kukia-build" content="v1.0.4-graficas-por-gpu">
 <style>
 :root { --gold:#d4af37; --gold2:#f0d060; --navy:#081a3a; --navy2:#0a1f44; --blue:#12305e; --line:#27487c; --soft:#9db6dd; --text:#c3d1ea; }
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -170,7 +173,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
 
 <section id="graficas" class="reveal">
   <h2>La red, minuto a minuto</h2>
-  <p style="text-align:center;color:var(--text);max-width:760px;margin:0 auto 2rem;line-height:1.7;">Gráficas con datos reales del ledger, una muestra cada 20 segundos. Si el minero se apaga, las líneas se quedan planas: eso también es información.</p>
+  <p style="text-align:center;color:var(--text);max-width:760px;margin:0 auto 2rem;line-height:1.7;">Gráficas con datos reales del ledger, una muestra cada 20 segundos. Si el minero se apaga, las líneas se quedan planas: eso también es información. Las de potencia y latencia salen de lo que cada GPU tardó de verdad en cada tarea, no de una media declarada.</p>
   <p id="potenciaNota" style="display:none;text-align:center;color:#789;font-size:.8rem;max-width:760px;margin:0 auto 1.5rem;line-height:1.6;">La potencia no es una estimación ni lo que el nodo declara al registrarse: es <strong style="color:var(--text);">FLOPs de cada tarea verificada ÷ segundos que tardó la GPU</strong> que la resolvió, medidos por GPU. Si una gráfica baja, es que se está calculando menos, no que el número esté maquillado.</p>
   <div class="charts">
     <div class="chart">
@@ -185,6 +188,16 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
       <div class="chartCab"><span>Potencia medida (GFLOPS)</span><span class="chartHoy" id="chPowerInfo">recopilando…</span></div>
       <canvas id="chPower" height="170"></canvas>
       <div class="chartPie" id="chPowerPie"></div>
+    </div>
+    <div class="chart chartAncho" id="bloqueLatencia" style="display:none">
+      <div class="chartCab"><span>Latencia medida por GPU (ms por tarea)</span><span class="chartHoy" id="chLatInfo">recopilando…</span></div>
+      <canvas id="chLat" height="170"></canvas>
+      <div class="chartPie" id="chLatPie"></div>
+    </div>
+    <div class="chart chartAncho" id="bloqueMezcla" style="display:none">
+      <div class="chartCab"><span>Trabajo real de la red (última hora)</span><span class="chartHoy" id="chMixInfo">recopilando…</span></div>
+      <div id="chMixBars"></div>
+      <p style="color:#789;font-size:.76rem;margin:.7rem 0 0;line-height:1.5;">Un checksum no son FLOPs y su tiempo es casi cero: por eso cuenta como tarea pero no entra en la potencia ni en la latencia. Cada minuto sin tareas de cómputo se deja en hueco, no en cero.</p>
     </div>
   </div>
   <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.8rem;">El histórico lo guarda el relé público, no el ledger. La gráfica arranca en cuanto hay dos muestras (≈20 s).</p>
@@ -471,6 +484,28 @@ counters.forEach(c => cio.observe(c));
 })();
 </script>
 <script>
+// Guardia contra la web vieja: GitHub Pages cachea el HTML unos minutos y habia
+// gente viendo una copia antigua (sin las graficas nuevas). Si la version del
+// HTML cargado no es la que publica el servidor, se recarga UNA vez con otro
+// parametro en la URL, que se salta la cache.
+(function(){
+  var meta = document.querySelector('meta[name="kukia-build"]');
+  var mio = meta ? meta.getAttribute('content') : '';
+  if(!mio || !window.fetch) return;
+  fetch('version.json?_=' + Date.now(), {cache:'no-store'}).then(function(r){
+    return r.ok ? r.json() : null;
+  }).then(function(v){
+    if(!v || !v.v || v.v === mio) return;
+    var clave = 'kukia_reload_' + v.v;
+    try {
+      if(sessionStorage.getItem(clave)) return;
+      sessionStorage.setItem(clave, '1');
+    } catch(e){}
+    location.replace(location.pathname + '?v=' + encodeURIComponent(v.v) + (location.hash || ''));
+  }).catch(function(){});
+})();
+</script>
+<script>
 // Metricas en vivo. La web publica lee /api/metricas del rele (docs/metricas.json);
 // en el mismo PC, ?core=http://127.0.0.1:8300 lee el Core directo (sin rele).
 (function(){
@@ -574,6 +609,102 @@ counters.forEach(c => cio.observe(c));
     return Object.keys(o).length ? o : null;
   }
   function uno(v){ return Number(v).toLocaleString('es-ES', {minimumFractionDigits:1, maximumFractionDigits:1}); }
+  // --- Serie por GPU medida (GFLOPS y latencia reales de cada tarjeta) ---
+  var COLORES = ['#00ff88','#00e5ff','#d4af37','#ff7ad9'];
+  var gserie = null;
+  function escapar(t){
+    return String(t).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function normalizarGserie(g){
+    if(!g || !Array.isArray(g.puntos) || !g.puntos.length) return null;
+    var puntos = [];
+    g.puntos.forEach(function(p){
+      if(!p || typeof p.t !== 'number' || !p.gpus || typeof p.gpus !== 'object') return;
+      var gpus = {};
+      for(var k in p.gpus){
+        var v = p.gpus[k] || {};
+        gpus[k] = {
+          gflops: (typeof v.gflops === 'number' && isFinite(v.gflops)) ? v.gflops : null,
+          ms: (typeof v.ms === 'number' && isFinite(v.ms)) ? v.ms : null
+        };
+      }
+      puntos.push({t: p.t, gpus: gpus});
+    });
+    if(!puntos.length) return null;
+    return {puntos: puntos,
+            tipos: (g.tipos && typeof g.tipos === 'object' && !Array.isArray(g.tipos)) ? g.tipos : {}};
+  }
+  function clavesDe(unidad){
+    var claves = [];
+    if(!gserie) return claves;
+    gserie.puntos.forEach(function(p){
+      for(var k in p.gpus){
+        if(p.gpus[k][unidad] !== null && claves.indexOf(k) < 0) claves.push(k);
+      }
+    });
+    return claves.sort();
+  }
+  function pintarLatencia(){
+    var cv = porId('chLat'), cont = porId('bloqueLatencia'), pie = porId('chLatPie'), info = porId('chLatInfo');
+    var claves = clavesDe('ms');
+    var conDato = 0;
+    if(gserie){
+      gserie.puntos.forEach(function(p){
+        for(var k in p.gpus){ if(p.gpus[k].ms !== null){ conDato++; return; } }
+      });
+    }
+    // Con un solo minuto no hay linea: se espera a tener algo que dibujar.
+    var hay = claves.length > 0 && conDato >= 2;
+    if(cont) cont.style.display = hay ? '' : 'none';
+    if(!hay) return;
+    var series = claves.map(function(k, i){
+      return {color: COLORES[i % COLORES.length],
+              vals: gserie.puntos.map(function(p){
+                var v = p.gpus[k];
+                return (v && v.ms !== null) ? v.ms : null;
+              })};
+    });
+    dibujarVarias(cv, series, 'ms');
+    // Ultimo valor con dato de cada GPU (no el ultimo punto: puede ser hueco).
+    var ultimos = {};
+    for(var i=gserie.puntos.length-1; i>=0 && Object.keys(ultimos).length < claves.length; i--){
+      for(var k in gserie.puntos[i].gpus){
+        var v = gserie.puntos[i].gpus[k];
+        if(v.ms !== null && !(k in ultimos)) ultimos[k] = v.ms;
+      }
+    }
+    if(pie){
+      pie.innerHTML = claves.map(function(k, i){
+        return '<span style="color:' + COLORES[i % COLORES.length] + '">&#9679; ' + escapar(k) +
+               ' <b>' + uno(ultimos[k] || 0) + '</b> ms</span>';
+      }).join(' &nbsp;·&nbsp; ');
+    }
+    if(info){
+      var mins = Math.max(1, Math.round((gserie.puntos[gserie.puntos.length-1].t - gserie.puntos[0].t)/60));
+      info.textContent = claves.length + (claves.length === 1 ? ' GPU' : ' GPUs') + ' · ' + mins + ' min';
+    }
+  }
+  function pintarMezcla(){
+    var cont = porId('bloqueMezcla'), barras = porId('chMixBars'), info = porId('chMixInfo');
+    var tipos = (gserie && gserie.tipos) ? gserie.tipos : null;
+    var claves = tipos ? Object.keys(tipos) : [];
+    var total = 0;
+    claves.forEach(function(k){ total += Number(tipos[k]) || 0; });
+    var hay = claves.length > 0 && total > 0;
+    if(cont) cont.style.display = hay ? '' : 'none';
+    if(!hay || !barras) return;
+    if(info) info.textContent = total.toLocaleString('es-ES') + ' tareas medidas';
+    barras.innerHTML = claves.map(function(k, i){
+      var pct = total ? (Number(tipos[k]) / total * 100) : 0;
+      return '<div style="display:flex;align-items:center;gap:.6rem;margin:.4rem 0;font-size:.85rem">' +
+        '<span style="width:9.5rem;color:#c3d1ea">' + escapar(k) + '</span>' +
+        '<span style="flex:1;background:rgba(157,182,221,.12);border-radius:5px;height:9px;overflow:hidden">' +
+        '<span style="display:block;height:100%;width:' + pct.toFixed(1) + '%;background:' + COLORES[i % COLORES.length] + '"></span></span>' +
+        '<span style="width:4.8rem;text-align:right;color:#9db6dd">' + Math.round(pct) + '% · ' + (Number(tipos[k]) || 0).toLocaleString('es-ES') + '</span></div>';
+    }).join('');
+  }
   function graficar(d, s, salud){
     var pts = (d && Array.isArray(d.serie) && d.serie.length) ? d.serie : null;
     var potAhora = potDeSalud(salud);
@@ -601,6 +732,7 @@ counters.forEach(c => cio.observe(c));
           : null;
       }
     }
+    gserie = normalizarGserie(d && d.gpu_serie);
     pintarSerie();
     var i1 = porId('chSupplyInfo'), i2 = porId('chRateInfo');
     if(serie.length){
@@ -625,6 +757,8 @@ counters.forEach(c => cio.observe(c));
     dibujar(porId('chSupply'), serie.map(function(x){ return x.supply; }).filter(function(v){ return v !== null; }), 'supply');
     dibujar(porId('chRate'), serie.filter(function(x){ return x.rate !== null; }).map(function(x){ return x.rate; }), 'rate');
     pintarPot();
+    pintarLatencia();
+    pintarMezcla();
   }
   // Potencia: una linea por GPU, misma escala, misma ventana de tiempo.
   function pintarPot(){
@@ -659,7 +793,7 @@ counters.forEach(c => cio.observe(c));
         : '';
     }
   }
-  function dibujarVarias(cv, series){
+  function dibujarVarias(cv, series, unidad){
     if(!cv) return;
     var todos = [];
     series.forEach(function(s){ s.vals.forEach(function(v){ if(v !== null) todos.push(v); }); });
@@ -708,7 +842,7 @@ counters.forEach(c => cio.observe(c));
       }
     });
     ctx.fillStyle = '#9db6dd'; ctx.textAlign = 'left';
-    ctx.fillText(Math.round(max).toLocaleString('es-ES') + ' GFLOPS', 6, 11);
+    ctx.fillText(Math.round(max).toLocaleString('es-ES') + ' ' + (unidad || 'GFLOPS'), 6, 11);
     ctx.fillText(Math.round(min).toLocaleString('es-ES'), 6, h - 20);
   }
   function dibujar(cv, vals, tipo){
