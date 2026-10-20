@@ -3237,11 +3237,32 @@ def red_telemetria():
         vivas = [dict(r) for r in filas]
     except Exception:
         pass
+    # Una fila por (nodo, GPU): la ULTIMA de cada una. Con "las 200 mas
+    # recientes" una GPU que solo hace tareas largas (difusiones) desaparecia
+    # de la lista y el panel sumaba 42 GFLOPS en vez de 84 (visto 20-10-2026).
+    ultimas = []
+    try:
+        ultimas = con.execute(
+            "SELECT nodo_id,device,metricas,ts,origen FROM gpu_telemetria "
+            "WHERE id IN (SELECT MAX(id) FROM gpu_telemetria GROUP BY nodo_id, device) "
+            "ORDER BY id DESC LIMIT 50").fetchall()
+    except Exception:
+        pass
     try:
         hist = con.execute("SELECT nodo_id,device,metricas,ts,origen FROM gpu_telemetria "
                            "ORDER BY id DESC LIMIT 200").fetchall()
-        return {"telemetria": vivas + [dict(r) for r in hist]}
     except Exception:
-        return {"telemetria": vivas}
+        hist = []
+    # Las vivas primero (el panel se queda con la primera de cada nodo|GPU),
+    # luego la ultima de cada GPU, y despues el historico para lo que falte.
+    vistas = set()
+    salida = []
+    for r in vivas + [dict(x) for x in ultimas] + [dict(x) for x in hist]:
+        clave = (str(r.get("nodo_id") or ""), str(r.get("device") or ""))
+        if clave in vistas:
+            continue
+        vistas.add(clave)
+        salida.append(r)
+    return {"telemetria": salida}
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300
