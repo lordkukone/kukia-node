@@ -8350,7 +8350,7 @@ Configuracion (dos ficheros junto a este script, NO se publican):
   clave.txt      -&gt; la misma clave que el secreto KUKIA_CLAVE del Worker
 
 Uso:
-  python publicar_metricas.py            (bucle, cada 10 s)
+  python publicar_metricas.py            (bucle, cada 60 s)
   python publicar_metricas.py --una      (una sola vez, para probar)
 &quot;&quot;&quot;
 import collections
@@ -8374,9 +8374,10 @@ IDENTIDAD = AQUI.parent / &quot;worker&quot; / &quot;identidad_minero.json&quot;
 LOG_MINERO = Path(os.environ.get(
     &quot;KUKIA_LOG_MINERO&quot;, str(AQUI.parent / &quot;worker&quot; / &quot;minero.log&quot;)))
 CORE = os.environ.get(&quot;KUKIA_CORE&quot;, &quot;http://127.0.0.1:8300&quot;).rstrip(&quot;/&quot;)
-# 5 s: la web refresca cada 5 s, asi que publicar cada 10 hacia que el dato
-# llegara con 10-15 s de retraso y pareciera que los numeros no se mueven.
-INTERVALO = float(os.environ.get(&quot;KUKIA_PUBLICAR_SEG&quot;, &quot;5&quot;))
+# 60 s: cada publicacion ESCRIBE en el almacenamiento del rele, y el plan
+# gratuito da 2.500 escrituras al dia. Publicar cada 5 s son 17.280: el 20-10-2026
+# el sitio entero se quedo en pausa por eso. A 60 s son 1.440, con margen.
+INTERVALO = float(os.environ.get(&quot;KUKIA_PUBLICAR_SEG&quot;, &quot;60&quot;))
 
 
 def leer_fichero(nombre: str) -&gt; str:
@@ -8424,10 +8425,11 @@ def sello_actual():
 # minando AHORA (una tarea de hace 2 minutos no es &quot;en vivo&quot;).
 _hist = collections.deque()      # (momento, tareas_ok, supply_emitido)
 _ultimo_cambio = 0.0
-# Serie para las graficas de la web: un punto cada 20 s, 1 hora de historia.
+# Serie para las graficas de la web: un punto por publicacion (1 min).
+# 180 puntos = 3 horas de historia sin crecer.
 _serie = collections.deque(maxlen=180)
 _ultimo_punto = 0.0
-CADA_PUNTO = 20.0
+CADA_PUNTO = 60.0
 
 
 def _gpus_de_identidad():
@@ -8664,7 +8666,9 @@ def publicar(relay: str, clave: str) -&gt; dict:
     if not _hist or ok != _hist[-1][1]:
         _ultimo_cambio = ahora
     _hist.append((ahora, ok, supply))
-    while _hist and ahora - _hist[0][0] &gt; 60:
+    # 3 min de ventana: con publicaciones cada 60 s hacen falta varias muestras
+    # para que el ritmo no salga de una sola y marque 0 o un pico falso.
+    while _hist and ahora - _hist[0][0] &gt; 180:
         _hist.popleft()
     sal = salud(nodos, supply)
     _leer_log(stats.get(&quot;dificultad&quot;) or {})
@@ -8731,6 +8735,18 @@ def main() -&gt; int:
                 ultimo_aviso = ahora
             estado = &quot;ok&quot;
         except urllib.error.HTTPError as e:
+            if e.code == 429:
+                # El hosting gratuito se quedo sin cupo (escrituras o
+                # peticiones del dia). Insistir cada minuto no arregla nada y
+                # gasta el poco margen: se espera 10 min.
+                if estado != &quot;cupo&quot; or time.time() - ultimo_aviso &gt;= 60:
+                    print(&quot;[KUKIA] el rele esta en pausa por cupo del hosting &quot;
+                          &quot;(429); reintento en 10 min. El Core sigue vivo.&quot;,
+                          flush=True)
+                    ultimo_aviso = time.time()
+                estado = &quot;cupo&quot;
+                time.sleep(600)
+                continue
             if estado != &quot;http&quot; or time.time() - ultimo_aviso &gt;= 60:
                 print(f&quot;[KUKIA] el rele rechaza la publicacion: {e.code} &quot;
                       f&quot;(revisa clave.txt)&quot;, flush=True)

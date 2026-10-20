@@ -13,7 +13,7 @@
 <meta name="twitter:card" content="summary_large_image">
 <!-- Version del HTML: se compara con version.json para que nadie se quede
      viendo una copia vieja de la web por la cache del navegador. -->
-<meta name="kukia-build" content="v1.0.5-sw-fresco">
+<meta name="kukia-build" content="v1.0.7-cupo-y-numeros">
 <style>
 :root { --gold:#d4af37; --gold2:#f0d060; --navy:#081a3a; --navy2:#0a1f44; --blue:#12305e; --line:#27487c; --soft:#9db6dd; --text:#c3d1ea; }
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -64,8 +64,15 @@ h2::after { content:''; display:block; width:70px; height:3px; background:linear
 .card h3 { color:var(--gold); margin-bottom:.6rem; font-size:1.1rem; }
 .card p { color:var(--text); font-size:.93rem; line-height:1.6; }
 .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1.5rem; max-width:800px; margin:0 auto; }
-.stat { text-align:center; padding:1.8rem 1rem; background:rgba(18,48,94,.5); border:1px solid var(--line); border-radius:16px; }
-.stat .n { font-size:clamp(2rem,5vw,2.9rem); color:var(--gold); font-weight:800; display:block; }
+.stat { text-align:center; padding:1.8rem 1rem; background:rgba(18,48,94,.5); border:1px solid var(--line); border-radius:16px; container-type:inline-size; }
+/* El numero se ajusta al ancho de SU tarjeta, no al de la ventana: con cinco
+   tarjetas en fila, 15.083.759 a 2,9rem se salia del cuadro y pisaba la de al
+   lado (visto 20-10-2026). Los digitos son tabulares para que no baile el ancho
+   cada vez que cambia la cifra en vivo. */
+.stat .n { font-size:clamp(1.5rem,4.4vw,2.6rem); color:var(--gold); font-weight:800; display:block;
+           white-space:nowrap; font-variant-numeric:tabular-nums; letter-spacing:-.02em; line-height:1.05; }
+@supports (font-size:1cqw) { .stat .n { font-size:clamp(1.1rem,14cqw,2.9rem); } }
+.stat .l { overflow-wrap:anywhere; }
 .stat .l { color:var(--soft); font-size:.88rem; margin-top:.3rem; display:block; }
 .timeline { position:relative; max-width:760px; margin:0 auto; padding-left:2.2rem; }
 .timeline::before { content:''; position:absolute; left:8px; top:0; bottom:0; width:2px; background:linear-gradient(180deg,var(--gold),rgba(212,175,55,.1)); }
@@ -168,13 +175,13 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   <p style="text-align:center;color:#789;font-size:.82rem;margin-top:1rem;">
     <span id="liveDot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#789;vertical-align:middle;margin-right:.45rem;"></span><span id="liveText">Conectando con la red…</span>
   </p>
-  <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.3rem;">Cifras del ledger real, refrescadas cada 5 s mientras el minero está encendido. Si se apaga, la web se queda con la última instantánea y lo avisa. El ledger público manda.</p>
+  <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.3rem;">Cifras del ledger real, refrescadas cada minuto mientras el minero está encendido. Si se apaga, la web se queda con la última instantánea y lo avisa. El ledger público manda.</p>
   <p style="text-align:center;margin-top:2rem;"><a class="btn" href="#registro">Pedir acceso de cliente</a></p>
 </section>
 
 <section id="graficas" class="reveal">
   <h2>La red, minuto a minuto</h2>
-  <p style="text-align:center;color:var(--text);max-width:760px;margin:0 auto 2rem;line-height:1.7;">Gráficas con datos reales del ledger, una muestra cada 20 segundos. Si el minero se apaga, las líneas se quedan planas: eso también es información. Las de potencia y latencia salen de lo que cada GPU tardó de verdad en cada tarea, no de una media declarada.</p>
+  <p style="text-align:center;color:var(--text);max-width:760px;margin:0 auto 2rem;line-height:1.7;">Gráficas con datos reales del ledger, una muestra por minuto. Si el minero se apaga, las líneas se quedan planas: eso también es información. Las de potencia y latencia salen de lo que cada GPU tardó de verdad en cada tarea, no de una media declarada.</p>
   <p id="potenciaNota" style="display:none;text-align:center;color:#789;font-size:.8rem;max-width:760px;margin:0 auto 1.5rem;line-height:1.6;">La potencia no es una estimación ni lo que el nodo declara al registrarse: es <strong style="color:var(--text);">FLOPs de cada tarea verificada ÷ segundos que tardó la GPU</strong> que la resolvió, medidos por GPU. Si una gráfica baja, es que se está calculando menos, no que el número esté maquillado.</p>
   <div class="charts">
     <div class="chart">
@@ -201,7 +208,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
       <p style="color:#789;font-size:.76rem;margin:.7rem 0 0;line-height:1.5;">Un checksum no son FLOPs y su tiempo es casi cero: por eso cuenta como tarea pero no entra en la potencia ni en la latencia. Cada minuto sin tareas de cómputo se deja en hueco, no en cero.</p>
     </div>
   </div>
-  <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.8rem;">El histórico lo guarda el relé público, no el ledger. La gráfica arranca en cuanto hay dos muestras (≈20 s).</p>
+  <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.8rem;">El histórico lo guarda el relé público, no el ledger. La gráfica arranca en cuanto hay dos muestras (≈2 min).</p>
 </section>
 
 <section id="tokenomics" class="reveal">
@@ -591,21 +598,52 @@ counters.forEach(c => cio.observe(c));
     tsDatos = tsNuevo;
     graficar(d, s, salud);
   }
+  // El rele gratuito tiene CUPO DIARIO de peticiones y de escrituras. Pedir
+  // cada 5 s agotaba el cupo en horas y dejaba la web con la instantanea
+  // vieja (visto 20-10-2026: el sitio entero en pausa por escrituras). Una
+  // lectura por minuto es de sobra para ver la red, y una pestana en segundo
+  // plano no pide nada.
+  var POLL = 60000;
+  var pausaHasta = 0, pausaMsg = '';
   async function tick(){
+    if(document.hidden) return;
+    if(Date.now() < pausaHasta){
+      color('#e0c05e');
+      texto(pausaMsg + ' · reintento en ' + Math.ceil((pausaHasta - Date.now())/1000) + ' s');
+      return;
+    }
     try {
       if(!base) base = await descubrir();
       if(!base){ color('#e0c05e'); texto('Instantánea del 19-10-2026 · en vivo en cuanto se conecte el relé'); return; }
       var ctl = new AbortController();
-      var to = setTimeout(function(){ ctl.abort(); }, 4000);
+      var to = setTimeout(function(){ ctl.abort(); }, 6000);
       var r = await fetch(base + ruta + '?_=' + Date.now(), {cache:'no-store', signal: ctl.signal});
       clearTimeout(to);
+      if(r.status === 429){
+        // 429 = el hosting gratuito se ha quedado sin cupo. Se respeta
+        // Retry-After: insistir cada 5 s es justo lo que lo empeora.
+        var ra = parseInt(r.headers.get('Retry-After') || '60', 10);
+        if(!isFinite(ra) || ra <= 0) ra = 60;
+        pausaHasta = Date.now() + Math.max(60, Math.min(900, ra)) * 1000;
+        pausaMsg = 'Relé en pausa por cupo del hosting';
+        color('#e0c05e');
+        texto(pausaMsg + ' · reintento en ' + Math.ceil((pausaHasta - Date.now())/1000) + ' s');
+        return;
+      }
       if(!r.ok) throw new Error('HTTP ' + r.status);
+      pausaHasta = 0;
       aplicar(await r.json());
-      if(Date.now() - tsDatos < 90000){ color('#00ff88'); texto('EN VIVO · ' + hace() + ' · refresco 5 s'); }
+      if(Date.now() - tsDatos < 180000){ color('#00ff88'); texto('EN VIVO · ' + hace() + ' · refresco 1 min'); }
       else { color('#e0c05e'); texto('SIN DATOS NUEVOS · último dato ' + hace() + ' (minero apagado)'); }
     } catch(e){
+      // Sin respuesta: red, corte o el rele en pausa (cuando el hosting pausa
+      // el sitio, la respuesta no trae CORS y el navegador la bloquea, asi que
+      // aqui no se puede leer el 429). Se espacia el reintento igual.
+      pausaHasta = Date.now() + 120000;
+      pausaMsg = 'Relé no disponible ahora mismo';
       color('#e0c05e');
-      texto(tsDatos ? 'SIN CONEXIÓN con el relé · último dato ' + hace() : 'Instantánea del 19-10-2026 · el relé no responde');
+      texto(pausaMsg + ' · reintento en ' + Math.ceil((pausaHasta - Date.now())/1000) + ' s'
+            + (tsDatos ? ' · último dato ' + hace() : ' · instantánea del 19-10-2026'));
     }
   }
   // --- Graficas en vivo (canvas, sin librerias) -------------------------
@@ -902,9 +940,14 @@ counters.forEach(c => cio.observe(c));
   window.addEventListener('resize', function(){ if(serie.length > 1) pintarSerie(); });
 
   tick();
-  setInterval(tick, 5000);
+  setInterval(tick, POLL);
+  // Al volver a la pestana se pide de inmediato: si estuvo oculta, el dato
+  // que se ve es viejo y conviene refrescarlo ya.
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden) tick(); });
   setInterval(function(){
-    if(tsDatos && Date.now() - tsDatos < 90000){ texto('EN VIVO · ' + hace() + ' · refresco 5 s'); }
+    if(Date.now() < pausaHasta){
+      texto(pausaMsg + ' · reintento en ' + Math.ceil((pausaHasta - Date.now())/1000) + ' s');
+    } else if(tsDatos && Date.now() - tsDatos < 180000){ texto('EN VIVO · ' + hace() + ' · refresco 1 min'); }
   }, 1000);
 })();
 </script>
