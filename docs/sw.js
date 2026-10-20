@@ -3,7 +3,7 @@
 // habia entrado seguia recibiendo la version ANTIGUA (la que guardaba la
 // clave privada en localStorage) aunque el servidor ya tuviera la buena.
 // Ahora el HTML va a RED primero y la cache solo se usa si no hay conexion.
-var CACHE = 'kukia-wallet-v2';
+var CACHE = 'kukia-wallet-v3';
 var ASSETS = [
   'wallet.html',
   'manifest.json',
