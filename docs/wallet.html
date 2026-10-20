@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#081a3a">
+<!-- AUDITORIA 2026-10-20: la billetera tiene la clave privada en memoria.
+     La CSP limita scripts/medios a este origen y las conexiones a tu Core
+     local o HTTPS; no puede impedir un innerHTML mal escapado, pero corta
+     inyecciones externas y envios a dominios raros. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* https:; object-src 'none'; base-uri 'self'">
 <title>KUKIA Wallet - Tu billetera KIA</title>
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="moneda.jpg">
@@ -46,6 +51,7 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
   <button type="button" class="tab on" onclick="ver('crear', this)">Nueva</button>
   <button type="button" class="tab" onclick="ver('recuperar', this)">Recuperar</button>
   <button type="button" class="tab" onclick="ver('ver', this)">Mi saldo</button>
+  <button type="button" class="tab" onclick="ver('enviar', this)">Enviar</button>
 </div>
 
 <div id="p-crear" class="panel on">
@@ -81,8 +87,23 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
   </div>
 </div>
 
-<script src="nacl.min.js"></script>
-<script src="qrcode.min.js"></script>
+<div id="p-enviar" class="panel">
+  <div class="card">
+    <h3>Enviar KIA</h3>
+    <p style="color:var(--text);font-size:.82rem;line-height:1.5;margin-bottom:.8rem;">
+      La transacción se firma <strong>en tu navegador</strong>. La clave privada no se envía
+      al Core ni se guarda en disco. Comisión: <strong>0 KIA</strong>.
+    </p>
+    <div class="addr" id="e-de">Primero crea o recupera tu billetera en esta pestaña.</div>
+    <input id="e-dest" placeholder="Dirección destino KUK..." autocomplete="off" spellcheck="false">
+    <input id="e-monto" inputmode="decimal" placeholder="Cantidad (máximo 4 decimales)" autocomplete="off">
+    <button class="btn" onclick="enviar()">Firmar y enviar</button>
+    <div id="e-out"></div>
+  </div>
+</div>
+
+<script src="nacl.min.js" integrity="sha384-0jQROJt6wG1AI3HmYbaU8+/kf+09BqXwTdbUCG5Hr6ASZVXXgJ/6lrRPDAqgIqEm"></script>
+<script src="qrcode.min.js" integrity="sha384-+bMitG8OESwS8Yg64Ik3PeRl6QWVsDQ9dNylFHV24uKAVEWx69kFeUtsmoT6NvkG"></script>
 <script>
 var WORDS = null;
 // AUDITORIA 2026-10-18: la clave privada y las 20 palabras ya NO se guardan
@@ -90,6 +111,8 @@ var WORDS = null;
 // la pagina, las vuelves a poner con tus palabras. Asi un XSS o una extension
 // no se lleva tu billetera ni tu copia de seguridad.
 var PRIV = null;
+var SECRET = null;   // clave secreta Ed25519 completa, SOLO en memoria
+var PUB = null;      // clave publica Ed25519 (hex), se manda al Core
 var ADDR = null;
 var MNEMO = null;   // palabras exactas recien generadas (para copiarlas tal cual)
 fetch('wordlist.txt').then(function(r){ return r.text(); }).then(function(t){
@@ -149,9 +172,13 @@ function usarCandidato(idx, cands){
   var c = cands[idx];
   if(!c) return;
   PRIV = Array.from(c.seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  var kp = nacl.sign.keyPair.fromSeed(c.seed);
+  SECRET = kp.secretKey;
+  PUB = hexde(kp.publicKey);
   ADDR = c.addr;
   localStorage.setItem('kukia_addr', c.addr);
-  document.getElementById('r-out').innerHTML = '<div class="addr">' + c.addr + '</div>' +
+  actualizarEnvio();
+  document.getElementById('r-out').innerHTML = '<div class="addr">' + esc(c.addr) + '</div>' +
     '<p class="ok">Billetera recuperada (' + c.forma + ').</p>' +
     '<button class="btn btn2" onclick="copiar(ADDR)">Copiar direccion</button>';
 }
@@ -201,8 +228,11 @@ function crear(){
     var kp = nacl.sign.keyPair.fromSeed(seed);
     var addr = 'KUK' + (await sha256hex(kp.publicKey)).substring(0,38);
     PRIV = Array.from(seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+    SECRET = kp.secretKey;
+    PUB = hexde(kp.publicKey);
     ADDR = addr;
     MNEMO = words.join(' ');
+    actualizarEnvio();
     localStorage.setItem('kukia_addr', addr);   // solo la direccion (es publica)
     var html = '<div class="addr">' + addr + '</div>';
     html += '<div class="warn"><strong>GUARDA ESTO EN PAPEL AHORA:</strong><br>Contrasena: <code>' + pass + '</code></div>';
@@ -267,6 +297,94 @@ async function recuperar(){
   window.__cands = cands;
 }
 
+function hexde(u8){
+  return Array.from(u8).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+}
+// AUDITORIA 2026-10-20: esta pagina tiene la clave privada EN MEMORIA. Un
+// "Core" malicioso (el usuario puede apuntar la billetera a otra URL) podia
+// devolver un detail/monto con HTML y ejecutar codigo aqui. Todo texto
+// externo se escapa antes de entrar en innerHTML.
+function esc(v){
+  return String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function actualizarEnvio(){
+  var d = document.getElementById('e-de');
+  if(!d) return;
+  d.textContent = ADDR ? ('Desde: ' + ADDR) : 'Primero crea o recupera tu billetera en esta pestaña.';
+}
+// Python imprime 1.0 (no 1): el mensaje firmado tiene que coincidir EXACTO
+// con el que reconstruye el Core (str(round(monto, 4))).
+function formatoMonto(n){
+  return Number.isInteger(n) ? n.toFixed(1) : String(n);
+}
+var _enviando = false;
+async function enviar(){
+  var out = document.getElementById('e-out');
+  if(!SECRET || !ADDR){
+    out.innerHTML = '<p class="err">Crea o recupera tu billetera en esta pestaña antes de enviar. ' +
+      'La clave privada no se guarda: si recargas la página hay que volver a poner tus 20 palabras.</p>';
+    return;
+  }
+  if(_enviando) return;
+  var dest = document.getElementById('e-dest').value.trim().toUpperCase();
+  var txt = document.getElementById('e-monto').value.trim().replace(',', '.');
+  if(!/^KUK[0-9A-F]{38}$/.test(dest)){
+    out.innerHTML = '<p class="err">Destino inválido: una dirección KUK de 41 caracteres.</p>';
+    return;
+  }
+  if(dest === ADDR){
+    out.innerHTML = '<p class="err">Origen y destino son la misma dirección.</p>';
+    return;
+  }
+  if(!/^\d+(\.\d{1,4})?$/.test(txt)){
+    out.innerHTML = '<p class="err">Cantidad inválida: número positivo con 4 decimales como máximo.</p>';
+    return;
+  }
+  var monto = Number(txt);
+  if(!(monto > 0) || !isFinite(monto)){
+    out.innerHTML = '<p class="err">La cantidad tiene que ser mayor que 0.</p>';
+    return;
+  }
+  var nonce = hexde(crypto.getRandomValues(new Uint8Array(16)));
+  var mensaje = 'transferir:' + ADDR + ':' + dest + ':' + formatoMonto(monto) + ':' + nonce;
+  var firma;
+  try {
+    firma = hexde(nacl.sign.detached(new TextEncoder().encode(mensaje), SECRET));
+  } catch(e){
+    out.innerHTML = '<p class="err">No pude firmar: ' + esc(e.message) + '</p>';
+    return;
+  }
+  _enviando = true;
+  out.innerHTML = '<p class="small">Firmado. Enviando al Core…</p>';
+  try {
+    var r = await fetch(coreUrl() + '/transferir', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({de_nodo: ADDR, a_direccion: dest, monto: monto,
+                            nonce: nonce, firma: firma, clave_publica: PUB})
+    });
+    var j = await r.json().catch(function(){ return {}; });
+    if(!r.ok){
+      out.innerHTML = '<p class="err">El Core rechazó la transferencia: ' +
+        esc(j.detail || ('HTTP ' + r.status)) + '</p>';
+      return;
+    }
+    out.innerHTML = '<p class="ok">Enviado: <strong>' + esc(j.monto) + ' KIA</strong></p>' +
+      '<div class="addr">' + esc(dest) + '</div>' +
+      '<p class="small">Comprobante: ' + esc(nonce) + '. La clave privada nunca salió de esta pestaña.</p>';
+    document.getElementById('v-addr').value = ADDR;
+    document.getElementById('e-dest').value = '';
+    document.getElementById('e-monto').value = '';
+  } catch(e){
+    out.innerHTML = '<p class="err">No pude conectar con el Core (' + esc(coreUrl()) + '). ' +
+      'Si el Core está apagado, la transferencia no se envía. ' + esc(e.message) + '</p>';
+  } finally {
+    _enviando = false;
+  }
+}
+
 function saldoRemoto(addr){
   // Sin Core local: pide el saldo publicado por la red (solo lectura).
   return fetch('metricas.json?_=' + Date.now(), {cache:'no-store'})
@@ -282,8 +400,8 @@ function saldoRemoto(addr){
 function pintarSaldo(addr, j, fuente){
   document.getElementById('v-out').innerHTML =
     '<div class="saldo">' + Number(j.saldo).toLocaleString('es-ES', {maximumFractionDigits:4}) + ' KIA</div>' +
-    '<div class="addr">' + addr + '</div>' +
-    '<p class="small">' + fuente + '</p>';
+    '<div class="addr">' + esc(addr) + '</div>' +
+    '<p class="small">' + esc(fuente) + '</p>';
   try {
     var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
     document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
@@ -307,9 +425,9 @@ function saldo(){
       pintarSaldo(addr, j, 'Core local no accesible: saldo publicado por la red (actualizado ' + cuando + ').');
     }).catch(function(){
       document.getElementById('v-out').innerHTML =
-        '<p class="err">No pude leer el saldo: ni tu Core local (' + core + ') ni el relé público responden. ' +
+        '<p class="err">No pude leer el saldo: ni tu Core local (' + esc(core) + ') ni el relé público responden. ' +
         'Si el minero está encendido, el saldo aparece en cuanto publique.</p>' +
-        '<div class="addr">' + addr + '</div>';
+        '<div class="addr">' + esc(addr) + '</div>';
     });
   });
 }

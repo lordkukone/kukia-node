@@ -136,7 +136,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   <div class="grid">
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-con" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><rect x="6" y="10" width="40" height="26" rx="3" fill="none" stroke="url(#g-con)" stroke-width="3"/><circle cx="17" cy="23" r="4" fill="url(#g-con)"/><circle cx="35" cy="23" r="4" fill="url(#g-con)"/><line x1="17" y1="23" x2="35" y2="23" stroke="url(#g-con)" stroke-width="2"/><line x1="26" y1="36" x2="26" y2="44" stroke="url(#g-con)" stroke-width="3"/><line x1="18" y1="44" x2="34" y2="44" stroke="url(#g-con)" stroke-width="3"/></svg></div><h3>Conecta</h3><p>Registra tu tarjeta grafica. Cualquier GPU de 8GB+ vale. Nunca compras hardware: usas el que ya tienes.</p></div>
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-gen" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#d4af37"/></linearGradient></defs><polygon points="29,4 12,30 24,30 22,48 40,21 28,21" fill="url(#g-gen)" stroke-linejoin="round"/></svg></div><h3>Genera</h3><p>Ejecuta tareas reales: inferencia, imagen, video, simulaciones. Nada de mineria tonta que solo quema energia.</p></div>
-    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-ver" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><path d="M26 4 L42 18 V26 C42 36 35 43 26 48 C17 43 10 36 10 26 V18 Z" fill="none" stroke="url(#g-ver)" stroke-width="3"/><polyline points="19,26 24,31 33,20" fill="none" stroke="url(#g-ver)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Verifica</h3><p>Cada resultado se comprueba bit a bit, con doble verificacion, reputacion y staking. Sin trampas posibles.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-ver" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><path d="M26 4 L42 18 V26 C42 36 35 43 26 48 C17 43 10 36 10 26 V18 Z" fill="none" stroke="url(#g-ver)" stroke-width="3"/><polyline points="19,26 24,31 33,20" fill="none" stroke="url(#g-ver)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Verifica</h3><p>Cada resultado se recalcula bit a bit en el Core. Si no coincide, no se paga: hay penalizacion en KIA, perdida de reputacion y unos minutos sin trabajar.</p></div>
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #d4af3766);"><defs><linearGradient id="g-kia" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#d4af37"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><circle cx="26" cy="26" r="18" fill="none" stroke="url(#g-kia)" stroke-width="3"/><circle cx="26" cy="26" r="12" fill="url(#g-kia)" opacity="0.35"/><text x="26" y="32" font-size="16" font-weight="bold" text-anchor="middle" fill="url(#g-kia)">K</text></svg></div><h3>Gana KIA</h3><p>Cada trabajo verificado acuna moneda. 100 millones maximo, hasta 2150. Sin inflacion vacia.</p></div>
   </div>
 </section>
@@ -156,6 +156,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <div class="stat"><span class="n" id="stTasks">21.013</span><span class="l">Tareas verificadas</span></div>
     <div class="stat"><span class="n" id="stQueue">—</span><span class="l">Tareas en cola</span></div>
     <div class="stat"><span class="n" id="stRate">—</span><span class="l">Tareas por minuto</span></div>
+    <div class="stat"><span class="n" id="stSeal">—</span><span class="l" id="stSealLabel">Último sello firmado</span></div>
     <div class="stat"><span class="n">100%</span><span class="l">Código abierto</span></div>
   </div>
   <p style="text-align:center;color:#789;font-size:.82rem;margin-top:1rem;">
@@ -192,7 +193,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <div class="stat"><span class="n" data-count="100">0M</span><span class="l">KIA maximo total</span></div>
     <div class="stat"><span class="n">2150</span><span class="l">Ultima moneda emitida</span></div>
     <div class="stat"><span class="n">0%</span><span class="l">Precio artificial</span></div>
-    <div class="stat"><span class="n">10-15%</span><span class="l">Quema de comisiones</span></div>
+    <div class="stat"><span class="n">0%</span><span class="l">Comision por transferencia</span></div>
   </div>
   <p style="text-align:center;color:var(--text);margin-top:2.5rem;max-width:720px;margin-left:auto;margin-right:auto;line-height:1.7;">
     KIA sale a precio <strong style="color:#fff;">segun demanda real</strong> cuando la red tenga nodos, trabajo y clientes de verdad. Ni antes, ni despues. Mes de prueba: 4-6 semanas de validacion.
@@ -204,7 +205,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   <div class="grid">
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-gpu" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#d4af37"/></linearGradient></defs><rect x="16" y="14" width="20" height="16" rx="2" fill="none" stroke="url(#g-gpu)" stroke-width="3"/><circle cx="22" cy="22" r="2.5" fill="url(#g-gpu)"/><circle cx="30" cy="22" r="2.5" fill="url(#g-gpu)"/><line x1="10" y1="38" x2="42" y2="38" stroke="url(#g-gpu)" stroke-width="3" stroke-linecap="round"/></svg></div><h3>Minado util</h3><p>Prestas tu GPU y ganas KIA por cada tarea completada y verificada. Trabajo real de IA, no hashes vacios.</p></div>
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-cli" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><rect x="10" y="14" width="32" height="26" rx="3" fill="none" stroke="url(#g-cli)" stroke-width="3"/><line x1="10" y1="21" x2="42" y2="21" stroke="url(#g-cli)" stroke-width="2.5"/><rect x="22" y="11" width="8" height="5" rx="1.5" fill="url(#g-cli)"/></svg></div><h3>Clientes</h3><p>Quien necesita imagenes, videos o simulaciones paga en KIA por el servicio de la red.</p></div>
-    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #ff9d0066);"><defs><linearGradient id="g-fire" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ff9d00"/><stop offset="100%" stop-color="#ff3d00"/></linearGradient></defs><path d="M26 4 C30 12 38 16 38 28 C38 37 32 44 26 44 C20 44 14 37 14 28 C14 22 17 19 19 15 C20 20 22 21 23 21 C22 15 23 9 26 4 Z" fill="url(#g-fire)"/><circle cx="26" cy="31" r="5" fill="#010806" opacity="0.55"/></svg></div><h3>Quema</h3><p>Entre el 10 y 15% de las comisiones se destruyen. Menos oferta con el tiempo, mas solidez.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #35e08a66);"><defs><linearGradient id="g-free" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#35e08a"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><path d="M26 4 L42 18 V26 C42 36 35 43 26 48 C17 43 10 36 10 26 V18 Z" fill="none" stroke="url(#g-free)" stroke-width="3"/><polyline points="19,25 24,30 33,19" fill="none" stroke="url(#g-free)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Sin comisiones</h3><p>Enviar KIA no cobra comision: lo que envias es lo que llega. Nada de quema anunciada que el codigo no haga.</p></div>
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-cal" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#d4af37"/></linearGradient></defs><rect x="10" y="12" width="32" height="30" rx="3" fill="none" stroke="url(#g-cal)" stroke-width="3"/><line x1="10" y1="20" x2="42" y2="20" stroke="url(#g-cal)" stroke-width="2.5"/><line x1="18" y1="8" x2="18" y2="15" stroke="url(#g-cal)" stroke-width="3" stroke-linecap="round"/><line x1="34" y1="8" x2="34" y2="15" stroke="url(#g-cal)" stroke-width="3" stroke-linecap="round"/><circle cx="26" cy="31" r="5" fill="none" stroke="url(#g-cal)" stroke-width="2.5"/><line x1="26" y1="31" x2="26" y2="27" stroke="url(#g-cal)" stroke-width="2.5" stroke-linecap="round"/><line x1="26" y1="31" x2="29" y2="33" stroke="url(#g-cal)" stroke-width="2.5" stroke-linecap="round"/></svg></div><h3>Emision programada</h3><p>Escalonada hasta 2150 con dificultad ajustada al numero de nodos activos de la red.</p></div>
   </div>
 </section>
@@ -226,7 +227,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   <div class="timeline">
     <div class="tl-item live"><h3>Ahora: fase de pruebas</h3><p>4-6 semanas de validacion local. Refinando verificacion, wallet y dashboard antes de abrir.</p></div>
     <div class="tl-item"><h3>Fase 1: primeros nodos</h3><p>Red privada con nodos invitados. Sistema de reputacion y tiers por VRAM.</p></div>
-    <div class="tl-item"><h3>Fase 2: apertura publica</h3><p>Minado abierto con recompensas de bienvenida para los primeros mineros.</p></div>
+    <div class="tl-item"><h3>Fase 2: apertura publica</h3><p>Minado abierto, con pago por tarea verificada y reputacion inicial para los primeros nodos.</p></div>
     <div class="tl-item"><h3>Fase 3: demanda real</h3><p>Primeros clientes de computo. <strong style="color:#fff;">Aqui sale el precio, solo por demanda.</strong></p></div>
   </div>
 </section>
@@ -255,23 +256,26 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
 </section>
 
 <section id="seguridad" class="reveal">
-  <h2>Seguridad probada y proteccion al cliente</h2>
+  <h2>Seguridad verificable y proteccion al cliente</h2>
   <div class="faq">
     <details class="qa" open><summary>&#9989; Seguridad verificada en pruebas (resultado real)</summary>
-      <p><strong>La seguridad del sistema ha sido probada de extremo a extremo y funciona:</strong></p>
+      <p><strong>Comprobado con pruebas reproducibles (auditoria interna, 19-10-2026):</strong></p>
       <ul style="margin:1rem 0 0 1.2rem;color:var(--text);">
         <li><strong>Verificacion trustless probada:</strong> el Core recalcula cada tarea; correcto paga, falso rechaza (0 KIA). Anti-doble-pago activo (409). Tope de 100M aplicado en cada pago.</li>
+        <li><strong>Billetera que de verdad puede gastar:</strong> la pestana <em>Enviar</em> firma en tu navegador y el Core comprueba que la clave derive en tu direccion. Sin comision. La clave privada no se envia ni se guarda.</li>
+        <li><strong>Historial con sellos firmados (Ed25519):</strong> cada pocos minutos se firma un resumen del ledger con una clave que no esta en la base de datos. Si alguien edita el historial a mano, el Core deja de pagar y lo publica en <code>/ledger/integridad</code>.</li>
         <li><strong>Billetera con recuperacion:</strong> se crea con tu contrasena + 20 palabras unicas (Ed25519 real, PBKDF2 200.000 iteraciones). Guardalas en papel: sin ellas no se recupera. La clave jamas sale de tu PC.</li>
         <li><strong>Sin permisos peligrosos:</strong> el worker no pide administrador, no toca archivos del sistema y no abre puertos entrantes.</li>
         <li><strong>Codigo 100% abierto:</strong> revisalo en un clic antes de instalar: <a href="codigo.html" style="color:var(--gold);">codigo fuente</a> o <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">GitHub</a>.</li>
         <li><strong>Recomendacion honesta:</strong> es un prototipo en fase de pruebas; para maxima tranquilidad instalalo en un equipo secundario.</li>
+        <li><strong>Limite honesto:</strong> ya existen validadores independientes que recalculan el trabajo y firman su conformidad, pero hoy corren en el mismo PC. La seguridad de Bitcoin viene de miles de nodos independientes que validan lo mismo; KUKIA aun no tiene eso. Los sellos firmados permiten <em>detectar</em> un historial editado, no impedirlo si alguien controla el PC. Esta explicado en <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">SEGURIDAD.md</a> y en <a href="https://github.com/lordkukone/kukia-node/blob/main/GUIA_VALIDADORES.md" target="_blank" style="color:var(--gold);">GUIA_VALIDADORES.md</a>.</li>
       </ul>
     </details>
     <details class="qa"><summary>&#128274; Proteccion al cliente (como te cuidamos)</summary>
       <p>La red KUKIA protege a quien mina y a quien compra computo:</p>
       <ul style="margin:1rem 0 0 1.2rem;color:var(--text);">
-        <li><strong>Verificacion bit a bit:</strong> ningun resultado falso se paga. El Core recalcula cada hash.</li>
-        <li><strong>Reputacion y staking:</strong> los nodos que fallan o mienten pierden reputacion y su deposito.</li>
+        <li><strong>Verificacion bit a bit:</strong> ningun resultado falso se paga. El Core recalcula el resultado (no confia en el hash del minero).</li>
+        <li><strong>Reputacion y castigo:</strong> los nodos que fallan o mienten pierden reputacion, reciben una penalizacion en KIA (acotada a su saldo) y no pueden pedir trabajo unos minutos.</li>
         <li><strong>Billetera local:</strong> tu clave nunca viaja por la red. Nadie puede robarte el saldo desde fuera.</li>
         <li><strong>Sin pagos por adelantado:</strong> minar no cuesta dinero. Nunca te pediremos dinero para participar.</li>
         <li><strong>Aviso claro:</strong> si algo es experimental, se dice. Si no hay precio, se dice. Todo transparente.</li>
@@ -336,7 +340,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
 <section id="apoyar" class="reveal">
   <h2>Apoya el proyecto</h2>
   <div class="grid">
-    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-sh" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><circle cx="17" cy="20" r="6" fill="none" stroke="url(#g-sh)" stroke-width="3"/><circle cx="35" cy="20" r="6" fill="none" stroke="url(#g-sh)" stroke-width="3"/><path d="M8 42 C14 32 22 30 26 30 C30 30 38 32 44 42" fill="none" stroke="url(#g-sh)" stroke-width="3" stroke-linecap="round"/></svg></div><h3>Cede tu GPU</h3><p>Registrate con la casilla marcada y aporta los TOPS de tu grafica a la red. Los primeros nodos tendran recompensas de bienvenida.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-sh" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><circle cx="17" cy="20" r="6" fill="none" stroke="url(#g-sh)" stroke-width="3"/><circle cx="35" cy="20" r="6" fill="none" stroke="url(#g-sh)" stroke-width="3"/><path d="M8 42 C14 32 22 30 26 30 C30 30 38 32 44 42" fill="none" stroke="url(#g-sh)" stroke-width="3" stroke-linecap="round"/></svg></div><h3>Cede tu GPU</h3><p>Registrate con la casilla marcada y aporta los TOPS de tu grafica a la red. Los primeros nodos empiezan con reputacion y cobran cada tarea verificada.</p></div>
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #d4af3766);"><defs><linearGradient id="g-star" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#d4af37"/><stop offset="100%" stop-color="#fff3b0"/></linearGradient></defs><polygon points="26,5 31,19 46,20 34,29 38,44 26,35 14,44 18,29 6,20 21,19" fill="url(#g-star)" stroke-linejoin="round"/></svg></div><h3>Danos una estrella</h3><p>El codigo es publico: <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">github.com/lordkukone/kukia-node</a>. Una estrella ayuda a que mas gente lo encuentre.</p></div>
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-meg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><path d="M8 36 L8 22 L26 10 L26 24 Z" fill="none" stroke="url(#g-meg)" stroke-width="3" stroke-linejoin="round"/><polygon points="26,10 44,18 26,26" fill="url(#g-meg)" opacity="0.85"/><line x1="12" y1="40" x2="12" y2="46" stroke="url(#g-meg)" stroke-width="3" stroke-linecap="round"/></svg></div><h3>Comparte</h3><p>Comparte la web en tus redes con los hashtags del proyecto. Cuanta mas gente conozca KUKIA, antes nace la demanda real.</p></div>
     <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-src" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><circle cx="22" cy="22" r="13" fill="none" stroke="url(#g-src)" stroke-width="3.5"/><line x1="32" y1="32" x2="44" y2="44" stroke="url(#g-src)" stroke-width="4.5" stroke-linecap="round"/><polyline points="17,22 21,26 29,17" fill="none" stroke="#010806" stroke-width="2.5" stroke-linecap="round"/></svg></div><h3>Audita el codigo</h3><p>Todo el codigo esta publicado y es verificable: <a href="codigo.html" style="color:var(--gold);">revisalo aqui</a> o en GitHub. Si eres desarrollador, reporta mejoras.</p></div>
@@ -516,6 +520,16 @@ counters.forEach(c => cio.observe(c));
     set('stNodes', entero(Number(s.nodos)));
     set('stTasks', entero(Number(s.tareas_ok)));
     set('stQueue', entero(Number(s.tareas_pend)));
+    // Ancla publicada: el ultimo sello firmado del ledger. Si el historial se
+    // reescribe, el hash nuevo no encadena con este numero.
+    var ancla = (d && d.ancla) ? d.ancla : null;
+    if(ancla && typeof ancla.hasta === 'number'){
+      set('stSeal', entero(ancla.hasta));
+      var sl = porId('stSealLabel');
+      if(sl) sl.textContent = 'Último sello · ' + String(ancla.hash || '').slice(0, 10) + '…';
+    } else {
+      set('stSeal', '—');
+    }
     var ahora = Date.now();
     var tsNuevo = (d && Number(d.ts)) ? Number(d.ts) * 1000 : ahora;
     // El rele publica cada 10 s: si el dato es el mismo, no se recalcula el
