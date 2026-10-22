@@ -16,6 +16,7 @@ coordinator/sellos.jsonl.de_otra_instalacion*
 *.db
 *.db-wal
 *.db-shm
+*.db-journal
 *.db.predrill_*
 *.predrill_*
 _backup*/
