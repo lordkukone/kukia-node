@@ -182,18 +182,41 @@ fetch('wordlist.txt').then(function(r){ return r.text(); }).then(function(t){
 // pagina desde la web del proyecto, se toma la misma direccion que usa el
 // minero (core_actual.json, que el tunel renueva solo). Si el usuario ya tenia
 // una guardada, manda la suya; y el campo de arriba siempre manda.
+// El espejo que el tunel actualiza solo. Hace falta porque el core_actual.json
+// de al lado (GitHub Pages) se queda congelado en cada publicacion: a las pocas
+// horas apuntaria a un tunel muerto y la billetera dejaria de ver la red.
+var ESPEJO_CORE = 'https://kukia-network.surge.sh/core_actual.json';
+var FRESCO_SEG = 6 * 3600;   // medio dia: un tunel de prueba no dura mas
+
+function usaCore(url, c){
+  if(!url){ return; }
+  if(c){ c.value = url; }
+  localStorage.setItem('kukia_core', url);
+}
+
 function detectarCore(){
   var c = document.getElementById('v-core');
   if(c && c.value.trim()){ return; }
   if(localStorage.getItem('kukia_core')){ return; }
-  fetch('core_actual.json', {cache: 'no-store'})
-    .then(function(r){ return r.ok ? r.json() : null; })
-    .then(function(j){
-      if(!j || !j.core){ return; }
-      if(c){ c.value = j.core; }
-      localStorage.setItem('kukia_core', j.core);
-    })
-    .catch(function(){ /* desde el disco no hay core_actual.json: 127.0.0.1 */ });
+  var candidatos = ['core_actual.json', ESPEJO_CORE];
+  var ultimo = '';
+  (function siguiente(i){
+    if(i >= candidatos.length){
+      usaCore(ultimo, c);        // nada fresco: al menos una que exista
+      return;
+    }
+    fetch(candidatos[i], {cache: 'no-store'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(j){
+        if(!j || !j.core){ return siguiente(i + 1); }
+        ultimo = j.core;
+        var t = Date.parse(j.actualizado || '');
+        var fresco = isFinite(t) ? ((Date.now() - t) / 1000 < FRESCO_SEG) : false;
+        if(fresco){ return usaCore(j.core, c); }
+        siguiente(i + 1);
+      })
+      .catch(function(){ siguiente(i + 1); });
+  })(0);
 }
 
 window.addEventListener('load', function(){
