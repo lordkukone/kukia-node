@@ -1,0 +1,26 @@
+{
+  "fecha": "2026-10-20 15:51:46",
+  "torch": "2.12.1+cu130",
+  "gpus": [
+    {
+      "matriz_gflops": 7463.91,
+      "difusion_gflops": 42.23,
+      "gflops": 42.23,
+      "seg_matriz": 0.0001,
+      "seg_difusion": 0.0497,
+      "indice": 0,
+      "nombre": "NVIDIA GeForce RTX 5070",
+      "vram_gb": 12
+    },
+    {
+      "matriz_gflops": 20817.32,
+      "difusion_gflops": 41.54,
+      "gflops": 41.54,
+      "seg_matriz": 0.0,
+      "seg_difusion": 0.0505,
+      "indice": 1,
+      "nombre": "NVIDIA GeForce RTX 5060 Ti",
+      "vram_gb": 16
+    }
+  ]
+}

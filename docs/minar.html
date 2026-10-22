@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<!-- AUDITORIA 2026-10-21: CSP propia, igual que la portada. Todo lo que
+     carga la pagina es de este origen; las conexiones solo van al rele (https)
+     o al Core local. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; form-action 'self' https://formsubmit.co; object-src 'none'; base-uri 'self'">
+<link rel="canonical" href="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minar">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KUKIA | Ponte a minar - de cero a minero</title>
+<meta name="description" content="Como pasar de cero a un nodo KUKIA minando: descargar, instalar, arrancar el Core y el minero, y cobrar en tu billetera. Con el estado real de la red en vivo.">
+<link rel="icon" href="moneda.jpg">
+<meta name="theme-color" content="#081a3a">
+<style>
+:root { --gold:#d4af37; --navy:#081a3a; --blue:#12305e; --line:#27487c; --text:#c3d1ea; --ok:#5ee08a; --warn:#e0c05e; --bad:#ff7b7b; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; line-height:1.65; }
+a { color:var(--gold); }
+.wrap { max-width:980px; margin:0 auto; padding:2.5rem 1.25rem 4rem; }
+.back { display:inline-block; margin-bottom:1.5rem; color:var(--gold); text-decoration:none; font-size:.9rem; }
+.back:hover { text-decoration:underline; }
+h1 { color:var(--gold); font-size:2.1rem; line-height:1.2; }
+.sub { color:var(--text); margin:.5rem 0 2rem; max-width:720px; }
+h2 { color:var(--gold); font-size:1.15rem; margin:2.4rem 0 .9rem; border-bottom:1px solid var(--line); padding-bottom:.5rem; }
+h3 { font-size:1rem; margin-bottom:.4rem; }
+p { color:var(--text); }
+.panel { background:rgba(18,48,94,.55); border:1px solid var(--line); border-radius:14px; padding:1.2rem; }
+.estado { display:flex; align-items:center; gap:.6rem; font-size:.85rem; color:#9fb3d1; margin-bottom:1rem; }
+.dot { width:10px; height:10px; border-radius:50%; background:#789; flex:0 0 auto; }
+.grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.8rem; }
+@media (max-width:760px){ .grid { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:460px){ .grid { grid-template-columns:1fr; } }
+.tile { background:rgba(8,26,58,.75); border:1px solid var(--line); border-radius:12px; padding:.9rem 1rem; }
+.tile .l { display:block; color:#8fa5c6; font-size:.74rem; text-transform:uppercase; letter-spacing:.06em; }
+.tile .v { display:block; font-size:1.55rem; font-weight:800; color:#fff; margin-top:.15rem; }
+.tile .n { display:block; font-size:.75rem; color:#8fa5c6; margin-top:.2rem; }
+.v.ok { color:var(--ok); } .v.warn { color:var(--warn); } .v.bad { color:var(--bad); }
+.paso { display:flex; gap:1rem; margin:1.2rem 0; }
+.num { flex:0 0 34px; height:34px; border-radius:50%; background:var(--gold); color:var(--navy); font-weight:800; display:flex; align-items:center; justify-content:center; }
+.paso .cuerpo { flex:1; min-width:0; }
+code, pre { font-family:'Cascadia Code',Consolas,monospace; }
+pre { position:relative; background:#050f22; border:1px solid var(--line); border-radius:10px; padding:.9rem 3.2rem .9rem 1rem; overflow-x:auto; margin:.6rem 0; }
+pre code { font-size:.82rem; color:#c8d6f0; white-space:pre; }
+.copiar { position:absolute; top:.5rem; right:.5rem; background:rgba(212,175,55,.12); color:var(--gold); border:1px solid var(--gold); border-radius:8px; padding:.25rem .5rem; font-size:.7rem; cursor:pointer; font-family:inherit; }
+.copiar:hover { background:rgba(212,175,55,.25); }
+.nota { border-left:3px solid var(--gold); background:rgba(212,175,55,.07); border-radius:0 10px 10px 0; padding:.8rem 1rem; font-size:.87rem; margin:1rem 0; }
+.warnbox { border-left:3px solid var(--warn); background:rgba(224,192,94,.07); border-radius:0 10px 10px 0; padding:.8rem 1rem; font-size:.87rem; margin:1rem 0; }
+.btn { display:inline-block; padding:.85rem 1.3rem; border-radius:12px; background:linear-gradient(135deg,var(--gold),#f0d060); color:var(--navy); font-weight:800; text-decoration:none; }
+.btn.sec { background:transparent; border:2px solid var(--gold); color:var(--gold); margin-left:.5rem; }
+ul { color:var(--text); padding-left:1.2rem; }
+li { margin:.35rem 0; }
+.foot { margin-top:3rem; color:#789; font-size:.82rem; }
+@media (max-width:520px){ h1{font-size:1.7rem;} .paso{gap:.7rem;} .btn.sec{margin-left:0;margin-top:.6rem;} }
+</style>
+<!-- kukia-seo -->
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="google-site-verification" content="9d6cb22812b81092">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="KUKIA Network">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minar">
+<meta property="og:title" content="KUKIA | Ponte a minar - de cero a minero">
+<meta property="og:description" content="Como pasar de cero a un nodo KUKIA minando: descargar, instalar, arrancar el Core y el minero, y cobrar en tu billetera. Con el estado real de la red en vivo.">
+<meta property="og:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="KUKIA | Ponte a minar - de cero a minero">
+<meta name="twitter:description" content="Como pasar de cero a un nodo KUKIA minando: descargar, instalar, arrancar el Core y el minero, y cobrar en tu billetera. Con el estado real de la red en vivo.">
+<meta name="twitter:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "name": "KUKIA Network",
+   "alternateName": "KUKIA",
+   "inLanguage": "es",
+   "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
+   "publisher": {
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion",
+   "name": "KUKIA Network",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg",
+    "width": 512,
+    "height": 512
+   }
+  },
+  {
+   "@type": "WebPage",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minar#pagina",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minar",
+   "name": "KUKIA | Ponte a minar - de cero a minero",
+   "description": "Como pasar de cero a un nodo KUKIA minando: descargar, instalar, arrancar el Core y el minero, y cobrar en tu billetera. Con el estado real de la red en vivo.",
+   "inLanguage": "es",
+   "isPartOf": {
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio"
+   }
+  }
+ ]
+}
+</script>
+<!-- /kukia-seo -->
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="index.html">&larr; Volver a KUKIA</a>
+<h1>Ponte a minar</h1>
+<p class="sub">De cero a un nodo trabajando y cobrando en tu billetera, en cuatro pasos. Abajo tienes el estado real de la red ahora mismo: si el minero oficial está minando, lo ves aquí.</p>
+
+<div class="panel">
+  <div class="estado"><span class="dot" id="dot"></span><span id="live">Conectando con la red…</span></div>
+  <div class="grid">
+    <div class="tile"><span class="l">Core</span><span class="v" id="tCore">—</span><span class="n" id="nCore">&nbsp;</span></div>
+    <div class="tile"><span class="l">Minero</span><span class="v" id="tMinero">—</span><span class="n" id="nMinero">&nbsp;</span></div>
+    <div class="tile"><span class="l">GPUs</span><span class="v" id="tGpus">—</span><span class="n">detectadas</span></div>
+    <div class="tile"><span class="l">Tareas</span><span class="v" id="tRate">—</span><span class="n">por minuto</span></div>
+    <div class="tile"><span class="l">Nodos</span><span class="v" id="tNodos">—</span><span class="n">registrados</span></div>
+    <div class="tile"><span class="l">En cola</span><span class="v" id="tCola">—</span><span class="n">esperando</span></div>
+    <div class="tile"><span class="l">KIA emitidos</span><span class="v" id="tSupply">—</span><span class="n" id="nSupply">+— /min</span></div>
+  </div>
+</div>
+
+<h2>Qué necesitas</h2>
+<ul>
+  <li><strong>Python 3.10 o superior</strong> (probado con 3.12) y espacio en disco (~3 GB con torch).</li>
+  <li><strong>GPU NVIDIA es opcional</strong>: si hay CUDA mina en todas las GPUs a la vez; si no, cae a CPU (más lento, mismo pago por tarea).</li>
+  <li>Windows o Linux (probado en Windows 11 con dos RTX). En Windows los comandos valen tal cual en Git Bash o PowerShell; macOS no se ha probado.</li>
+</ul>
+
+<h2>Los cuatro pasos</h2>
+
+<div class="paso">
+  <div class="num">1</div>
+  <div class="cuerpo">
+    <h3>Descarga el nodo</h3>
+    <p>El zip trae el Core, el minero, la billetera y el relé de métricas: el mismo código que ves en <a href="codigo.html">código fuente</a>.</p>
+    <p style="margin-top:.6rem"><a class="btn" href="kukia-node.zip">Descargar kukia-node.zip</a><a class="btn sec" href="https://github.com/lordkukone/kukia-node" target="_blank" rel="noopener">Ver en GitHub</a></p>
+  </div>
+</div>
+
+<div class="paso">
+  <div class="num">2</div>
+  <div class="cuerpo">
+    <h3>Instala las dependencias</h3>
+    <pre><code>cd kukia-node
+python -m pip install -r requirements.txt</code><button class="copiar" data-copia>copiar</button></pre>
+    <p>Si no tienes GPU, instala torch solo para CPU (pesa mucho menos):</p>
+    <pre><code>python -m pip install torch --index-url https://download.pytorch.org/whl/cpu</code><button class="copiar" data-copia>copiar</button></pre>
+  </div>
+</div>
+
+<div class="paso">
+  <div class="num">3</div>
+  <div class="cuerpo">
+    <h3>Arranca el Core</h3>
+    <p>El Core es el coordinador: reparte tareas, verifica resultados y lleva el ledger. Escucha <strong>solo en tu equipo</strong> (127.0.0.1), no se expone a internet.</p>
+    <pre><code>cd kukia-node/coordinator
+python -u -m uvicorn kukia_core:app --host 127.0.0.1 --port 8300</code><button class="copiar" data-copia>copiar</button></pre>
+    <p>Comprueba que responde: abre <code>http://127.0.0.1:8300/stats</code>. Debe devolver un JSON con <code>nodos</code>, <code>tareas_ok</code> y <code>supply_emitido</code>.</p>
+  </div>
+</div>
+
+<div class="paso">
+  <div class="num">4</div>
+  <div class="cuerpo">
+    <h3>Arranca el minero</h3>
+    <p>En otra ventana. Detecta las GPUs solo, abre un hilo por GPU y crea su billetera en <code>ledger/wallet/</code>.</p>
+    <pre><code>cd kukia-node/worker
+python -u kukia_worker.py mi_nombre</code><button class="copiar" data-copia>copiar</button></pre>
+    <p>Verás líneas como <code>nodo ... listo (cobra en KUK...)</code> y después <code>tarea ... -> OK +1.0 KIA</code>. Ese <code>KUK...</code> es tu dirección: el pago va directo ahí, no al id del nodo.</p>
+  </div>
+</div>
+
+<h2>Cobra y comprueba</h2>
+<ol>
+  <li>Abre <a href="wallet.html">la billetera</a> → pestaña <strong>Mi saldo</strong>.</li>
+  <li>Pega la dirección <code>KUK...</code> que imprimió el minero y pulsa <strong>Ver saldo</strong>.</li>
+  <li>Si estás en el mismo PC, la web pregunta a tu Core (<code>127.0.0.1:8300</code>) y, si no lo alcanza, enseña el saldo que publica el relé.</li>
+</ol>
+<div class="nota">El minero reutiliza el id de cada GPU (<code>worker/identidad_minero.json</code>) y barre a la billetera cualquier saldo viejo firmando la transferencia. Reiniciar no pierde nada.</div>
+
+<h2>Cómo se comprueba el trabajo</h2>
+<p>El minero no manda un hash de su cosecha: envía el <strong>resultado numérico</strong> de la tarea firmado con su clave Ed25519. El Core lo recalcula y solo paga si coincide (con tolerancia relativa en las difusiones). Si no coincide, no cobra y baja su reputación. Por eso la web puede decir “tareas verificadas” sin pedir fe.</p>
+<div class="warnbox">Las tareas actuales son pequeñas (milisegundos): la red está en fase de pruebas y el pago por tarea es un parámetro de prueba, no una promesa de rentabilidad. No hay precio de KIA todavía.</div>
+
+<h2>Si quieres publicar tus métricas</h2>
+<p>El relé de esta web es de solo lectura y lo alimenta el operador desde su PC. Si montas tu propia red, el zip incluye <code>publico/relay.js</code> (Worker) y <code>publico/publicar_metricas.py</code>; necesitas tu propio almacenamiento y tu clave: no reutilices la de esta web.</p>
+
+<p class="foot">KUKIA Network · prototipo en pruebas · sin auditoría externa todavía · el ledger público manda.</p>
+</div>
+
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var dot = $('dot'), live = $('live');
+  var api = null, ruta = '/api/metricas', tsDatos = 0;
+  function pintar(ok, color, texto){
+    if(dot){ dot.style.background = color; dot.style.boxShadow = ok ? '0 0 10px ' + color : 'none'; }
+    if(live) live.textContent = texto;
+  }
+  function set(id, txt, clase){
+    var e = $(id);
+    if(!e) return;
+    e.textContent = txt;
+    e.className = 'v' + (clase ? ' ' + clase : '');
+  }
+  function num(n){ return (typeof n === 'number' && isFinite(n)) ? Math.round(n).toLocaleString('es-ES') : '—'; }
+  function hace(){
+    var s = Math.max(0, Math.round((Date.now() - tsDatos)/1000));
+    if(s < 90) return 'hace ' + s + ' s';
+    if(s < 5400) return 'hace ' + Math.round(s/60) + ' min';
+    if(s < 172800) return 'hace ' + Math.round(s/3600) + ' h';
+    return 'del ' + new Date(tsDatos).toLocaleDateString('es-ES');
+  }
+  async function descubrir(){
+    var q = new URLSearchParams(location.search).get('core');
+    if(q){ ruta = '/stats'; return q.replace(/\/+$/,''); }
+    try {
+      var r = await fetch('metricas.json?_=' + Date.now(), {cache:'no-store'});
+      if(r.ok){
+        var cfg = await r.json();
+        if(cfg && cfg.api){ ruta = '/api/metricas'; return String(cfg.api).replace(/\/+$/,''); }
+      }
+    } catch(e){}
+    return '';
+  }
+  async function tick(){
+    try {
+      if(!api) api = await descubrir();
+      if(!api){
+        pintar(false, '#789', 'Sin relé configurado: no hay datos en vivo.');
+        return;
+      }
+      var ctl = new AbortController();
+      var to = setTimeout(function(){ ctl.abort(); }, 4000);
+      var r = await fetch(api + ruta + '?_=' + Date.now(), {cache:'no-store', signal: ctl.signal});
+      clearTimeout(to);
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      var d = await r.json();
+      var s = (d && d.stats) ? d.stats : d;
+      var salud = (d && d.salud) ? d.salud : {};
+      tsDatos = (d && Number(d.ts)) ? Number(d.ts) * 1000 : Date.now();
+      var seg = Math.max(0, Math.round((Date.now() - tsDatos)/1000));
+
+      // Core: el publicador es el que habla con el Core; si publica, esta vivo.
+      set('tCore', seg < 45 ? 'ENCENDIDO' : 'APAGADO', seg < 45 ? 'ok' : 'bad');
+      $('nCore').textContent = seg < 45 ? 'publicando ' + hace() : 'último dato ' + hace();
+
+      var minando = typeof salud.ultima_tarea_hace === 'number' && salud.ultima_tarea_hace <= 90;
+      set('tMinero', minando ? 'MINANDO' : (typeof salud.ultima_tarea_hace === 'number' ? 'PARADO' : '—'), minando ? 'ok' : (typeof salud.ultima_tarea_hace === 'number' ? 'bad' : ''));
+      $('nMinero').textContent = (typeof salud.ultima_tarea_hace === 'number')
+        ? (minando ? 'última tarea ' + (salud.ultima_tarea_hace <= 1 ? 'ahora' : 'hace ' + salud.ultima_tarea_hace + ' s') : 'sin tareas ' + salud.ultima_tarea_hace + ' s')
+        : '\u00a0';
+
+      set('tGpus', num(salud.gpus));
+      set('tRate', num(salud.tareas_por_min));
+      set('tNodos', num(s.nodos));
+      set('tCola', num(s.tareas_pend));
+      set('tSupply', num(s.supply_emitido));
+      var em = salud.emision_por_min;
+      $('nSupply').textContent = (typeof em === 'number')
+        ? '+' + Math.max(0, Math.round(em)).toLocaleString('es-ES') + ' KIA/min'
+        : '+— /min';
+      if(seg < 45 && minando){ pintar(true, '#5ee08a', 'EN VIVO · ' + hace() + ' · red minando y verificando'); }
+      else if(seg < 45){ pintar(true, '#e0c05e', 'EN VIVO · ' + hace() + ' · minero parado'); }
+      else { pintar(false, '#e0c05e', 'SIN DATOS NUEVOS · último dato ' + hace()); }
+    } catch(e){
+      pintar(false, '#e0c05e', tsDatos ? 'SIN CONEXIÓN · último dato ' + hace() : 'Sin conexión con el relé.');
+    }
+  }
+  tick();
+  setInterval(tick, 5000);
+})();
+document.addEventListener('click', function(ev){
+  var b = ev.target.closest && ev.target.closest('[data-copia]');
+  if(!b) return;
+  var pre = b.parentNode.querySelector('code');
+  if(!pre) return;
+  var txt = pre.textContent;
+  var listo = function(){ b.textContent = 'copiado'; setTimeout(function(){ b.textContent = 'copiar'; }, 1400); };
+  if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(listo, function(){}); }
+  else {
+    var ta = document.createElement('textarea'); ta.value = txt; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); listo(); } catch(e){}
+    document.body.removeChild(ta);
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+# Claves privadas y billeteras: NUNCA a un repositorio.
+ledger/wallet/
+worker/identidad_minero.json
+validator/identidad*.json
+coordinator/sello_key.txt
+coordinator/admin_token.txt
+searchconsole_cuenta.json
+searchconsole_cuenta*.json
+
+# Bases de datos y copias
+*.db
+*.db-wal
+*.db-shm
+*.db.predrill_*
+*.predrill_*
+_backup*/
+backups/
+
+# Binarios que se descargan, no se versionan (53 MB)
+tools/bin/
+
+# Logs y artefactos locales
+*.log
+__pycache__/
+*.pyc
+publico/.wrangler/
+.wrangler/
+
+# Cópia para publicar (generada por publico/desplegar_sitio.py)
+sitio_publicado/

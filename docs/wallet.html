@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="canonical" href="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/wallet">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#081a3a">
+<!-- AUDITORIA 2026-10-20: la billetera tiene la clave privada en memoria.
+     La CSP limita scripts/medios a este origen y las conexiones a tu Core
+     local o HTTPS; no puede impedir un innerHTML mal escapado, pero corta
+     inyecciones externas y envios a dominios raros. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* https:; object-src 'none'; base-uri 'self'">
+<title>KUKIA Wallet - Tu billetera KIA</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="moneda.jpg">
+<style>
+:root { --gold:#d4af37; --navy:#081a3a; --blue:#12305e; --line:#27487c; --text:#c3d1ea; }
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; min-height:100vh; }
+.hero { text-align:center; padding:2rem 1rem 1rem; background:radial-gradient(ellipse at 50% 0%, #1a3f7a 0%, var(--navy) 60%); }
+.coin { width:130px; height:130px; border-radius:50%; object-fit:cover; border:3px solid var(--gold); box-shadow:0 0 40px rgba(212,175,55,.5); }
+h1 { color:var(--gold); letter-spacing:.12em; margin-top:.8rem; font-size:1.8rem; }
+.sub { color:var(--text); font-size:.85rem; margin-top:.3rem; }
+.tabs { display:flex; gap:.5rem; justify-content:center; padding:1rem; }
+.tab { flex:1; max-width:160px; padding:.8rem; text-align:center; border-radius:12px; border:1px solid var(--line); background:transparent; color:var(--text); cursor:pointer; font-size:.9rem; font-family:inherit; }
+.tab.on { background:var(--gold); color:var(--navy); font-weight:700; border-color:var(--gold); }
+.panel { display:none; padding:1rem; max-width:520px; margin:0 auto; }
+.panel.on { display:block; }
+.card { background:rgba(18,48,94,.6); border:1px solid var(--line); border-radius:14px; padding:1.2rem; margin-bottom:1rem; }
+.card h3 { color:var(--gold); font-size:1rem; margin-bottom:.8rem; }
+input, textarea { width:100%; padding:.9rem; margin-bottom:.8rem; border-radius:10px; border:1px solid var(--line); background:rgba(8,26,58,.9); color:#fff; font-size:.95rem; }
+textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
+.btn { display:block; width:100%; padding:1rem; background:linear-gradient(135deg,var(--gold),#f0d060); color:var(--navy); font-weight:800; border-radius:12px; border:none; font-size:1rem; cursor:pointer; }
+.btn2 { background:transparent; border:2px solid var(--gold); color:var(--gold); margin-top:.6rem; }
+.addr { font-family:monospace; font-size:.75rem; word-break:break-all; color:var(--gold); background:rgba(8,26,58,.9); padding:.8rem; border-radius:10px; margin:.6rem 0; }
+.saldo { font-size:2.2rem; color:var(--gold); font-weight:800; text-align:center; }
+.words { display:grid; grid-template-columns:1fr 1fr; gap:.4rem; margin:.8rem 0; }
+.words span { background:rgba(8,26,58,.9); border:1px solid var(--line); border-radius:8px; padding:.5rem; font-size:.82rem; font-family:monospace; }
+.warn { background:rgba(212,175,55,.08); border:1px solid var(--gold); border-radius:10px; padding:.8rem; font-size:.82rem; color:var(--text); margin:.8rem 0; line-height:1.5; }
+#qrcode img { margin:0 auto; display:block; border:8px solid #fff; border-radius:8px; }
+.small { font-size:.78rem; color:var(--text); text-align:center; margin-top:.5rem; }
+.ok { color:#5ee08a; } .err { color:#ff7b7b; }
+</style>
+<!-- kukia-seo -->
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="google-site-verification" content="9d6cb22812b81092">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="KUKIA Network">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/wallet">
+<meta property="og:title" content="KUKIA Wallet - Tu billetera KIA">
+<meta property="og:description" content="">
+<meta property="og:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="KUKIA Wallet - Tu billetera KIA">
+<meta name="twitter:description" content="">
+<meta name="twitter:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "name": "KUKIA Network",
+   "alternateName": "KUKIA",
+   "inLanguage": "es",
+   "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
+   "publisher": {
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion",
+   "name": "KUKIA Network",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg",
+    "width": 512,
+    "height": 512
+   }
+  },
+  {
+   "@type": "WebPage",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/wallet#pagina",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/wallet",
+   "name": "KUKIA Wallet - Tu billetera KIA",
+   "inLanguage": "es",
+   "isPartOf": {
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio"
+   }
+  }
+ ]
+}
+</script>
+<!-- /kukia-seo -->
+</head>
+<body>
+<div class="hero">
+  <img class="coin" src="moneda.jpg" alt="KIA">
+  <h1>KUKIA</h1>
+  <div class="sub">Billetera KIA — tus claves, tu dinero</div>
+</div>
+<div class="tabs">
+  <button type="button" class="tab on" onclick="ver('crear', this)">Nueva</button>
+  <button type="button" class="tab" onclick="ver('recuperar', this)">Recuperar</button>
+  <button type="button" class="tab" onclick="ver('ver', this)">Mi saldo</button>
+  <button type="button" class="tab" onclick="ver('enviar', this)">Enviar</button>
+</div>
+
+<div id="p-crear" class="panel on">
+  <div class="card">
+    <h3>Crear billetera</h3>
+    <p style="color:var(--text);font-size:.85rem;margin-bottom:1rem;">El sistema genera TODO aleatorio (como Bitcoin/MetaMask): tu eliges nada, asi es imposible que sea debil.</p>
+    <button class="btn" onclick="crear()">Generar mi billetera</button>
+    <div id="c-out"></div>
+  </div>
+</div>
+
+<div id="p-recuperar" class="panel">
+  <div class="card">
+    <h3>Recuperar con contraseña + 20 palabras</h3>
+    <input id="r-pass" type="password" placeholder="Tu contraseña">
+    <textarea id="r-words" placeholder="Pega tus 20 palabras separadas por espacios"></textarea>
+    <label style="display:block;margin:.4rem 0;font-size:.85rem">
+      <input type="checkbox" id="r-v1"> Billetera antigua (creada antes del 18-10-2026)
+    </label>
+    <button class="btn" onclick="recuperar()">Recuperar billetera</button>
+    <div id="r-out"></div>
+  </div>
+</div>
+
+<div id="p-ver" class="panel">
+  <div class="card">
+    <h3>Mi saldo</h3>
+    <input id="v-addr" placeholder="Tu dirección KUK...">
+    <input id="v-core" placeholder="Dirección del Core (por defecto http://127.0.0.1:8300)">
+    <button class="btn" onclick="saldo()">Ver saldo</button>
+    <div id="v-out"></div>
+    <div id="qrcode"></div>
+  </div>
+</div>
+
+<div id="p-enviar" class="panel">
+  <div class="card">
+    <h3>Enviar KIA</h3>
+    <p style="color:var(--text);font-size:.82rem;line-height:1.5;margin-bottom:.8rem;">
+      La transacción se firma <strong>en tu navegador</strong>. La clave privada no se envía
+      al Core ni se guarda en disco. Comisión: <strong>0 KIA</strong>.
+    </p>
+    <div class="addr" id="e-de">Primero crea o recupera tu billetera en esta pestaña.</div>
+    <input id="e-dest" placeholder="Dirección destino KUK..." autocomplete="off" spellcheck="false">
+    <input id="e-monto" inputmode="decimal" placeholder="Cantidad (máximo 4 decimales)" autocomplete="off">
+    <button class="btn" onclick="enviar()">Firmar y enviar</button>
+    <div id="e-out"></div>
+  </div>
+</div>
+
+<script src="nacl.min.js" integrity="sha384-0jQROJt6wG1AI3HmYbaU8+/kf+09BqXwTdbUCG5Hr6ASZVXXgJ/6lrRPDAqgIqEm"></script>
+<script src="qrcode.min.js" integrity="sha384-+bMitG8OESwS8Yg64Ik3PeRl6QWVsDQ9dNylFHV24uKAVEWx69kFeUtsmoT6NvkG"></script>
+<script>
+var WORDS = null;
+// AUDITORIA 2026-10-18: la clave privada y las 20 palabras ya NO se guardan
+// en el navegador (localStorage). Se derivan en memoria al usarlas; si cierras
+// la pagina, las vuelves a poner con tus palabras. Asi un XSS o una extension
+// no se lleva tu billetera ni tu copia de seguridad.
+var PRIV = null;
+var SECRET = null;   // clave secreta Ed25519 completa, SOLO en memoria
+var PUB = null;      // clave publica Ed25519 (hex), se manda al Core
+var ADDR = null;
+var MNEMO = null;   // palabras exactas recien generadas (para copiarlas tal cual)
+fetch('wordlist.txt').then(function(r){ return r.text(); }).then(function(t){
+  WORDS = t.split('\n').map(function(w){ return w.trim(); }).filter(Boolean);
+});
+
+window.addEventListener('load', function(){
+  var c = document.getElementById('v-core');
+  if(c){ c.value = localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300'; }
+  var a = document.getElementById('v-addr');
+  if(a){ a.value = localStorage.getItem('kukia_addr') || ''; }
+});
+
+function ver(id, el){
+  // El elemento se pasa desde el onclick: no dependemos del 'event' global
+  // (fallaba en Firefox y al llamar a ver() sin pulsar un boton).
+  document.querySelectorAll('.panel').forEach(function(p){ p.classList.remove('on'); });
+  document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('on'); });
+  document.getElementById('p-'+id).classList.add('on');
+  if(!el){ el = document.querySelector('.tab[onclick*="' + id + '"]'); }
+  if(el){ el.classList.add('on'); }
+}
+
+// Las tildes de la lista oficial estan guardadas en forma "descompuesta"
+// (NFD). Si el usuario las teclea a mano, su teclado escribe la forma
+// "compuesta" (NFC) y la direccion saldria DISTINTA. No cambiamos la
+// derivacion (romperia las billeteras ya creadas): probamos las dos formas
+// y nos quedamos con la que coincide con la direccion guardada o con saldo.
+function normalizar(lista, forma){
+  try { return lista.map(function(w){ return w.normalize(forma); }); } catch(e){ return lista.slice(); }
+}
+function iguales(a, b){
+  if(a.length !== b.length) return false;
+  for(var i=0;i<a.length;i++){ if(a[i] !== b[i]) return false; }
+  return true;
+}
+function coreUrl(){
+  var el = document.getElementById('v-core');
+  return ((el && el.value.trim()) || localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300').replace(/\/+$/, '');
+}
+async function saldoCore(addr, ms){
+  try {
+    var ctl = new AbortController();
+    var t = setTimeout(function(){ ctl.abort(); }, ms || 2500);
+    var r = await fetch(coreUrl() + '/saldo/' + encodeURIComponent(addr), {signal: ctl.signal});
+    clearTimeout(t);
+    var j = await r.json();
+    return Number(j.saldo);
+  } catch(e){ return null; }
+}
+async function derivarDireccion(pass, words, v1){
+  var seed = await pbkdf2(pass, words, v1);
+  var kp = nacl.sign.keyPair.fromSeed(seed);
+  return { seed: seed, addr: 'KUK' + (await sha256hex(kp.publicKey)).substring(0,38) };
+}
+function usarCandidato(idx, cands){
+  var c = cands[idx];
+  if(!c) return;
+  PRIV = Array.from(c.seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  var kp = nacl.sign.keyPair.fromSeed(c.seed);
+  SECRET = kp.secretKey;
+  PUB = hexde(kp.publicKey);
+  ADDR = c.addr;
+  localStorage.setItem('kukia_addr', c.addr);
+  actualizarEnvio();
+  document.getElementById('r-out').innerHTML = '<div class="addr">' + esc(c.addr) + '</div>' +
+    '<p class="ok">Billetera recuperada (' + c.forma + ').</p>' +
+    '<button class="btn btn2" onclick="copiar(ADDR)">Copiar direccion</button>';
+}
+function copiar(texto){
+  if(!texto) return;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(texto).then(function(){ /* ok */ });
+  } else {
+    var ta = document.createElement('textarea');
+    ta.value = texto; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch(e){}
+    document.body.removeChild(ta);
+  }
+}
+
+async function saltPara(words, v1){
+  // v1 = sal fija historica. v2 = sal unica por billetera (SHA-256 de tus
+  // palabras), igual que hace kukia_wallet.py, asi que se recupera en Python.
+  if(v1){ return new TextEncoder().encode('kukia-wallet-v1'); }
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode('kukia-wallet-v2|' + words.join(' '))));
+}
+
+async function pbkdf2(pass, words, v1){
+  var msg = words.join(' ') + '|' + pass;
+  var salt = await saltPara(words, v1);
+  var key = await crypto.subtle.importKey('raw', new TextEncoder().encode(msg), 'PBKDF2', false, ['deriveBits']);
+  var bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt:salt, iterations:200000, hash:'SHA-512'}, key, 512);
+  return new Uint8Array(bits).slice(0, 32);
+}
+
+async function sha256hex(data){
+  var h = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(h)).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('').toUpperCase();
+}
+
+function crear(){
+  if(!WORDS || WORDS.length < 2048){ alert('Cargando lista de palabras, espera unos segundos...'); return; }
+  // Password ALEATORIA fuerte (24 hex = 96 bits) - el usuario NO la inventa
+  var pb = new Uint8Array(12);
+  crypto.getRandomValues(pb);
+  var pass = Array.from(pb).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+  var words = [];
+  var rnd = new Uint32Array(20);
+  crypto.getRandomValues(rnd);
+  for(var i=0;i<20;i++){ words.push(WORDS[rnd[i] % WORDS.length]); }
+  pbkdf2(pass, words, false).then(async function(seed){
+    var kp = nacl.sign.keyPair.fromSeed(seed);
+    var addr = 'KUK' + (await sha256hex(kp.publicKey)).substring(0,38);
+    PRIV = Array.from(seed).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+    SECRET = kp.secretKey;
+    PUB = hexde(kp.publicKey);
+    ADDR = addr;
+    MNEMO = words.join(' ');
+    actualizarEnvio();
+    localStorage.setItem('kukia_addr', addr);   // solo la direccion (es publica)
+    var html = '<div class="addr">' + addr + '</div>';
+    html += '<div class="warn"><strong>GUARDA ESTO EN PAPEL AHORA:</strong><br>Contrasena: <code>' + pass + '</code></div>';
+    html += '<div class="warn"><strong>Escribe estas 20 palabras EN PAPEL y en orden.</strong> Sin contrasena + palabras no recuperas nada.</div>';
+    html += '<div class="words">' + words.map(function(w,i){ return '<span>'+(i+1)+'. '+w+'</span>'; }).join('') + '</div>';
+    html += '<button class="btn btn2" onclick="copiar(MNEMO)">Copiar las 20 palabras tal cual</button>';
+    html += '<p class="small">Copia las palabras con ese boton, no las reescribas: las tildes tienen que ser exactamente las mismas. Tus claves viven solo en esta pestaña y desaparecen al cerrarla.</p>';
+    document.getElementById('c-out').innerHTML = html;
+  });
+}
+
+async function recuperar(){
+  var pass = document.getElementById('r-pass').value;
+  // Limpia lo que suele venir al copiar: mayusculas, saltos de linea y
+  // numeracion ("1. casa 2. perro"). Las palabras de la lista son minusculas.
+  var words = document.getElementById('r-words').value.toLowerCase().trim()
+    .split(/\s+/)
+    .map(function(w){ return w.replace(/^[0-9]+[\.\):\-]?$/, '').replace(/^[0-9]+[\.\):\-](?=[a-z])/, ''); })
+    .filter(Boolean);
+  if(!pass || words.length !== 20){ alert('Necesitas contraseña + las 20 palabras exactas (tienes ' + words.length + ')'); return; }
+  var v1 = document.getElementById('r-v1') && document.getElementById('r-v1').checked;
+  var out = document.getElementById('r-out');
+  out.innerHTML = '<p class="small">Comprobando...</p>';
+
+  var nfc = normalizar(words, 'NFC');
+  var nfd = normalizar(words, 'NFD');
+  var formas = [{forma:'NFC', words:nfc}];
+  if(!iguales(nfc, nfd)){ formas.push({forma:'NFD', words:nfd}); }
+
+  var cands = [];
+  for(var i=0;i<formas.length;i++){
+    var d = await derivarDireccion(pass, formas[i].words, v1);
+    cands.push({forma: formas[i].forma, seed: d.seed, addr: d.addr, saldo: null});
+  }
+
+  var elegido = null;
+  if(cands.length === 1){ elegido = 0; }
+  if(elegido === null){
+    var guardada = localStorage.getItem('kukia_addr') || '';
+    for(i=0;i<cands.length;i++){ if(cands[i].addr === guardada){ elegido = i; break; } }
+  }
+  if(elegido === null){
+    for(i=0;i<cands.length;i++){ cands[i].saldo = await saldoCore(cands[i].addr); }
+    var conSaldo = [];
+    for(i=0;i<cands.length;i++){ if(Number(cands[i].saldo) > 0){ conSaldo.push(i); } }
+    if(conSaldo.length === 1){ elegido = conSaldo[0]; }
+  }
+
+  if(elegido !== null){
+    usarCandidato(elegido, cands);
+    return;
+  }
+
+  // Ambigua (billetera nueva, sin saldo y en otro equipo): muestra las dos.
+  var html = '<p class="err">Las tildes pueden escribirse de dos formas y dan direcciones distintas. ' +
+             'Compara con la direccion que tenias: la correcta es una de estas.</p>';
+  for(i=0;i<cands.length;i++){
+    html += '<div class="addr">' + cands[i].forma + ': ' + cands[i].addr + '</div>' +
+            '<button class="btn btn2" onclick="usarCandidato(' + i + ', window.__cands)">Usar esta</button>';
+  }
+  out.innerHTML = html;
+  window.__cands = cands;
+}
+
+function hexde(u8){
+  return Array.from(u8).map(function(b){ return b.toString(16).padStart(2,'0'); }).join('');
+}
+// AUDITORIA 2026-10-20: esta pagina tiene la clave privada EN MEMORIA. Un
+// "Core" malicioso (el usuario puede apuntar la billetera a otra URL) podia
+// devolver un detail/monto con HTML y ejecutar codigo aqui. Todo texto
+// externo se escapa antes de entrar en innerHTML.
+function esc(v){
+  return String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function actualizarEnvio(){
+  var d = document.getElementById('e-de');
+  if(!d) return;
+  d.textContent = ADDR ? ('Desde: ' + ADDR) : 'Primero crea o recupera tu billetera en esta pestaña.';
+}
+// Python imprime 1.0 (no 1): el mensaje firmado tiene que coincidir EXACTO
+// con el que reconstruye el Core (str(round(monto, 4))).
+function formatoMonto(n){
+  return Number.isInteger(n) ? n.toFixed(1) : String(n);
+}
+var _enviando = false;
+async function enviar(){
+  var out = document.getElementById('e-out');
+  if(!SECRET || !ADDR){
+    out.innerHTML = '<p class="err">Crea o recupera tu billetera en esta pestaña antes de enviar. ' +
+      'La clave privada no se guarda: si recargas la página hay que volver a poner tus 20 palabras.</p>';
+    return;
+  }
+  if(_enviando) return;
+  var dest = document.getElementById('e-dest').value.trim().toUpperCase();
+  var txt = document.getElementById('e-monto').value.trim().replace(',', '.');
+  if(!/^KUK[0-9A-F]{38}$/.test(dest)){
+    out.innerHTML = '<p class="err">Destino inválido: una dirección KUK de 41 caracteres.</p>';
+    return;
+  }
+  if(dest === ADDR){
+    out.innerHTML = '<p class="err">Origen y destino son la misma dirección.</p>';
+    return;
+  }
+  if(!/^\d+(\.\d{1,4})?$/.test(txt)){
+    out.innerHTML = '<p class="err">Cantidad inválida: número positivo con 4 decimales como máximo.</p>';
+    return;
+  }
+  var monto = Number(txt);
+  if(!(monto > 0) || !isFinite(monto)){
+    out.innerHTML = '<p class="err">La cantidad tiene que ser mayor que 0.</p>';
+    return;
+  }
+  var nonce = hexde(crypto.getRandomValues(new Uint8Array(16)));
+  var mensaje = 'transferir:' + ADDR + ':' + dest + ':' + formatoMonto(monto) + ':' + nonce;
+  var firma;
+  try {
+    firma = hexde(nacl.sign.detached(new TextEncoder().encode(mensaje), SECRET));
+  } catch(e){
+    out.innerHTML = '<p class="err">No pude firmar: ' + esc(e.message) + '</p>';
+    return;
+  }
+  _enviando = true;
+  out.innerHTML = '<p class="small">Firmado. Enviando al Core…</p>';
+  try {
+    var r = await fetch(coreUrl() + '/transferir', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({de_nodo: ADDR, a_direccion: dest, monto: monto,
+                            nonce: nonce, firma: firma, clave_publica: PUB})
+    });
+    var j = await r.json().catch(function(){ return {}; });
+    if(!r.ok){
+      out.innerHTML = '<p class="err">El Core rechazó la transferencia: ' +
+        esc(j.detail || ('HTTP ' + r.status)) + '</p>';
+      return;
+    }
+    out.innerHTML = '<p class="ok">Enviado: <strong>' + esc(j.monto) + ' KIA</strong></p>' +
+      '<div class="addr">' + esc(dest) + '</div>' +
+      '<p class="small">Comprobante: ' + esc(nonce) + '. La clave privada nunca salió de esta pestaña.</p>';
+    document.getElementById('v-addr').value = ADDR;
+    document.getElementById('e-dest').value = '';
+    document.getElementById('e-monto').value = '';
+  } catch(e){
+    out.innerHTML = '<p class="err">No pude conectar con el Core (' + esc(coreUrl()) + '). ' +
+      'Si el Core está apagado, la transferencia no se envía. ' + esc(e.message) + '</p>';
+  } finally {
+    _enviando = false;
+  }
+}
+
+function saldoRemoto(addr){
+  // Sin Core local: pide el saldo publicado por la red (solo lectura).
+  return fetch('metricas.json?_=' + Date.now(), {cache:'no-store'})
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(cfg){
+      if(!cfg || !cfg.api) throw new Error('sin rele');
+      var api = String(cfg.api).replace(/\/+$/, '');
+      return fetch(api + '/api/saldo/' + encodeURIComponent(addr), {cache:'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(j){ return {saldo: Number(j.saldo), ts: Number(j.ts)}; });
+    });
+}
+function pintarSaldo(addr, j, fuente){
+  document.getElementById('v-out').innerHTML =
+    '<div class="saldo">' + Number(j.saldo).toLocaleString('es-ES', {maximumFractionDigits:4}) + ' KIA</div>' +
+    '<div class="addr">' + esc(addr) + '</div>' +
+    '<p class="small">' + esc(fuente) + '</p>';
+  try {
+    var qr = qrcode(0, 'M'); qr.addData(addr); qr.make();
+    document.getElementById('qrcode').innerHTML = qr.createImgTag(5, 8);
+  } catch(e){}
+}
+function saldo(){
+  var addr = document.getElementById('v-addr').value.trim() || localStorage.getItem('kukia_addr') || '';
+  if(!addr){ alert('Pon tu dirección KUK...'); return; }
+  document.getElementById('v-out').innerHTML = '<div class="saldo">...</div>';
+  document.getElementById('qrcode').innerHTML = '';
+  var core = (document.getElementById('v-core').value.trim() || localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300').replace(/\/+$/, '');
+  localStorage.setItem('kukia_core', core);
+  fetch(core + '/saldo/' + encodeURIComponent(addr)).then(function(r){
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }).then(function(j){
+    pintarSaldo(addr, j, 'Leído de tu Core local (' + core + ').');
+  }).catch(function(){
+    saldoRemoto(addr).then(function(j){
+      var cuando = j.ts ? new Date(j.ts * 1000).toLocaleTimeString('es-ES') : 'hace un momento';
+      pintarSaldo(addr, j, 'Core local no accesible: saldo publicado por la red (actualizado ' + cuando + ').');
+    }).catch(function(){
+      document.getElementById('v-out').innerHTML =
+        '<p class="err">No pude leer el saldo: ni tu Core local (' + esc(core) + ') ni el relé público responden. ' +
+        'Si el minero está encendido, el saldo aparece en cuanto publique.</p>' +
+        '<div class="addr">' + esc(addr) + '</div>';
+    });
+  });
+}
+</script>
+<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js');}</script>
+</body>
+</html>

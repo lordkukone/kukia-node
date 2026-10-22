@@ -1,0 +1,3412 @@
+"""KUKIA Core - coordinador: nodos, tareas, verificacion REAL, ledger (SQLite).
+
+VERIFICACION: el Core NO confia en el hash del minero.
+El Core recalcula la tarea el mismo (trustless) y compara el resultado
+exacto. Tareas con aritmetica determinista (enteros exactos via float64
+con magnitudes acotadas) para que CPU y GPU den el MISMO numero.
+
+AUDITORIA 2026-10-18 (todas las marcas "AUDITORIA" son de esta revision):
+  - Se valida la cabecera Host y el Origin (corta el DNS rebinding).
+  - /tareas/pendiente exige firma Ed25519 del nodo (nadie roba la cola).
+  - /tareas/resultado AUTENTICA ANTES de recalcular (no se puede quemar CPU).
+  - Topes duros a params (n, pasos) y tamano del JSON.
+  - Limitador por ruta (antes un solo contador bloqueaba las 5 rutas juntas).
+  - Reintentos: un resultado incorrecto no mata la tarea; castiga al nodo.
+  - Recuperacion de tareas atascadas en hilo propio (no dependia de que
+    alguien pidiera trabajo) + /admin/liberar_atascadas.
+  - Ledger con cadena de hashes verificable (/ledger/verificar).
+  - monto de transferencia finito (NaN daba 500 despues de escribir).
+  - /registro guarda la IP real (antes guardaba el 'ref' en su columna).
+"""
+import collections, hashlib, json, math, os, secrets, sqlite3, threading, uuid, time, sys, urllib.parse
+from contextlib import contextmanager
+from pathlib import Path
+import numpy as np
+sys.path.insert(0, str(Path(__file__).parent.parent))
+try:
+    import ia_onnx_cpu as ONNXCPU  # referencia CPU (tareas embeddings)
+except Exception:
+    ONNXCPU = None
+try:
+    from ledger import sellos as SELLOS
+except Exception as _e_sellos:      # el Core arranca aunque falte el modulo
+    SELLOS = None
+    print(f"[KUKIA] AVISO: sellos del ledger desactivados ({_e_sellos})", flush=True)
+from fastapi import FastAPI, HTTPException, Header, Depends, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+# Lock global: SQLite NO es seguro para uso concurrente en una sola conexion.
+# Todo pago pasa por este lock + BEGIN IMMEDIATE (doble proteccion).
+_pago_lock = threading.Lock()
+# Conexion de SQLite de cada hilo (ver _ConSegura: compartir una sola hacia
+# que un ROLLBACK ajeno cortase las lecturas de otra peticion).
+_local_bd = threading.local()
+
+DB = Path(os.environ.get("KUKIA_DB") or (Path(__file__).parent / "ledger" / "kukia.db"))
+DB.parent.mkdir(parents=True, exist_ok=True)
+
+# --- Token de ADMIN: solo Kuki maneja el Core ---
+# Se genera UNA vez y se guarda en un fichero local (nadie mas lo tiene).
+ADMIN_TOKEN_FILE = Path(os.environ.get("KUKIA_ADMIN_TOKEN") or (Path(__file__).parent / "admin_token.txt"))
+def _permisos_privados(ruta) -> None:
+    """Solo el dueno puede leer el fichero (en POSIX; en Windows manda la ACL)."""
+    try:
+        os.chmod(ruta, 0o600)
+    except Exception:
+        pass
+
+def admin_token() -> str:
+    if ADMIN_TOKEN_FILE.exists():
+        _permisos_privados(ADMIN_TOKEN_FILE)
+        return ADMIN_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    tok = secrets.token_hex(32)
+    ADMIN_TOKEN_FILE.write_text(tok, encoding="utf-8")
+    _permisos_privados(ADMIN_TOKEN_FILE)
+    return tok
+
+ADMIN_TOKEN = admin_token()
+
+def exigir_admin(x_admin_token: str = Header(default="", alias="X-Admin-Token")):
+    """Solo el fundador (con el token) puede administrar el Core."""
+    if not secrets.compare_digest(x_admin_token or "", ADMIN_TOKEN):
+        raise HTTPException(403, "solo el administrador del Core")
+
+# --- Sellos del ledger: fijan el historial para que no se pueda reescribir ---
+# La clave vive en coordinator/sello_key.txt, FUERA de la base de datos: editar
+# el .db no basta para fabricar un historial nuevo. Ver ledger/sellos.py.
+SELLO_KEY_FILE = Path(os.environ.get("KUKIA_SELLO_KEY") or (Path(__file__).parent / "sello_key.txt"))
+SELLOS_FILE = Path(os.environ.get("KUKIA_SELLOS_FILE") or (Path(__file__).parent / "sellos.jsonl"))
+SELLO_CADA_SEG = max(30.0, float(os.environ.get("KUKIA_SELLO_SEG", "600")))
+SELLO_CADA_ASIENTOS = max(50, int(os.environ.get("KUKIA_SELLO_ASIENTOS", "2000")))
+SELLO_BLOQUEA_PAGOS = os.environ.get("KUKIA_SELLO_BLOQUEA", "1") != "0"
+LEDGER_ROTO = False          # lo pone _verificar_integridad() al arrancar
+_sello_priv, _sello_pub = ("", "")
+if SELLOS is not None:
+    try:
+        _sello_priv, _sello_pub = SELLOS.crear_clave(SELLO_KEY_FILE)
+    except Exception as _e:
+        print(f"[KUKIA] AVISO: no se pudo crear la clave del sello ({_e})", flush=True)
+
+MAX_SUPPLY = 100_000_000          # techo fijo 100M
+REWARD_BASE = 10.0                # KUKI por tarea base
+# --- Bloque genesis fundacional (una sola vez) ---
+GENESIS_DIR = "KUK77D72508BD940C9BA969B0402A3CF1F9679BE3"   # wallet fundador (Kuki)
+GENESIS_MONTO = 15_000_000.0      # 15M reservados al fundador dentro del techo de 100M
+TIER_MULT = {12: 1.0, 16: 1.3, 24: 1.6}   # Rent-Tier por VRAM (mejora 1)
+REF_BONUS = 50.0                  # bonus referido al completar 10 tareas (mejora 2)
+BOUNTY = 1000.0                   # bounty anti-trampa (mejora 3)
+# --- Politica de firmas (migracion) ---
+# False = nodos viejos sin clave siguen cobrando (compatibilidad, fase pruebas).
+# True  = TODOS los nodos deben traer firma (rechaza sin clave_publica).
+# Pasar a True al abrir la red publica.
+EXIGIR_FIRMA_GLOBAL = True
+
+# Tareas 'ejecutando' sin resultado tras este tiempo vuelven a 'queued'
+# (recuperacion en hilo propio Y oportunista en /tareas/pendiente).
+ABANDONO_SEG = 1800.0
+# AUDITORIA 2026-10-20: un solo nodo podia pedir trabajo en bucle y quedarse
+# con toda la cola (30 min cada tarea). El worker de serie hace UNA tarea por
+# GPU/nodo, asi que 4 es holgado y corta el acaparamiento de raiz.
+MAX_TAREAS_NODO = max(1, int(os.environ.get("KUKIA_MAX_TAREAS_NODO", "4")))
+# Un nodo sin ninguna tarea pagada no puede acumular trabajo: 1 a la vez y
+# vence a los 2 minutos. Asi un sybil recien creado no puede inmovilizar la
+# cola mientras no demuestra trabajo real.
+MAX_TAREAS_NODO_NUEVO = max(1, int(os.environ.get("KUKIA_MAX_TAREAS_NODO_NUEVO", "1")))
+ABANDONO_SEG_NUEVO = max(30.0, float(os.environ.get("KUKIA_ABANDONO_NUEVO", "120")))
+
+# AUDITORIA 2026-10-20 (2.ª pasada): cupo de registros por IP y por clave.
+# El reto firmado hace que registrar cueste una clave, pero una sola persona
+# puede generar claves en bucle. Estos topes no afectan a los mineros que ya
+# estan dentro: solo a las identidades NUEVAS. 0 = sin limite.
+REGISTRO_CUPO_HORA = max(0, int(os.environ.get("KUKIA_REGISTRO_CUPO_HORA", "10")))
+REGISTRO_CUPO_DIA = max(0, int(os.environ.get("KUKIA_REGISTRO_CUPO_DIA", "50")))
+REGISTRO_CUPO_CLAVE = max(0, int(os.environ.get("KUKIA_REGISTRO_CUPO_CLAVE", "20")))
+# Un nodo que pide trabajo pero no completa NINGUNA tarea pagada no es un
+# minero: es cola inmovilizada. Se le da este margen y luego se poda.
+NODO_SIN_TRABAJO_H = max(0.5, float(os.environ.get("KUKIA_NODO_SIN_TRABAJO_H", "6")))
+
+# ============================================================
+#  EJECUCION REDUNDANTE + MUESTREO (21-10-2026)
+#  El Core recalculaba TODAS las tareas: costaba lo mismo minar que
+#  verificar, asi que la red no podia crecer mas alla de este PC. Ahora las
+#  tareas CARAS las ejecutan DOS nodos distintos y, si coinciden, el Core no
+#  recalcula nada.
+#  Solo aplica a tareas caras (>= 1 GFLOP): las de milisegundos siguen el
+#  camino de siempre, porque duplicarlas costaria mas que recalcularlas.
+# ============================================================
+REPLICA_ACTIVA = (os.environ.get("KUKIA_REPLICA", "1") != "0")
+# Parte del premio que se lleva el nodo que verifica. El total NO cambia:
+# 70 % ejecutor + 30 % verificador = lo mismo que antes por una tarea. Si se
+# pagara el 100 % a cada uno, la emision se dispararia y la fecha de 2150
+# seria mentira.
+PARTE_REPLICA = min(0.5, max(0.0, float(os.environ.get("KUKIA_PARTE_REPLICA", "0.3"))))
+# 1 de cada N tareas con replica se recalcula igualmente, para que una
+# colusion entre dos nodos tenga probabilidad medible de caer.
+AUDITORIA_1_DE = max(0, int(os.environ.get("KUKIA_AUDITORIA_1_DE", "10")))
+# Techo de nodos verificando A LA VEZ (fraccion de los activos). Sin techo,
+# todos los nodos libres cogian replicas, nadie empezaba tareas nuevas y la
+# cola se paraba por turnos: se ejecutaba todo, luego se verificaba todo.
+REPLICA_FRACCION = min(1.0, max(0.0, float(os.environ.get("KUKIA_REPLICA_FRACCION", "0.5"))))
+# Una replica reclamada y no entregada en este tiempo se libera.
+REPLICA_TTL = max(10.0, float(os.environ.get("KUKIA_REPLICA_TTL", "120")))
+# Margen que espera el Core a la replica cuando llega el primario. El
+# verificador empieza ~1 s despues (hay que asignarle la tarea), asi que sin
+# este margen el Core recalculaba SIEMPRE y el trabajo del verificador se
+# tiraba: medido en la red el 20-10-2026, 131 replicas entregadas y 0 pagadas.
+REPLICA_ESPERA_SEG = max(0.0, float(os.environ.get("KUKIA_REPLICA_ESPERA", "3")))
+# Mismo umbral que la medida de potencia: por debajo, la red pesa mas que la GPU.
+REPLICA_FLOPS_MIN = 1e9
+# El tunel de Cloudflare conecta desde 127.0.0.1 y pone CF-Connecting-IP.
+# Solo se confia en esa cabecera si la conexion es local (nunca desde LAN).
+CONFIA_PROXY_LOCAL = os.environ.get("KUKIA_CONFIA_PROXY", "1") != "0"
+
+# ============================================================
+#  AUDITORIA: limites y castigos
+# ============================================================
+LIMITE_N = 4096            # maximo de 'n' en cualquier tarea
+LIMITE_PASOS = 20000       # maximo de 'pasos' (difusion)
+# AUDITORIA 2026-10-20: el control de dificultad llevo las tareas de difusion
+# a n=1024/pasos=20000 (~2e10 operaciones float64). El minero y el Core
+# recalculan lo mismo, asi que una tarea al limite bloquea ambos procesos.
+# Presupuesto duro de operaciones por tarea (n*n*pasos), configurable.
+LIMITE_OPS_DIFUSION = max(1_000_000, int(os.environ.get("KUKIA_MAX_OPS_DIFUSION", "2000000000")))
+LIMITE_PARAMS_BYTES = 65536  # el JSON de params no puede pasar de 64 KB
+# AUDITORIA 2026-10-20 (minero): un POST con un cuerpo gigante podia agotar
+# memoria antes de llegar a la validacion de params. 256 KB cubre de sobra
+# cualquier peticion legitima (params 64 KB + firma + telemetria).
+MAX_CUERPO_BYTES = 262144
+MAX_FALLOS = 3             # resultados INCORRECTOS antes de cerrar la tarea
+MAX_ABANDONOS = 3          # abandonos antes de cerrar la tarea como fallo
+PENALIZACION = 25.0        # TOPE de KIA que se le quitan por un resultado malo
+PENALIZACION_MULT = 100.0  # castigo = 100 x el premio de una tarea (proporcional)
+PENALIZACION_MIN = 0.1     # suelo del castigo (evita castigos ridiculos)
+CASTIGO_SEG = 1800.0       # tiempo sin poder pedir tareas tras sabotear
+PENDIENTE_EXIGIR_FIRMA = True
+VENTANA_FIRMA = 300.0      # segundos de validez de la firma de 'pendiente'
+
+# --- AUDITORIA 2026-10-20 (Sybil): el registro debe probar la clave ----------
+# Antes cualquiera podia registrar nodos con una clave publica ajena (sin
+# demostrar que tiene la privada). No permitia robar, pero llenaba la red de
+# identidades y preparaba ataques de cola/dificultad. Ahora el Core da un reto
+# de un solo uso y el nodo lo firma. Se puede desactivar solo para migrar
+# mineros antiguos: KUKIA_REGISTRO_FIRMA=0.
+EXIGIR_PRUEBA_REGISTRO = os.environ.get("KUKIA_REGISTRO_FIRMA", "1") != "0"
+RETO_TTL = 300.0
+_retos_registro = {}
+_retos_lock = threading.Lock()
+
+# --- AUDITORIA 2026-10-20: verificacion acotada -----------------------------
+# Un POST minusculo con un resultado falso obliga a recalcular la tarea entera.
+# Con 40 hilos de FastAPI, 40 entregas falsas a la vez pueden saturar CPU o
+# GPU. Un semaforo limita cuantas verificaciones caras corren a la vez; si no
+# hay hueco, la tarea vuelve a la cola SIN castigar al nodo.
+VERIF_MAX = max(1, int(os.environ.get("KUKIA_VERIF_MAX", "2")))
+VERIF_TIMEOUT = max(0.0, float(os.environ.get("KUKIA_VERIF_TIMEOUT", "5")))
+_verif_sem = threading.BoundedSemaphore(VERIF_MAX)
+_extra = [h.strip().lower() for h in (os.environ.get("KUKIA_HOSTS", "") or "").split(",") if h.strip()]
+# La verificacion de 'difusion_calor' en CPU costaba 7,4 min por tarea pesada
+# (habia 97 asi en la cola). Con la GPU baja a ~1 s. Sigue siendo un recalculo
+# INDEPENDIENTE del minero; solo cambia donde se hace la aritmetica float64.
+# Se puede desactivar con KUKIA_VERIF_GPU=0.
+USAR_GPU_VERIF = os.environ.get("KUKIA_VERIF_GPU", "1") != "0"
+HOSTS_PERMITIDOS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"} | set(_extra)
+# ENSAYO DE FAILOVER 2026-10-22: el Core solo aceptaba loopback + KUKIA_HOSTS,
+# asi que al arrancar con la replica (o con un tunel nuevo) TODO lo que llegaba
+# por el tunel publico devolvia 403 "Host no permitido" y la red parecia caida
+# aunque estuviera sirviendo. Ahora se aceptan los dominios de los tuneles de
+# Cloudflare por SUFIJO, que es la puerta publica documentada del proyecto.
+# No abre un agujero: esos nombres resuelven en Cloudflare y solo llegan aqui a
+# traves de NUESTRO tunel; no se pueden apuntar a 127.0.0.1 como el DNS
+# rebinding que corta esta guardia. Se puede vaciar con KUKIA_HOSTS_SUFIJOS="".
+SUFIJOS_HOST_PERMITIDOS = tuple(
+    s.strip().lower().lstrip(".")
+    for s in (os.environ.get("KUKIA_HOSTS_SUFIJOS",
+                             "trycloudflare.com,cfargotunnel.com") or "").split(",")
+    if s.strip())
+
+def host_permitido(host: str) -> bool:
+    if host in HOSTS_PERMITIDOS:
+        return True
+    return any(host == s or host.endswith("." + s) for s in SUFIJOS_HOST_PERMITIDOS)
+
+# AUDITORIA 2026-10-19: la billetera web consulta el saldo desde el navegador.
+# Antes el guardia solo aceptaba el Origin con el puerto DEL CORE (8300), asi
+# que una pagina local en otro puerto (o GitHub Pages) recibia 403; y ademas
+# faltaban las cabeceras CORS, con lo que el fetch fallaba igualmente.
+# Ahora: vale cualquier origen de loopback (el puerto da igual), la web
+# publica del proyecto, y lo que se anada en KUKIA_ORIGENES="https://a,...".
+ORIGENES_PERMITIDOS = {"https://lordkukone.github.io", "null"} | {
+    o.strip().lower() for o in (os.environ.get("KUKIA_ORIGENES", "") or "").split(",") if o.strip()
+}
+
+def _origen_ok(origen: str) -> bool:
+    if origen in ORIGENES_PERMITIDOS:
+        return True
+    try:
+        u = urllib.parse.urlsplit(origen)
+    except Exception:
+        return False
+    if u.scheme not in ("http", "https"):
+        return False
+    return (u.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
+
+class _ConSegura:
+    """Una conexion SQLite POR HILO (antes: una sola compartida por todos).
+
+    FALLO REAL (21-10-2026, 404 y 500 esporadicos con el nodo existiendo):
+    todos los hilos usaban la MISMA conexion. En SQLite, un ROLLBACK (o un
+    BEGIN IMMEDIATE) ejecutado en un hilo corta las sentencias que estan en
+    vuelo en esa conexion, aunque las haya lanzado otro hilo: el
+    `fetchone()` de la otra peticion vuelve None sin lanzar nada. Eso daba
+    - 404 "nodo no registrado" con el nodo existiendo (el SELECT del nodo
+      salia vacio en mitad de un ROLLBACK ajeno),
+    - 404 "tarea no encontrada" con la tarea existiendo,
+    - 500 "error interno en el pago" ('NoneType' object is not subscriptable)
+      cuando la lectura de `task2` se cortaba igual.
+
+    Reproducido en aislado con una conexion compartida y dos hilos (uno
+    leyendo, otro haciendo BEGIN/ROLLBACK): 2.877 de 42.324 lecturas (6,8 %)
+    devolvieron None con la fila perfectamente presente.
+
+    Con una conexion POR HILO es imposible: el rollback de un hilo no toca la
+    sentencia de otro. Las escrituras siguen serializadas con _pago_lock +
+    BEGIN IMMEDIATE, y busy_timeout (30 s) absorbe el turno de escritura.
+
+    Nota: el modo de diario sigue siendo DELETE a proposito. WAL seria mas
+    comodo para lectores, pero entonces el .db no se puede copiar suelto (haría
+    falta el -wal) y las copias de seguridad que ya existen se romperian.
+    """
+
+    def __init__(self, ruta):
+        self._ruta = str(ruta)
+        self._row_factory = sqlite3.Row
+        self._lk = threading.Lock()
+
+    def _con(self) -> sqlite3.Connection:
+        conexion = getattr(_local_bd, "con", None)
+        if conexion is None:
+            with self._lk:
+                conexion = getattr(_local_bd, "con", None)
+                if conexion is None:
+                    conexion = sqlite3.connect(self._ruta, timeout=30)
+                    conexion.row_factory = self._row_factory
+                    # Un escritor puede tardar (archivado en lote); esperar en
+                    # vez de devolver 500 por "database is locked".
+                    conexion.execute("PRAGMA busy_timeout=30000")
+                    _local_bd.con = conexion
+        return conexion
+
+    def execute(self, sql, parametros=()):
+        return self._con().execute(sql, parametros)
+
+    def executemany(self, sql, seq):
+        return self._con().executemany(sql, seq)
+
+    def executescript(self, sql):
+        return self._con().executescript(sql)
+
+    def commit(self):
+        return self._con().commit()
+
+    def rollback(self):
+        return self._con().rollback()
+
+    def close(self):
+        conexion = getattr(_local_bd, "con", None)
+        if conexion is not None:
+            conexion.close()
+            _local_bd.con = None
+
+    @property
+    def row_factory(self):
+        return self._row_factory
+
+    @row_factory.setter
+    def row_factory(self, valor):
+        self._row_factory = valor
+        conexion = getattr(_local_bd, "con", None)
+        if conexion is not None:
+            conexion.row_factory = valor
+
+con = _ConSegura(DB)
+con.row_factory = sqlite3.Row
+
+@contextmanager
+def _escritura():
+    """Escritura corta y atomica: lock + BEGIN IMMEDIATE + commit.
+
+    AUDITORIA: /nodos/registrar, /tareas/crear y /registro escribian sin
+    lock (dos peticiones a la vez podian mezclar transacciones).
+    """
+    with _pago_lock:
+        # AUDITORIA: si otro programa tiene la base bloqueada, se reintenta una
+        # vez y se responde 503 rapido (antes se quedaba esperando 30 s).
+        listo = False
+        for intento in (1, 2):
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                listo = True
+                break
+            except Exception:
+                if intento == 1:
+                    time.sleep(0.3)
+        if not listo:
+            raise HTTPException(503, "Core ocupado (la base esta bloqueada), reintentar")
+        try:
+            yield
+            con.commit()
+        except HTTPException:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        except Exception:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise HTTPException(500, "error interno escribiendo")
+
+def schema():
+    con.execute("CREATE TABLE IF NOT EXISTS nodos(id TEXT PRIMARY KEY, nombre TEXT, vram_gb INT, "
+                "tier REAL, reputacion REAL DEFAULT 1.0, ref TEXT, tareas_ok INT DEFAULT 0, "
+                "creado TEXT, tops REAL DEFAULT 0)")
+    con.execute("CREATE TABLE IF NOT EXISTS tareas(id TEXT PRIMARY KEY, tipo TEXT, params TEXT, "
+                "estado TEXT DEFAULT 'queued', nodo_id TEXT, resultado TEXT, hash TEXT, "
+                "metrica TEXT, creado TEXT, fin TEXT, verificado INT DEFAULT 0, doble TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "tarea_id TEXT, nodo_id TEXT, kuki REAL, motivo TEXT, ts TEXT)")
+    # AUDITORIA 2026-10-20: totales materializados. /stats y /saldos recorrian
+    # todo el ledger en cada llamada; con millones de asientos eso no escala.
+    con.execute("CREATE TABLE IF NOT EXISTS saldos_cuenta(cuenta TEXT PRIMARY KEY, "
+                "total REAL NOT NULL DEFAULT 0)")
+    con.execute("CREATE TABLE IF NOT EXISTS registros(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "nombre TEXT, email TEXT, gpu TEXT, tops TEXT, ceder TEXT, ip TEXT, ts TEXT)")
+    # Cupo anti-Sybil de registros (IP + clave publica), persistente.
+    con.execute("CREATE TABLE IF NOT EXISTS registros_nodo(ip TEXT, clave_publica TEXT, ts REAL)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_registros_nodo ON registros_nodo(ip, ts)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_registros_nodo_pub ON registros_nodo(clave_publica, ts)")
+    try:
+        con.execute("ALTER TABLE nodos ADD COLUMN tops REAL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        con.execute("ALTER TABLE nodos ADD COLUMN clave_publica TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        con.execute("ALTER TABLE tareas ADD COLUMN asignado REAL DEFAULT NULL")
+    except Exception:
+        pass
+    for _sql in (
+        "ALTER TABLE tareas ADD COLUMN cola TEXT DEFAULT 'B'",
+        "ALTER TABLE tareas ADD COLUMN campana TEXT DEFAULT ''",
+        "ALTER TABLE tareas ADD COLUMN prioridad REAL DEFAULT 0",
+        "ALTER TABLE tareas ADD COLUMN vram_min INT DEFAULT 0",
+        "ALTER TABLE tareas ADD COLUMN device TEXT DEFAULT ''",
+        "ALTER TABLE tareas ADD COLUMN duracion_ms REAL DEFAULT 0",
+        # AUDITORIA: reintentos, castigos y cadena de hashes
+        "ALTER TABLE tareas ADD COLUMN intentos INT DEFAULT 0",
+        "ALTER TABLE tareas ADD COLUMN nodos_intento TEXT DEFAULT ''",
+        "ALTER TABLE nodos ADD COLUMN castigado_hasta REAL DEFAULT 0",
+        "ALTER TABLE nodos ADD COLUMN fallos INT DEFAULT 0",
+        "ALTER TABLE ledger ADD COLUMN hash_prev TEXT DEFAULT ''",
+        "ALTER TABLE ledger ADD COLUMN hash TEXT DEFAULT ''",
+        "ALTER TABLE registros ADD COLUMN ref TEXT DEFAULT ''",
+        "ALTER TABLE nodos ADD COLUMN direccion_cobro TEXT DEFAULT ''",
+        # Ultima vez que el nodo pidio/entrego trabajo: para no contar en la
+        # dificultad los nodos muertos (TOPS autodeclarados y fantasma).
+        "ALTER TABLE nodos ADD COLUMN visto REAL DEFAULT 0",
+        # POTENCIA DEMOSTRADA (21-10-2026): GFLOPS medidos con el reloj del Core
+        # sobre trabajo verificado, y cuantas muestras los respaldan. Es lo que
+        # decide si la prima por tier (x1,3 / x1,6) se paga o se anula.
+        "ALTER TABLE nodos ADD COLUMN gflops_medido REAL DEFAULT 0",
+        "ALTER TABLE nodos ADD COLUMN potencia_muestras INT DEFAULT 0",
+    ):
+        try:
+            con.execute(_sql)
+        except Exception:
+            pass
+    con.execute("CREATE TABLE IF NOT EXISTS planificador_log(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "tarea_id TEXT, nodo_id TEXT, cola TEXT, motivo TEXT, ts TEXT)")
+    con.execute("CREATE TABLE IF NOT EXISTS gpu_pruebas(nodo_id TEXT, prueba TEXT, creado TEXT)")
+    # EJECUCION REDUNDANTE (21-10-2026): una fila por tarea replicada. Una sola
+    # replica por tarea (PRIMARY KEY) para que dos nodos no hagan el mismo
+    # trabajo de verificacion y luego cobren los dos.
+    con.execute("CREATE TABLE IF NOT EXISTS tareas_replica(tarea_id TEXT PRIMARY KEY, "
+                "nodo_id TEXT, estado TEXT DEFAULT 'reclamando', metrica TEXT, "
+                "firma TEXT, device TEXT, duracion_ms REAL, asignado REAL, ts REAL)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_replica_nodo ON tareas_replica(nodo_id)")
+    # AUDITORIA 2026-10-20: anti-replay de 'pendiente' que sobrevive a reinicios.
+    con.execute("CREATE TABLE IF NOT EXISTS nonces_pendiente(nodo_id TEXT, nonce TEXT, ts REAL, "
+                "PRIMARY KEY(nodo_id, nonce))")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_nonces_ts ON nonces_pendiente(ts)")
+    # AUDITORIA 2026-10-20 (GPU en vivo): estado actual por nodo/GPU, sin
+    # crecer como la telemetria historica. El worker manda un latido firmado
+    # cada 3 s y el panel lo pinta en la tarjeta de cada GPU.
+    con.execute("CREATE TABLE IF NOT EXISTS gpu_estado(nodo_id TEXT, device TEXT, "
+                "metricas TEXT, ts REAL, origen TEXT DEFAULT 'live', "
+                "PRIMARY KEY(nodo_id, device))")
+    con.execute("CREATE TABLE IF NOT EXISTS gpu_telemetria(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "nodo_id TEXT, device TEXT, metricas TEXT, ts TEXT, origen TEXT)")
+    try:
+        con.execute("ALTER TABLE nodos ADD COLUMN tops_estimado INT DEFAULT 1")
+    except Exception:
+        pass
+    # AUDITORIA: con el generador de trabajo la tabla 'tareas' crece sola
+    # (miles al dia). Sin indices, los COUNT(*) de la cola y los saldos
+    # acabarian recorriendo toda la tabla.
+    # ARCHIVADO (18-10-2026): la tabla 'tareas' crece con el generador
+    # automatico (~500.000 filas al dia a pleno ritmo). Para poder borrar las
+    # tareas viejas sin tocar el dinero ni el ritmo de emision, los totales
+    # historicos viven en 'meta' y NO se recalculan contando filas.
+    con.execute("CREATE TABLE IF NOT EXISTS meta(clave TEXT PRIMARY KEY, valor REAL)")
+    # VALIDADORES INDEPENDIENTES (20-10-2026): cada validador recalcula las
+    # tareas verificadas y manda una atestacion firmada. Se guarda el historial
+    # para el panel; NO se paga ni se bloquea nada con esto.
+    con.execute("CREATE TABLE IF NOT EXISTS validador_atestaciones("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, validador TEXT, clave_publica TEXT, "
+                "desde REAL, hasta REAL, revisadas INTEGER, ok INTEGER, discrepancias INTEGER, "
+                "detalle TEXT, huella TEXT, ts REAL, firma TEXT)")
+    if con.execute("SELECT valor FROM meta WHERE clave='tareas_ok_total'").fetchone() is None:
+        _ok = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"]
+        _prim = con.execute("SELECT MIN(fin) m FROM tareas WHERE estado='ok' AND fin IS NOT NULL").fetchone()["m"]
+        try:
+            _prim_e = float(time.mktime(time.strptime(_prim))) if _prim else float(time.time())
+        except Exception:
+            _prim_e = float(time.time())
+        con.execute("INSERT INTO meta(clave,valor) VALUES('tareas_ok_total',?)", (float(_ok),))
+        con.execute("INSERT OR IGNORE INTO meta(clave,valor) VALUES('primera_ok_epoch',?)", (_prim_e,))
+        con.execute("INSERT OR IGNORE INTO meta(clave,valor) VALUES('tareas_archivadas',0)")
+    for _ix in (
+        "CREATE INDEX IF NOT EXISTS idx_tareas_estado ON tareas(estado)",
+        "CREATE INDEX IF NOT EXISTS idx_tareas_cola ON tareas(estado, cola, prioridad)",
+        "CREATE INDEX IF NOT EXISTS idx_tareas_nodo ON tareas(nodo_id)",
+        "CREATE INDEX IF NOT EXISTS idx_tareas_campana ON tareas(campana)",
+        "CREATE INDEX IF NOT EXISTS idx_tareas_creado ON tareas(creado)",
+        "CREATE INDEX IF NOT EXISTS idx_ledger_nodo ON ledger(nodo_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ledger_motivo ON ledger(motivo)",
+        "CREATE INDEX IF NOT EXISTS idx_val_atest ON validador_atestaciones(validador, ts)",
+        "CREATE INDEX IF NOT EXISTS idx_val_atest_ts ON validador_atestaciones(ts)",
+    ):
+        try:
+            con.execute(_ix)
+        except Exception:
+            pass
+    con.commit()
+
+schema()
+
+def podar_nodos(horas: float = None) -> int:
+    """Borra nodos que no tienen dinero ni trabajo pagado.
+
+    Dos casos, ambos SIN asientos en el ledger (nada de dinero se toca):
+      - nunca pidieron trabajo (`visto=0`), tras `horas` (24 h por defecto);
+      - pidieron trabajo pero no completaron NINGUNA tarea pagada y llevan
+        NODO_SIN_TRABAJO_H (6 h) SIN aparecer. Esto ultimo cierra el Sybil que
+        pide cola y nunca entrega: no puede dejar tareas inmovilizadas para
+        siempre. Se mide desde la ultima actividad, no desde el registro: un
+        nodo que esta trabajando no se poda ni aunque no haya cobrado aun.
+    Un worker que vuelva se registra otra vez: su identidad vieja ya no existe
+    y el propio worker lo detecta con /nodos/{id}.
+    """
+    try:
+        horas = float(os.environ.get("KUKIA_PODA_NODOS_H", "24")) if horas is None else float(horas)
+    except Exception:
+        horas = 24.0
+    if horas <= 0:
+        return 0
+    ahora = time.time()
+    corte = ahora - horas * 3600.0
+    corte_nuevo = ahora - NODO_SIN_TRABAJO_H * 3600.0
+    candidatos = []
+    for f in con.execute("SELECT id, creado, COALESCE(visto,0) visto, "
+                         "COALESCE(tareas_ok,0) ok FROM nodos").fetchall():
+        try:
+            creado = time.mktime(time.strptime(f["creado"]))
+        except Exception:
+            continue
+        if f["visto"] and f["ok"]:
+            continue
+        # AUDITORIA 21-10-2026 (404 "nodo no registrado" con el nodo vivo): el
+        # segundo caso medía la antiguedad desde el REGISTRO, no desde la ultima
+        # actividad. Un nodo llevaba 7 h registrado, pidiendo trabajo cada segundo
+        # y sin cobrar todavia (tareas lentas o solo replicas), y se borraba
+        # mientras estaba trabajando: el siguiente /tareas/pendiente ya daba 404
+        # con el nodo perfectamente vivo. Ahora se mira cuando se le vio por
+        # ultima vez: si esta activo no se poda, nunca.
+        limite = corte if not f["visto"] else corte_nuevo
+        referencia = creado if not f["visto"] else float(f["visto"])
+        if referencia >= limite:
+            continue
+        if con.execute("SELECT 1 FROM ledger WHERE nodo_id=? LIMIT 1", (f["id"],)).fetchone():
+            continue
+        candidatos.append(f["id"])
+        if len(candidatos) >= 500:
+            break
+    if not candidatos:
+        return 0
+    try:
+        with _escritura():
+            for nid in candidatos:
+                # Sus tareas vuelven a la cola antes de borrar la identidad.
+                con.execute("UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL "
+                            "WHERE nodo_id=? AND estado='ejecutando'", (nid,))
+                con.execute("DELETE FROM nodos WHERE id=? AND COALESCE(tareas_ok,0)=0", (nid,))
+                con.execute("DELETE FROM gpu_estado WHERE nodo_id=?", (nid,))
+                con.execute("DELETE FROM gpu_telemetria WHERE nodo_id=?", (nid,))
+        return len(candidatos)
+    except Exception as e:
+        print(f"[KUKIA] no se pudieron podar nodos: {e}", flush=True)
+        return 0
+
+_n_podados = podar_nodos()
+if _n_podados:
+    print(f"[KUKIA] podados {_n_podados} nodos que nunca trabajaron", flush=True)
+
+def direccion_valida(d: str) -> bool:
+    """Formato de direccion KUKIA: KUK + 38 hex (41 caracteres)."""
+    d = (d or "").strip().upper()
+    return len(d) == 41 and d.startswith("KUK") and all(c in "0123456789ABCDEF" for c in d[3:])
+
+def direccion_de_pubkey(pub_hex: str) -> str:
+    """Direccion KUK... derivada de una clave publica Ed25519.
+
+    Misma regla que la billetera web y kukia_wallet.py:
+        KUK + SHA256(clave_publica)[:38] en mayusculas.
+    Asi el Core puede comprobar que quien firma una transferencia ES el dueno
+    de la direccion de origen, sin registrar la billetera como nodo.
+    """
+    try:
+        raw = bytes.fromhex((pub_hex or "").strip())
+    except ValueError:
+        return ""
+    if len(raw) != 32:
+        return ""
+    return "KUK" + hashlib.sha256(raw).hexdigest()[:38].upper()
+
+
+def pubkey_valida(pub_hex: str) -> bool:
+    try:
+        return len(bytes.fromhex((pub_hex or "").strip())) == 32
+    except ValueError:
+        return False
+
+# Caracteres que puede llevar un nombre de GPU en los paneles. Todo lo demas
+# (< > comillas & barra) fuera: el nombre lo elige el minero y acaba en una
+# pagina web, asi que se limpia EN LA PUERTA y no en cada consumidor.
+_DEVICE_OK = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                 "0123456789 ._:()+-")
+
+
+def device_limpio(valor) -> str:
+    """Nombre de GPU/tarjeta apto para mostrar (max 16, sin HTML).
+
+    AUDITORIA 2026-10-21: /tareas/resultado guardaba el 'device' tal cual
+    (solo recortado a 16) y la portada lo pintaba con innerHTML. No se podia
+    explotar con un payload completo por el recorte, pero era una inyeccion
+    de HTML a un clic de ser XSS: se cierra aqui y no en cada lector.
+    """
+    limpio = "".join(c for c in str(valor or "") if c in _DEVICE_OK).strip()
+    limpio = " ".join(limpio.split())
+    return (limpio or "gpu")[:16]
+
+
+def _firmar_texto(texto: str) -> str:
+    """Firma Ed25519 con la clave del sello del Core (identidad del nodo).
+
+    Se usa para firmar los manifiestos de trabajo que reciben los validadores:
+    asi un validador sabe que lo que recalcula es lo que el Core publico, y no
+    lo que le sirvio un intermediario.
+    """
+    if not _sello_priv:
+        return ""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        return Ed25519PrivateKey.from_private_bytes(
+            bytes.fromhex(_sello_priv)).sign(texto.encode()).hex()
+    except Exception:
+        return ""
+
+
+def pasos_max_difusion(n: int) -> int:
+    """Pasos de difusion que caben en el presupuesto de operaciones."""
+    n = max(1, int(n))
+    return max(1, min(LIMITE_PASOS, LIMITE_OPS_DIFUSION // (n * n)))
+
+
+def _sanear_difusion_pendiente() -> int:
+    """Recorta tareas de difusion YA ENCOLADAS que se crearon con el limite
+    viejo (hasta n=1024/pasos=20000). Sin esto, tras reiniciar el Core la
+    primera tarea podria bloquear la GPU y la verificacion minutos.
+
+    Solo toca tareas 'queued' (nadie las esta calculando). Devuelve cuantas.
+    """
+    cambiadas = 0
+    try:
+        filas = con.execute("SELECT id, params FROM tareas "
+                            "WHERE tipo='difusion_calor' AND estado='queued'").fetchall()
+        for f in filas:
+            try:
+                p = json.loads(f["params"])
+                n = int(p.get("n", 256))
+                pasos = int(p.get("pasos", 1500))
+            except Exception:
+                continue
+            tope = pasos_max_difusion(n)
+            if pasos > tope:
+                p["pasos"] = tope
+                with _escritura():
+                    con.execute("UPDATE tareas SET params=? WHERE id=?",
+                                (json.dumps(p), f["id"]))
+                cambiadas += 1
+    except Exception as e:
+        print(f"[KUKIA] no se pudieron sanear tareas de difusion: {e}", flush=True)
+    return cambiadas
+
+_saneadas = _sanear_difusion_pendiente()
+if _saneadas:
+    print(f"[KUKIA] saneadas {_saneadas} tareas de difusion encoladas al tope actual", flush=True)
+
+
+def _cuenta_de(nodo_id):
+    """Cuenta del ledger a la que se paga/castiga un nodo: su direccion de
+    cobro si la declaro al registrarse, y si no el propio id del nodo."""
+    fila = con.execute("SELECT direccion_cobro FROM nodos WHERE id=?", (nodo_id,)).fetchone()
+    d = ((fila["direccion_cobro"] if fila else "") or "").strip().upper()
+    return d if direccion_valida(d) else nodo_id
+
+def _asiento(tarea_id, nodo_id, kuki, motivo):
+    """AUDITORIA: unico camino para escribir en el ledger. Encadena hashes:
+
+        hash = sha256(tarea_id|nodo_id|kuki|motivo|ts|hash_prev)
+
+    Asi un saldo retocado a mano en el .db deja de cuadrar con la cadena y
+    se detecta con /ledger/verificar. Se llama SIEMPRE dentro del lock.
+    """
+    # Si el historial no cuadra (alguien edito el .db a mano o falto un sello),
+    # NO se crea dinero nuevo hasta que se revise. Los asientos de 0 (rechazos,
+    # castigos) si se anotan: son el rastro de lo que esta pasando.
+    if LEDGER_ROTO and float(kuki) > 0:
+        raise HTTPException(503, "ledger alterado: pagos bloqueados (ver /ledger/integridad)")
+    fila = con.execute("SELECT hash FROM ledger WHERE hash IS NOT NULL AND hash<>'' "
+                       "ORDER BY id DESC LIMIT 1").fetchone()
+    prev = (fila["hash"] if fila else "") or ""
+    ts = time.ctime()
+    base = f"{tarea_id}|{nodo_id}|{kuki}|{motivo}|{ts}|{prev}"
+    h = hashlib.sha256(base.encode()).hexdigest()
+    con.execute("INSERT INTO ledger(tarea_id,nodo_id,kuki,motivo,ts,hash_prev,hash) "
+                "VALUES(?,?,?,?,?,?,?)", (tarea_id, nodo_id, kuki, motivo, ts, prev, h))
+    # Totales materializados en la MISMA transaccion que el asiento: si el
+    # asiento se revierte, el saldo tambien. Se reconstruyen al arrancar.
+    con.execute("INSERT INTO saldos_cuenta(cuenta,total) VALUES(?,?)"
+                "ON CONFLICT(cuenta) DO UPDATE SET total=total+excluded.total",
+                (nodo_id, float(kuki)))
+    # CAOS 2026-10-22: sumar y restar deja residuos de coma flotante (-4,6e-13)
+    # y la billetera los pintaba como "-0.0 KIA": una cuenta parecia en deuda.
+    # No es deuda, es cero. Se limpia AQUI, en el unico camino de escritura,
+    # asi que ninguna cuenta puede volver a quedar con signo negativo.
+    con.execute("UPDATE saldos_cuenta SET total=0.0 WHERE cuenta=? "
+                "AND total > -1e-9 AND total < 1e-9", (nodo_id,))
+    con.execute("INSERT INTO meta(clave,valor) VALUES('supply_emitido',?)"
+                "ON CONFLICT(clave) DO UPDATE SET valor=valor+excluded.valor",
+                (float(kuki),))
+    return h
+
+def genesis():
+    """Asignacion fundacional: se ejecuta UNA sola vez (idempotente)."""
+    ya = con.execute("SELECT COUNT(*) c FROM ledger WHERE motivo='asignacion fundacional'").fetchone()["c"]
+    if not ya:
+        _asiento("genesis", GENESIS_DIR, GENESIS_MONTO, "asignacion fundacional")
+        con.commit()
+
+genesis()
+
+def recalcular_resumen() -> dict:
+    """Reconstruye saldos y suministro desde el ledger (fuente de verdad).
+
+    Se ejecuta al arrancar: si alguien edito el ledger, la cadena lo delata y
+    los totales se recalculan desde los asientos reales. Tambien sirve como
+    reparacion manual via /admin/recalcular_resumen.
+    """
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            raise HTTPException(503, "Core ocupado, reintentar")
+        try:
+            con.execute("DELETE FROM saldos_cuenta")
+            con.execute("INSERT INTO saldos_cuenta(cuenta,total) "
+                        "SELECT nodo_id, COALESCE(SUM(kuki),0) FROM ledger GROUP BY nodo_id")
+            fila = con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger").fetchone()
+            total = float(fila["s"] or 0.0)
+            con.execute("INSERT INTO meta(clave,valor) VALUES('supply_emitido',?) "
+                        "ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor", (total,))
+            cuentas = con.execute("SELECT COUNT(*) c FROM saldos_cuenta").fetchone()["c"]
+            con.commit()
+            return {"supply": round(total, 6), "cuentas": int(cuentas)}
+        except HTTPException:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        except Exception:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise HTTPException(500, "error reconstruyendo totales")
+
+_RESUMEN_ARRANQUE = recalcular_resumen()
+
+# ============================================================
+#  INTEGRIDAD DEL HISTORIAL (sellos firmados)
+# ============================================================
+# La cadena de hashes del ledger detecta un asiento editado, pero quien edita
+# puede reescribir la cadena entera desde ese punto y volver a cuadrarla. Los
+# sellos fijan el pasado: cada uno es una foto firmada (asientos, ultimo hash
+# y suma) con una clave Ed25519 que NO esta en la base de datos.
+# Si al arrancar algo no cuadra, el Core deja de crear dinero hasta que se
+# revise: mejor parado que pagando sobre un historial falso.
+def _sellos_leidos() -> list:
+    if SELLOS is None:
+        return []
+    try:
+        return SELLOS.leer_sellos(SELLOS_FILE)
+    except Exception:
+        return []
+
+def _n_sellos_meta() -> int:
+    try:
+        fila = con.execute("SELECT valor FROM meta WHERE clave='sellos_n'").fetchone()
+        return int(fila["valor"]) if fila else 0
+    except Exception:
+        return 0
+
+def _verificar_integridad() -> dict:
+    global LEDGER_ROTO
+    problemas = []
+    cadena = {}
+    sellos = _sellos_leidos()
+    if SELLOS is None:
+        problemas.append("modulo de sellos no disponible")
+    else:
+        try:
+            cadena = SELLOS.verificar_cadena_db(con)
+            if not cadena["ok"]:
+                problemas.append(f"asientos alterados: {cadena['ids_alterados'][:10]}")
+            if sellos:
+                r = SELLOS.verificar_sellos(con, sellos, _sello_pub)
+                for p in r["problemas"]:
+                    if p not in problemas:
+                        problemas.append(p)
+        except Exception as e:
+            problemas.append(f"no se pudo verificar: {e}")
+    n_meta = _n_sellos_meta()
+    if n_meta > len(sellos):
+        problemas.append(f"faltan sellos: la base dice {n_meta} y el fichero tiene {len(sellos)}")
+    LEDGER_ROTO = bool(problemas) and SELLO_BLOQUEA_PAGOS
+    if problemas:
+        print("[KUKIA] " + "!" * 62, flush=True)
+        print("[KUKIA] LEDGER: EL HISTORIAL NO CUADRA", flush=True)
+        for p in problemas[:10]:
+            print(f"[KUKIA]   - {p}", flush=True)
+        if LEDGER_ROTO:
+            print("[KUKIA] PAGOS BLOQUEADOS hasta que se revise (/ledger/integridad)", flush=True)
+        print("[KUKIA] " + "!" * 62, flush=True)
+    else:
+        print(f"[KUKIA] integridad OK: cadena intacta, {len(sellos)} sellos", flush=True)
+    return {"ok": not problemas, "problemas": problemas,
+            "cadena_ok": bool(cadena.get("ok")), "sellos": len(sellos),
+            "pagos_bloqueados": LEDGER_ROTO}
+
+INTEGRIDAD_ARRANQUE = _verificar_integridad()
+
+def _sellar_ahora(espera: float = 10.0) -> dict:
+    """Crea un sello firmado del estado actual y lo anade al fichero append-only."""
+    if SELLOS is None or not _sello_priv:
+        return {}
+    if not _pago_lock.acquire(timeout=espera):
+        return {}
+    try:
+        sellos = _sellos_leidos()
+        s = SELLOS.nuevo_sello(con, _sello_priv, sellos[-1] if sellos else None)
+        if sellos and int(s["hasta"]) <= int(sellos[-1].get("hasta") or 0):
+            return {}
+        SELLOS.anadir_sello(SELLOS_FILE, s)
+        try:
+            con.execute("INSERT INTO meta(clave,valor) VALUES('sellos_n',?) "
+                        "ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor",
+                        (float(len(sellos) + 1),))
+            con.commit()
+        except Exception:
+            pass
+        return s
+    except Exception as e:
+        print(f"[KUKIA] sello error: {e}", flush=True)
+        return {}
+    finally:
+        _pago_lock.release()
+
+def _bucle_sellos():
+    """Sella cada SELLO_CADA_SEG segundos (o cada SELLO_CADA_ASIENTOS asientos)."""
+    ultimo = 0.0
+    while True:
+        time.sleep(min(60.0, max(15.0, SELLO_CADA_SEG / 4.0)))
+        try:
+            if LEDGER_ROTO:
+                continue
+            sellos = _sellos_leidos()
+            ult = sellos[-1] if sellos else None
+            est = SELLOS.estado_ledger(con) if SELLOS else {}
+            nuevos = int(est.get("asientos", 0)) - int((ult or {}).get("asientos") or 0)
+            ahora = time.time()
+            toca = (ult is None and int(est.get("asientos", 0)) > 0)
+            if not toca:
+                toca = nuevos >= SELLO_CADA_ASIENTOS
+            if not toca:
+                toca = nuevos > 0 and (ahora - ultimo) >= SELLO_CADA_SEG
+            if toca:
+                s = _sellar_ahora()
+                if s:
+                    ultimo = ahora
+                    print(f"[KUKIA] sello hasta {s['hasta']} ({s['asientos']} asientos, "
+                          f"{s['suma']} KIA)", flush=True)
+        except Exception as e:
+            print(f"[KUKIA] bucle sellos error: {e}", flush=True)
+
+threading.Thread(target=_bucle_sellos, daemon=True).start()
+# Primer sello al arrancar: no esperar al bucle para tener una referencia.
+if not _sellos_leidos():
+    _sellar_ahora()
+
+# ============================================================
+#  VERIFICACION REAL (trustless): el Core recalcula la tarea
+# ============================================================
+
+def gen_matriz(n: int, seed: int) -> np.ndarray:
+    """Matriz determinista de enteros acotados (exacta en float64)."""
+    idx = np.arange(n, dtype=np.float64)
+    return (idx[:, None] * 31 + idx[None, :] * 17 + seed) % 97 - 48
+
+def computar_tarea(tipo: str, params: dict):
+    """Recalcula el resultado esperado en el propio Core (numpy, CPU)."""
+    if tipo == "checksum":
+        data = str(params.get("data", "kukia"))
+        return hashlib.sha256(data.encode()).hexdigest()
+    if tipo == "matriz":
+        n = int(params.get("n", 256))
+        seed = int(params.get("seed", 42))
+        a = gen_matriz(n, seed)
+        b = gen_matriz(n, seed + 1)
+        return str(int(round(float((a @ b).sum()))))
+    if tipo == "inferencia":
+        n = int(params.get("n", 64))
+        seed = int(params.get("seed", 7))
+        x = gen_matriz(n, seed)
+        k = np.array([[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]])
+        out = 0.0
+        for i in range(3):
+            for j in range(3):
+                out += float((x[i:n-2+i, j:n-2+j] * k[i, j]).sum())
+        return str(int(round(out)))
+    return None
+
+# --- Modelos de referencia para tareas IA (punto 5: distribucion) ---
+MODELOS_DIR = Path(__file__).parent / "modelos"
+MODELOS_DIR.mkdir(parents=True, exist_ok=True)
+
+def _difusion_ref(n: int, pasos: int, seed: int) -> float:
+    """Valor de referencia de la difusion (float64, MISMO calculo que el worker).
+
+    AUDITORIA: en CPU (numpy) una tarea n=2048/pasos=4000 tarda ~7,4 min y la
+    cola tenia 97 tareas asi (≈530 min de CPU). Con la GPU disponible baja a
+    ~1 s. La rejilla inicial se genera con numpy default_rng (igual que el
+    worker) y la iteracion va en float64; la comparacion sigue siendo con
+    tolerancia relativa, asi que la verificacion no se debilita.
+    """
+    if USAR_GPU_VERIF:
+        try:
+            import torch
+            x = torch.from_numpy(np.random.default_rng(seed).random((n, n))).to("cuda", dtype=torch.float64)
+            for _ in range(pasos):
+                x[1:-1, 1:-1] = x[1:-1, 1:-1] + 0.2 * (
+                    x[:-2, 1:-1] + x[2:, 1:-1] + x[1:-1, :-2] + x[1:-1, 2:] - 4 * x[1:-1, 1:-1])
+            return float(x.sum().item())
+        except Exception:
+            pass
+    x = np.random.default_rng(seed).random((n, n))
+    for _ in range(pasos):
+        x[1:-1, 1:-1] = x[1:-1, 1:-1] + 0.2 * (
+            x[:-2, 1:-1] + x[2:, 1:-1] + x[1:-1, :-2] + x[1:-1, 2:] - 4 * x[1:-1, 1:-1])
+    return float(x.sum())
+
+def _verificar_difusion(params, metrica):
+    """Recomputa la difusion y compara con tolerancia relativa (GPU y CPU
+    redondean distinto tras cientos de pasos)."""
+    try:
+        n = int(params.get("n", 256))
+        pasos = int(params.get("pasos", 200))
+        seed = int(params.get("seed", 42))
+        val = float(metrica)
+        if not math.isfinite(val):
+            return False
+        ref = _difusion_ref(n, pasos, seed)
+        tol = float(params.get("tolerancia_rel", 1e-9))
+        return abs(val - ref) <= tol * max(1.0, abs(ref))
+    except MemoryError:
+        # AUDITORIA 21-10-2026: sin memoria NO es un resultado incorrecto. Si se
+        # tragaba como False, el Core castigaba al nodo por quedarse el sin RAM
+        # al recalcular (paso de verdad: no pudo reservar 4 MB de numpy).
+        raise
+    except Exception:
+        return False
+
+def _verificar_embeddings(tipo, params, metrica):
+    """Puntos 1+2: hash del modelo + recomputo CPU con tolerancia (lote: spot-check)."""
+    try:
+        modelo = params["model_path"]
+        vecs = json.loads(metrica)
+        if not isinstance(vecs, list):
+            return False
+        h = ONNXCPU.config_hash(modelo, params["input"] if tipo == "embeddings" else params["inputs"])
+        if str(params.get("model_hash", h)) != h:
+            return False
+        tol = float(params.get("tolerancia", 1e-5))
+        if tipo == "embeddings":
+            pares = [(params["input"], vecs)]
+        else:
+            entradas = list(params["inputs"])
+            if len(vecs) != len(entradas):
+                return False
+            # AUDITORIA 2026-10-20 (soundness): antes se comprobaban solo 3
+            # vectores y los indices salian de params["seed"], que el minero
+            # conoce: podia calcular justo esos 3 y falsificar los demas.
+            # Ahora se verifican TODOS. El lote se limita en validar_params
+            # para que el coste quede acotado.
+            pares = list(zip(entradas, vecs))
+        for ent, rec in pares:
+            ref = ONNXCPU.ejecutar_tarea(modelo, ent)
+            if not ONNXCPU.comparar_con_tolerancia(rec, ref, tol):
+                return False
+        return True
+    except MemoryError:
+        # Igual que en la difusion: quedarse sin RAM no es trampa del nodo.
+        raise
+    except Exception:
+        return False
+
+app = FastAPI(title="KUKIA Core", version="0.4.2")
+
+# ============================================================
+#  RATE LIMIT (anti-spam)  +  AUDITORIA: un cubo POR RUTA
+# ============================================================
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as StarRequest
+
+# AUDITORIA: antes era un unico contador por IP compartido por las 5 rutas:
+# un minero que pedia trabajo y entregaba resultados se autobloqueaba (429).
+LIMITES_POR_RUTA = {
+    "/registro": 30,
+    "/nodos/registrar": 30,
+    # El reto se pide una vez por registro; 60/min deja margen a un worker que
+    # reintenta y frena un bucle que quiera llenar la tabla de retos.
+    "/nodos/reto": 60,
+    # Lista de nodos: lectura acotada, pero tambien se limita para que nadie la
+    # martillee en bucle (el panel la pide cada 2 s; esto deja 10x de margen).
+    "/nodos": 600,
+    # Las dos rutas del minero van firmadas: el limite solo frena un bucle
+    # desbocado. Con 2 GPUs el minero hace ~240 entregas/min y con 300 se
+    # autofrenaba (429) en los picos.
+    "/tareas/pendiente": 1200,
+    "/tareas/resultado": 1200,
+    "/tareas/resultado_json": 1200,
+    # Latido de GPU: 2 GPUs cada 3 s son ~40/min. 600 deja sitio a varios
+    # mineros en el mismo Core sin abrir la puerta a un bucle desbocado.
+    "/nodos/telemetria": 600,
+    "/transferir": 60,
+    # Un validador independiente manda una atestacion por vuelta (cada 30 s).
+    # 240/min deja sitio a varios validadores en el mismo Core sin abrir la
+    # puerta a un bucle desbocado.
+    "/validador/atestacion": 240,
+}
+RATE_WINDOW = 60.0
+_rate_hist = {}
+_rate_lock = threading.Lock()
+
+# AUDITORIA 2026-10-20 (minero): anti-replay de /tareas/pendiente.
+# Antes la firma solo cubria nodo+ts, asi que una peticion capturada se podia
+# repetir durante 5 minutos para robar la cola del nodo (DoS). El worker nuevo
+# manda un nonce aleatorio y el Core lo firma; el viejo (sin nonce) sigue
+# funcionando para no romper mineros ya descargados.
+NONCE_TTL = 600.0
+
+def _nonce_nuevo(nodo_id: str, nonce: str) -> bool:
+    """Marca el nonce como usado. Persistente: un reinicio NO lo olvida.
+
+    AUDITORIA 2026-10-20: antes era un dict en RAM (TTL 600 s); reiniciar el
+    Core permitia repetir una peticion capturada dentro de su ventana. Ahora
+    vive en SQLite con clave primaria (nodo_id, nonce) y se purga al vuelo.
+    """
+    ahora = time.time()
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            raise HTTPException(503, "Core ocupado, reintentar")
+        try:
+            con.execute("DELETE FROM nonces_pendiente WHERE ts < ?",
+                        (ahora - NONCE_TTL,))
+            con.execute("INSERT INTO nonces_pendiente(nodo_id,nonce,ts) VALUES(?,?,?)",
+                        (nodo_id, nonce, ahora))
+            con.commit()
+            return True
+        except sqlite3.IntegrityError:
+            con.rollback()
+            return False
+        except Exception:
+            try:
+                con.rollback()
+            except Exception:
+                pass
+            raise HTTPException(500, "error interno guardando el nonce")
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarRequest, call_next):
+        limite = LIMITES_POR_RUTA.get(request.url.path)
+        if limite:
+            ip = request.client.host if request.client else "?"
+            clave = (ip, request.url.path)
+            ahora = time.time()
+            with _rate_lock:
+                if len(_rate_hist) > 5000:      # AUDITORIA: no crecer sin freno
+                    for k in [k for k, v in _rate_hist.items() if not v or ahora - v[-1] > RATE_WINDOW]:
+                        _rate_hist.pop(k, None)
+                hist = [t for t in _rate_hist.get(clave, []) if ahora - t < RATE_WINDOW]
+                if len(hist) >= limite:
+                    return JSONResponse({"detail": "demasiadas peticiones, espera un minuto"}, status_code=429)
+                hist.append(ahora)
+                _rate_hist[clave] = hist
+        return await call_next(request)
+
+app.add_middleware(RateLimitMiddleware)
+
+class BodyLimitMiddleware(BaseHTTPMiddleware):
+    """Corta cuerpos enormes antes de que FastAPI los parsee."""
+    async def dispatch(self, request: StarRequest, call_next):
+        if request.method in ("POST", "PUT", "PATCH"):
+            cab = request.headers.get("content-length")
+            if cab:
+                try:
+                    largo = int(cab)
+                except ValueError:
+                    return JSONResponse({"detail": "Content-Length invalido"}, status_code=400)
+                if largo > MAX_CUERPO_BYTES:
+                    return JSONResponse({"detail": f"cuerpo demasiado grande (max {MAX_CUERPO_BYTES} bytes)"},
+                                        status_code=413)
+        return await call_next(request)
+
+app.add_middleware(BodyLimitMiddleware)
+
+# ============================================================
+#  AUDITORIA: guardia de Host/Origin (DNS rebinding)
+#  El Core vive en loopback, pero una web abierta en este PC podia
+#  alcanzarlo con cualquier Host. Se rechaza lo que no sea local.
+# ============================================================
+class HostGuardMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarRequest, call_next):
+        host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+        if host and not host_permitido(host):
+            return JSONResponse({"detail": "Host no permitido por el Core"}, status_code=403)
+        origen = (request.headers.get("origin") or "").strip().lower()
+        if origen and not _origen_ok(origen):
+            return JSONResponse({"detail": "origen no permitido"}, status_code=403)
+        return await call_next(request)
+
+app.add_middleware(HostGuardMiddleware)
+
+# CORS para la billetera web (lectura de saldo/estadisticas). Sin credenciales:
+# las escrituras siguen exigiendo firma Ed25519 o token de admin.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=sorted(ORIGENES_PERMITIDOS),
+    allow_origin_regex=r"^https?://(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$",
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+    max_age=600,
+)
+
+class RetoIn(BaseModel):
+    clave_publica: str = ""
+
+class NodoIn(BaseModel):
+    nombre: str
+    vram_gb: int
+    ref: str = ""
+    tops: float = 0.0    # potencia IA declarada (TOPS, valor oficial de la GPU)
+    clave_publica: str = ""  # Ed25519 hex (64 bytes) para autenticar resultados
+    prueba_gpu: str = ""  # atestado GPU declarativo (punto 3, no criptografico)
+    tops_estimado: bool = True  # punto 1: los TOPS son estimados por VRAM, no medidos
+    # ARREGLO 2026-10-19: direccion de la billetera donde COBRAR el trabajo.
+    # Antes los pagos iban siempre al id del nodo (uuid efimero): el minero
+    # ganaba KIA que no llegaban nunca a su billetera y se quedaban huerfanos
+    # en cada reinicio. Vacio = comportamiento antiguo (pagar al nodo).
+    direccion_cobro: str = ""
+    # Prueba de posesion de la clave privada (reto de un solo uso).
+    reto: str = ""
+    firma_reto: str = ""
+
+class TareaIn(BaseModel):
+    tipo: str      # 'checksum' | 'matriz' | 'inferencia' | 'embeddings' | 'lote_embeddings' | 'difusion_calor'
+    params: dict = {}
+    cola: str = "B"       # A=comercial, B=investigacion KUKIA, C=voluntaria/experimental
+    campana: str = ""     # identificador de campana (para exclusion y trazabilidad)
+    prioridad: float = 0.0  # dentro de la cola, mayor antes
+    vram_min: int = 0     # VRAM minima (GB) que exige la tarea
+
+def tier(vram: int) -> float:
+    return TIER_MULT.get(vram, 1.0)
+
+# ============================================================
+#  POTENCIA DEMOSTRADA (21-10-2026)
+#  El tier se paga por lo que la GPU DEMUESTRA, no por lo que declara.
+#  En Bitcoin el hashrate no se declara: se mide resolviendo. Aqui igual, salvo
+#  que la medida es trabajo util verificado (FLOPs / segundos).
+# ============================================================
+# Minimo creible por GB declarado. CALIBRADO CON DATOS REALES (21-10-2026):
+# una 5070 de 16 GB midio 12,1 GFLOPS y una de 12 GB 12,7 GFLOPS con el reloj
+# del Core (que incluye red y sondeo, asi que es un SUELO, no la potencia
+# real). Eso da 0,75-1,06 GFLOPS por GB. El liston se pone en 0,25: cuatro
+# veces por debajo de lo medido, para no castigar nunca a una GPU honesta por
+# una red lenta, pero muy por encima de lo que da una CPU diciendo 24 GB.
+GFLOPS_POR_GB_MIN = 0.25
+MIN_MUESTRAS_POTENCIA = 20     # por debajo de esto no se corrige nada
+MIN_FLOPS_MUESTRA = 1e9        # tareas de menos de 1 GFLOP no sirven para medir
+MIN_SEG_MUESTRA = 0.05         # ni las que duran menos de 50 ms (manda la red)
+
+
+def tier_verificado(node) -> float:
+    """Tier que se PAGA: el declarado, pero solo si la GPU lo respalda.
+
+    POR QUE (fallo economico real): el tier salia de `vram_gb`, que lo manda el
+    propio minero en el registro. Una CPU podia declarar 24 GB y cobrar x1,6
+    sin demostrar nada. Aqui la VRAM sigue valiendo, pero solo si el nodo ha
+    entregado trabajo verificado a la velocidad minima que ese tamano implica.
+
+    Solo se corrige con >= 20 muestras (medir mal a un nodo nuevo seria peor
+    que el fraude que evita) y el liston es deliberadamente bajo: 0,25 GFLOPS
+    por GB declarado, cuatro veces por debajo de lo que mide una GPU real.
+    """
+    try:
+        declarado = float(node["tier"] or 1.0)
+    except Exception:
+        declarado = 1.0
+    if declarado <= 1.0:
+        return declarado          # sin prima que proteger
+    try:
+        medido = float(node["gflops_medido"] or 0.0)
+        muestras = int(node["potencia_muestras"] or 0)
+        vram = int(node["vram_gb"] or 0)
+    except Exception:
+        return declarado
+    if muestras < MIN_MUESTRAS_POTENCIA or medido <= 0 or vram <= 0:
+        return declarado          # sin pruebas suficientes: no se castiga
+    if medido < GFLOPS_POR_GB_MIN * vram:
+        return 1.0
+    return declarado
+
+
+def gflops_de_tarea(tipo: str, params, seg_servidor: float) -> float:
+    """GFLOPS medidos por el CORE (reloj del servidor, no el que dice el nodo).
+
+    La duracion la cronometra el Core entre la asignacion y la entrega: el
+    minero no puede acortarla. Devuelve 0 si la tarea es demasiado pequena
+    para que la medida signifique algo (la red pesaria mas que la GPU).
+    """
+    try:
+        seg = float(seg_servidor)
+    except Exception:
+        return 0.0
+    if seg < MIN_SEG_MUESTRA:
+        return 0.0
+    flops = _flops_tarea(tipo, params)
+    if flops < MIN_FLOPS_MUESTRA:
+        return 0.0
+    return flops / seg / 1e9
+
+# --- Calendario de emision: la ultima moneda sale el 13-04-2150 ---
+# 6 halvings en 124,28 anos -> era de 20,71 anos. Tras esa fecha, emision = 0.
+from datetime import date, datetime, timedelta
+EMISSION_START = date(2026, 1, 1)
+EMISSION_END = date(2150, 4, 13)
+HALVING_YEARS = (EMISSION_END - EMISSION_START).days / 365.25 / 6  # ~20,71
+def emission_mult() -> float:
+    """Multiplicador de recompensa por era: 1.0, 0.5, 0.25... 0 tras el 13-04-2150."""
+    hoy = date.today()
+    if hoy >= EMISSION_END:
+        return 0.0
+    elapsed = (hoy - EMISSION_START).days / 365.25
+    era = max(0, int(elapsed // HALVING_YEARS))
+    return 0.5 ** era
+
+def emission_info() -> dict:
+    hoy = date.today()
+    if hoy >= EMISSION_END:
+        return {"era_actual": 6, "multiplicador": 0.0,
+                "proximo_halving": None, "fin_emision": "2150-04-13",
+                "halving_years": round(HALVING_YEARS, 2)}
+    elapsed = (hoy - EMISSION_START).days / 365.25
+    era = max(0, int(elapsed // HALVING_YEARS))
+    prox = EMISSION_START + timedelta(days=int((era + 1) * HALVING_YEARS * 365.25))
+    return {
+        "era_actual": era,
+        "multiplicador": 0.5 ** era,
+        "proximo_halving": prox.isoformat(),
+        "fin_emision": "2150-04-13",
+        "halving_years": round(HALVING_YEARS, 2),
+    }
+
+# ============================================================
+#  AUDITORIA: validacion de params (topes duros)
+# ============================================================
+def validar_params(tipo: str, params: dict) -> dict:
+    if not isinstance(params, dict):
+        raise HTTPException(400, "params debe ser un objeto")
+    if len(json.dumps(params)) > LIMITE_PARAMS_BYTES:
+        raise HTTPException(400, f"params demasiado grande (max {LIMITE_PARAMS_BYTES} bytes)")
+    for campo, tope in (("n", LIMITE_N), ("pasos", LIMITE_PASOS)):
+        if campo in params:
+            try:
+                v = int(params[campo])
+            except Exception:
+                raise HTTPException(400, f"{campo} invalido")
+            if not (1 <= v <= tope):
+                raise HTTPException(400, f"{campo} fuera de rango (1..{tope})")
+            params[campo] = v
+    for campo in ("seed",):
+        if campo in params:
+            try:
+                params[campo] = int(params[campo])
+            except Exception:
+                raise HTTPException(400, "seed invalido")
+    if tipo == "difusion_calor":
+        # AUDITORIA 2026-10-20: recorta el coste real de la tarea. Antes se
+        # podia encolar n=4096/pasos=20000 y bloquear minero y verificacion.
+        n = int(params.get("n", 256))
+        params["n"] = n
+        params["pasos"] = min(int(params.get("pasos", 1500)), pasos_max_difusion(n))
+    if tipo == "checksum":
+        data = str(params.get("data", "kukia"))
+        if len(data) > 4096:
+            raise HTTPException(400, "data demasiado larga (max 4096)")
+        params["data"] = data
+    if "model_path" in params and len(str(params["model_path"])) > 256:
+        raise HTTPException(400, "model_path demasiado largo")
+    if "inputs" in params:
+        try:
+            tope_lote = 64 if tipo == "lote_embeddings" else 256
+            if len(params["inputs"]) > tope_lote:
+                raise HTTPException(400, f"demasiadas entradas en el lote (max {tope_lote})")
+        except TypeError:
+            raise HTTPException(400, "inputs debe ser una lista")
+    # AUDITORIA 2026-10-20: la tolerancia la elige la tarea. Sin tope, una
+    # tolerancia enorme haria que cualquier resultado "cuadrara".
+    for campo, tope in (("tolerancia_rel", 1e-6), ("tolerancia", 1e-3)):
+        if campo in params:
+            try:
+                v = float(params[campo])
+            except Exception:
+                raise HTTPException(400, f"{campo} invalido")
+            if not math.isfinite(v) or v < 0:
+                raise HTTPException(400, f"{campo} invalido")
+            params[campo] = min(v, tope)
+    return params
+
+def tope_default(tipo: str) -> int:
+    """Tamano por defecto si la tarea no trae 'n' (para el recalculo)."""
+    return 256
+
+@app.post("/nodos/reto")
+def nodo_reto(r: RetoIn):
+    """Reto de un solo uso para registrar un nodo (prueba de clave).
+
+    El nodo firma "registro:<nonce>:<ts>:<clave_publica>" con su clave privada
+    y lo presenta en /nodos/registrar. Asi no se pueden crear identidades con
+    claves ajenas ni acumular nodos sin coste.
+    """
+    pub = (r.clave_publica or "").strip().lower()
+    if not pubkey_valida(pub):
+        raise HTTPException(400, "clave_publica invalida (Ed25519 hex de 32 bytes)")
+    nonce = secrets.token_hex(16)
+    ts = int(time.time())
+    ahora = time.time()
+    with _retos_lock:
+        for k, v in list(_retos_registro.items()):
+            if ahora - v[0] > RETO_TTL:
+                _retos_registro.pop(k, None)
+        if len(_retos_registro) > 20_000:
+            _retos_registro.clear()
+        _retos_registro[nonce] = (ahora, pub, ts)
+    return {"nonce": nonce, "ts": ts, "expira_seg": int(RETO_TTL),
+            "mensaje": f"registro:{nonce}:{ts}:{pub}"}
+
+def _ip_cliente(req: Request) -> str:
+    """IP real del cliente, sin fiarse de cabeceras que pueda inventar Internet.
+
+    Detras del tunel de Cloudflare la conexion llega desde 127.0.0.1 y la IP
+    real viene en CF-Connecting-IP. Solo se acepta si el socket es local; una
+    peticion directa desde la LAN no puede falsear su IP con esa cabecera.
+    """
+    host = (req.client.host if req.client else "") or ""
+    if CONFIA_PROXY_LOCAL and host in ("127.0.0.1", "::1", "localhost"):
+        for cab in ("cf-connecting-ip", "x-forwarded-for"):
+            valor = (req.headers.get(cab) or "").split(",")[0].strip()
+            if valor:
+                return valor[:64]
+    return (host or "desconocida")[:64]
+
+def _cupo_registro(ip: str, pub: str) -> None:
+    """Cuenta el registro en la misma transaccion del nodo. 429 si se pasa.
+
+    Se purgan las filas de mas de 24 h en cada llamada: la tabla se queda en
+    unas pocas decenas de filas y no hace falta un hilo de limpieza.
+    """
+    ahora = time.time()
+    con.execute("DELETE FROM registros_nodo WHERE ts < ?", (ahora - 86400.0,))
+    if REGISTRO_CUPO_HORA > 0:
+        n = con.execute("SELECT COUNT(*) c FROM registros_nodo WHERE ip=? AND ts>=?",
+                        (ip, ahora - 3600.0)).fetchone()["c"]
+        if int(n) >= REGISTRO_CUPO_HORA:
+            raise HTTPException(429, f"cupo de registros por IP alcanzado "
+                                     f"({n}/{REGISTRO_CUPO_HORA} en 1 h); espera o usa otra red")
+    if REGISTRO_CUPO_DIA > 0:
+        n = con.execute("SELECT COUNT(*) c FROM registros_nodo WHERE ip=? AND ts>=?",
+                        (ip, ahora - 86400.0)).fetchone()["c"]
+        if int(n) >= REGISTRO_CUPO_DIA:
+            raise HTTPException(429, f"cupo diario de registros por IP alcanzado "
+                                     f"({n}/{REGISTRO_CUPO_DIA})")
+    if REGISTRO_CUPO_CLAVE > 0 and pub:
+        n = con.execute("SELECT COUNT(*) c FROM registros_nodo WHERE clave_publica=? AND ts>=?",
+                        (pub, ahora - 86400.0)).fetchone()["c"]
+        if int(n) >= REGISTRO_CUPO_CLAVE:
+            raise HTTPException(429, f"cupo de registros por clave alcanzado "
+                                     f"({n}/{REGISTRO_CUPO_CLAVE} en 24 h)")
+    con.execute("INSERT INTO registros_nodo(ip, clave_publica, ts) VALUES(?,?,?)",
+                (ip, pub, ahora))
+
+@app.post("/nodos/registrar")
+def registrar(n: NodoIn, req: Request):
+    # AUDITORIA: VRAM y TOPS son autodeclarados; se acotan para que nadie
+    # infle la dificultad de la red ni su tier con valores absurdos.
+    vram = max(0, min(int(n.vram_gb), 512))
+    try:
+        tops = float(n.tops)
+    except Exception:
+        tops = 0.0
+    if not math.isfinite(tops):
+        tops = 0.0
+    tops = max(0.0, min(tops, 100_000.0))
+    # AUDITORIA 2026-10-20 (minero): una clave publica con formato invalido
+    # dejaba un nodo que no podia firmar nunca (y contaba como activo).
+    pub = (n.clave_publica or "").strip().lower()
+    if pub and not pubkey_valida(pub):
+        raise HTTPException(400, "clave_publica invalida (Ed25519 hex de 32 bytes)")
+    if EXIGIR_PRUEBA_REGISTRO:
+        if not pub:
+            raise HTTPException(400, "falta clave_publica: el registro exige prueba de clave")
+        nonce = (n.reto or "").strip()
+        if not nonce or len(nonce) > 64:
+            raise HTTPException(401, "falta reto: pide uno en /nodos/reto")
+        ahora = time.time()
+        with _retos_lock:
+            dato = _retos_registro.pop(nonce, None)
+        if not dato or ahora - dato[0] > RETO_TTL or dato[1] != pub:
+            raise HTTPException(401, "reto caducado o ya usado; pide otro")
+        mensaje = f"registro:{nonce}:{dato[2]}:{pub}"
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                bytes.fromhex(n.firma_reto or ""), mensaje.encode())
+        except Exception:
+            raise HTTPException(401, "firma del reto invalida")
+    # Sin billetera no se cobra: el pago se abona a la direccion, no al id del
+    # nodo. Si se permitia registrarse sin direccion, lo minado quedaba
+    # atrapado para siempre al perder la clave (12.394 KIA asi, visto 19-10).
+    if not direccion_valida(n.direccion_cobro):
+        raise HTTPException(400, "falta direccion_cobro: registra una billetera KUK... "
+                                 "para poder cobrar (el pago va a la direccion, no al nodo)")
+    nid = uuid.uuid4().hex[:12]
+    ip = _ip_cliente(req)
+    with _escritura():   # AUDITORIA: antes escribia sin lock (500 con 2 GPUs)
+        _cupo_registro(ip, pub)
+        if n.prueba_gpu:
+            con.execute("INSERT INTO gpu_pruebas(nodo_id,prueba,creado) VALUES(?,?,?)",
+                        (nid, n.prueba_gpu[:2000], time.ctime()))
+        dir_cobro = n.direccion_cobro.strip().upper() if direccion_valida(n.direccion_cobro) else ""
+        # AUDITORIA 2026-10-20 (minero): visto=0. Antes el solo hecho de
+        # registrarse marcaba al nodo como activo 24 h, asi que un script podia
+        # inflar los TOPS de la red (y la dificultad) sin minar ni una tarea.
+        # Ahora solo cuenta cuando pide trabajo, y para eso hace falta firmar.
+        con.execute("INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (nid, n.nombre[:64], vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
+                     pub, 1 if n.tops_estimado else 0, dir_cobro, 0.0))
+    return {"id": nid, "tier": tier(vram), "max_supply": MAX_SUPPLY, "tops_registrados": tops,
+            "autenticado": bool(pub), "direccion_cobro": dir_cobro}
+
+class CobroIn(BaseModel):
+    direccion: str
+    ts: int = 0
+    firma: str = ""
+
+class TelemetriaIn(BaseModel):
+    nodo_id: str
+    device: str = ""
+    metricas: str = ""
+    ts: int = 0
+    firma: str = ""
+
+class ReinicioIn(BaseModel):
+    ts: int = 0
+    firma: str = ""
+
+
+@app.post("/nodos/{nodo_id}/reinicio")
+def nodo_reinicio(nodo_id: str, r: ReinicioIn):
+    """El nodo avisa de que acaba de arrancar: sus tareas en vuelo son de un
+    proceso anterior y no las va a entregar nunca.
+
+    FALLO REAL (21-10-2026): al relanzar el minero, las tareas que tenia
+    'ejecutando' el proceso muerto seguian contandole en el cupo de
+    concurrencia (4 por nodo). El nodo pedia trabajo, el Core le decia que ya
+    tenia demasiadas, y se quedaba sin minar hasta ABANDONO_SEG (30 minutos).
+    Medido: 8 tareas colgadas y cero pagos tras reiniciar el minero.
+
+    Firma obligatoria sobre "reinicio:<nodo>:<ts>": solo el dueno del nodo
+    puede soltar sus propias tareas, y no sirve para tocar las de otro.
+    """
+    node = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
+    if not node:
+        raise HTTPException(404, "nodo no registrado")
+    pub = (node["clave_publica"] or "") if "clave_publica" in node.keys() else ""
+    if not pub:
+        raise HTTPException(401, "nodo sin clave registrada")
+    try:
+        ts_f = float(r.ts or 0)
+    except Exception:
+        raise HTTPException(401, "ts invalido")
+    if abs(time.time() - ts_f) > VENTANA_FIRMA:
+        raise HTTPException(401, "firma caducada (revisa el reloj)")
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+            bytes.fromhex(r.firma or ""), f"reinicio:{nodo_id}:{int(ts_f)}".encode())
+    except Exception:
+        raise HTTPException(401, "firma invalida")
+    liberadas = 0
+    with _escritura():
+        cur = con.execute("UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL "
+                          "WHERE estado='ejecutando' AND nodo_id=?", (nodo_id,))
+        liberadas = int(cur.rowcount or 0)
+    if liberadas:
+        print(f"[KUKIA Core] reinicio de {nodo_id}: {liberadas} tarea(s) devueltas a la cola",
+              flush=True)
+    return {"ok": True, "liberadas": liberadas}
+
+
+class ResultadoIn(BaseModel):
+    """Resultado por cuerpo JSON (la query string tiene limite de URL)."""
+    tid: str
+    nodo_id: str
+    metrica: str
+    hash_res: str = ""
+    firma: str = ""
+    device: str = ""
+    duracion_ms: float = 0.0
+    telemetria: str = ""
+
+@app.post("/nodos/{nodo_id}/cobro")
+def actualizar_cobro(nodo_id: str, c: CobroIn):
+    """Cambia la direccion de cobro de un nodo ya registrado.
+
+    Firma obligatoria con la clave del propio nodo sobre
+    "cobro:<nodo>:<direccion>:<ts>" y ventana de 5 minutos: sin la clave no
+    se puede desviar el pago de otro minero.
+    """
+    d = (c.direccion or "").strip().upper()
+    if not direccion_valida(d):
+        raise HTTPException(400, "direccion invalida (formato KUK + 38 hex)")
+    if not c.ts or abs(time.time() - float(c.ts)) > 300:
+        raise HTTPException(400, "firma caducada, reintenta")
+    node = con.execute("SELECT clave_publica FROM nodos WHERE id=?", (nodo_id,)).fetchone()
+    pub = ((node["clave_publica"] if node else "") or "").strip()
+    if not pub:
+        raise HTTPException(401, "nodo sin clave registrada")
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+            bytes.fromhex(c.firma), f"cobro:{nodo_id}:{d}:{c.ts}".encode())
+    except Exception:
+        raise HTTPException(401, "firma invalida")
+    with _escritura():
+        con.execute("UPDATE nodos SET direccion_cobro=? WHERE id=?", (d, nodo_id))
+    return {"ok": True, "nodo_id": nodo_id, "direccion_cobro": d}
+
+@app.post("/nodos/telemetria")
+def nodos_telemetria(t: TelemetriaIn):
+    """Latido de GPU firmado por el nodo (utilizacion real, VRAM y ultimo ms).
+
+    No paga ni mueve saldos. La firma cubre el hash del JSON de metricas, para
+    que nadie pueda inyectar cifras falsas en el panel de otro nodo. Se guarda
+    una sola fila por nodo/GPU (UPSERT): no crece con el tiempo.
+    """
+    if not (1 <= len(t.nodo_id) <= 64):
+        raise HTTPException(400, "nodo_id invalido")
+    if not t.metricas or len(t.metricas) > 2048:
+        raise HTTPException(400, "telemetria vacia o demasiado grande (max 2 KB)")
+    if len(t.device) > 32:
+        raise HTTPException(400, "device demasiado largo (max 32)")
+    # Sin este filtro un nodo podia inventar miles de nombres de device y
+    # llenar gpu_estado (una fila por nombre). Solo CPU o cuda:<0-99>.
+    dev = (t.device or "").strip().lower()
+    if dev and dev != "cpu" and not (
+            dev.startswith("cuda:") and dev[5:].isdigit() and 0 <= int(dev[5:]) <= 99):
+        raise HTTPException(400, "device invalido (cpu o cuda:0..99)")
+    if not t.ts or abs(time.time() - float(t.ts)) > VENTANA_FIRMA:
+        raise HTTPException(400, "telemetria caducada, revisa el reloj")
+    node = con.execute("SELECT clave_publica FROM nodos WHERE id=?", (t.nodo_id,)).fetchone()
+    pub = ((node["clave_publica"] if node else "") or "").strip().lower()
+    if not pub:
+        raise HTTPException(401, "nodo sin clave registrada (telemetria firmada)")
+    try:
+        h = hashlib.sha256(t.metricas.encode()).hexdigest()
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+            bytes.fromhex(t.firma),
+            f"telemetria:{t.nodo_id}:{int(t.ts)}:{h}".encode())
+    except Exception:
+        raise HTTPException(401, "firma de telemetria invalida")
+    try:
+        datos = json.loads(t.metricas)
+        if not isinstance(datos, dict) or len(datos) > 64:
+            raise ValueError
+    except Exception:
+        raise HTTPException(400, "metricas debe ser un objeto JSON (max 64 campos)")
+    with _escritura():
+        con.execute("CREATE TABLE IF NOT EXISTS gpu_estado(nodo_id TEXT, device TEXT, "
+                    "metricas TEXT, ts REAL, origen TEXT DEFAULT 'live', "
+                    "PRIMARY KEY(nodo_id, device))")
+        con.execute("INSERT INTO gpu_estado(nodo_id,device,metricas,ts,origen) "
+                    "VALUES(?,?,?,?, 'live') "
+                    "ON CONFLICT(nodo_id,device) DO UPDATE SET "
+                    "metricas=excluded.metricas, ts=excluded.ts, origen='live'",
+                    (t.nodo_id, dev, t.metricas, float(t.ts)))
+    return {"ok": True, "nodo_id": t.nodo_id, "device": dev}
+
+@app.get("/nodos")
+def nodos(limite: int = 200, activos: int = 0):
+    """Lista de nodos ACOTADA (por defecto 200, max 1000).
+
+    AUDITORIA 2026-10-20: antes devolvia todas las filas. Con el registro
+    abierto, 43.000 nodos/dia son ~14 MB por consulta y el panel consulta cada
+    2 s: un DoS trivial. El total real esta en /stats (campo 'nodos').
+    """
+    limite = max(1, min(1000, int(limite or 200)))
+    sql = "SELECT * FROM nodos"
+    args = []
+    if activos:
+        sql += " WHERE COALESCE(visto,0)>=?"
+        args.append(time.time() - 86400.0)
+    sql += " ORDER BY COALESCE(visto,0) DESC, creado DESC LIMIT ?"
+    args.append(limite)
+    return [dict(r) for r in con.execute(sql, args).fetchall()]
+
+@app.get("/nodos/{nodo_id}")
+def nodo_detalle(nodo_id: str):
+    """Un nodo concreto: lo usa el worker para reutilizar su identidad sin
+    descargar la lista entera."""
+    row = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
+    if not row:
+        raise HTTPException(404, "nodo no registrado")
+    return dict(row)
+
+@app.get("/modelos/{nombre}")
+def descargar_modelo(nombre: str):
+    """Punto 5: el Core sirve el modelo de referencia; el minero lo baja si le falta."""
+    seguro = Path(nombre).name
+    ruta = MODELOS_DIR / seguro
+    if not ruta.is_file():
+        raise HTTPException(404, "modelo no disponible en el Core")
+    from fastapi.responses import FileResponse
+    return FileResponse(str(ruta), filename=seguro)
+
+@app.post("/tareas/crear")
+def crear_tarea(t: TareaIn, _ok: None = Depends(exigir_admin)):
+    tid = uuid.uuid4().hex[:12]
+    params = validar_params(t.tipo, dict(t.params or {}))
+    cola = t.cola if t.cola in ("A", "B", "C") else "B"
+    with _escritura():
+        con.execute("INSERT INTO tareas(id,tipo,params,estado,creado,cola,campana,prioridad,vram_min) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (tid, t.tipo, json.dumps(params), "queued", time.ctime(),
+                     cola, t.campana[:64], float(t.prioridad), int(t.vram_min)))
+    # Se devuelven los params YA validados (con los topes aplicados): asi el
+    # cliente sabe exactamente que va a calcular y se puede auditar el recorte.
+    return {"tarea_id": tid, "estado": "queued", "tipo": t.tipo, "params": params}
+
+# ============================================================
+#  AUDITORIA: recuperacion en hilo propio
+#  Antes vivia SOLO dentro de /tareas/pendiente: si nadie pedia trabajo,
+#  las tareas quedaban 'ejecutando' para siempre (habia 41 asi, de 50 h).
+# ============================================================
+def liberar_atascadas(max_abandonos: int = MAX_ABANDONOS, forzar: bool = False):
+    """Devuelve a la cola las tareas 'ejecutando' cuyo asignado es viejo
+    (o nulo, de versiones anteriores). Devuelve (recuperadas, cerradas)."""
+    limite = time.time() - (0 if forzar else ABANDONO_SEG)
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            return (0, 0)
+        try:
+            cerradas = con.execute(
+                "UPDATE tareas SET estado='fallo', fin=? "
+                "WHERE estado='ejecutando' AND COALESCE(asignado,0) < ? "
+                "AND COALESCE(intentos,0)+1 >= ?", (time.ctime(), limite, max_abandonos))
+            recuperadas = con.execute(
+                "UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL, "
+                "intentos=COALESCE(intentos,0)+1 "
+                "WHERE estado='ejecutando' AND COALESCE(asignado,0) < ?", (limite,))
+            # Nodos sin historial: 2 min, sin contar intento.
+            limite_nuevo = time.time() - (0 if forzar else ABANDONO_SEG_NUEVO)
+            nuevas = con.execute(
+                "UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL "
+                "WHERE estado='ejecutando' AND COALESCE(asignado,0) < ? "
+                "AND nodo_id IN (SELECT id FROM nodos WHERE COALESCE(tareas_ok,0)=0)",
+                (limite_nuevo,))
+            con.commit()
+            return (recuperadas.rowcount + nuevas.rowcount, cerradas.rowcount)
+        except Exception:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            return (0, 0)
+
+def _bucle_recuperacion():
+    while True:
+        try:
+            r, c = liberar_atascadas()
+            if r or c:
+                print(f"[KUKIA Core] recuperacion: {r} a la cola, {c} cerradas como fallo", flush=True)
+        except Exception:
+            pass
+        time.sleep(60)
+
+threading.Thread(target=_bucle_recuperacion, daemon=True).start()
+
+# AUDITORIA: se acepta GET (clientes antiguos) y POST, pero en los dos casos
+# hace falta la firma del nodo. Antes bastaba un id inventado.
+@app.get("/tareas/pendiente")
+@app.post("/tareas/pendiente")
+def pendiente(nodo_id: str, excluir: str = "", colas: str = "", ts: float = 0.0, firma: str = "",
+              nonce: str = "", solo_primaria: bool = False):
+    """Asignacion ATOMICA: SELECT + UPDATE en una transaccion con lock.
+
+    AUDITORIA: exige firma Ed25519 del nodo sobre "pendiente:<nodo_id>:<ts>"
+    (ts en segundos, valido VENTANA_FIRMA). Antes cualquiera con un id
+    inventado se llevaba tareas de la cola y las dejaba colgadas.
+
+    Nonce opcional (worker nuevo): si viene, la firma es sobre
+    "pendiente:<nodo_id>:<ts>:<nonce>" y ese nonce no se puede repetir en
+    10 minutos. Sin nonce se mantiene el mensaje antiguo (compatibilidad).
+
+    POLITICA DE PRIORIDAD: cola A > B > C; dentro de cola, mayor prioridad
+    antes; a igual, mas antigua antes. Solo tareas con vram_min <= VRAM del
+    nodo y que ese nodo no haya fallado ya. 'excluir' = campanas separadas
+    por comas. SIN desalojo: lo que ya ejecuta no se interrumpe.
+
+    'solo_primaria=1' pide trabajo PROPIO y no verificacion ajena. Lo usan
+    las herramientas que necesitan una tarea concreta (benchmark, pruebas);
+    el minero normal no lo manda y participa en la ejecucion redundante.
+    """
+    node = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
+    if not node:
+        raise HTTPException(404, "nodo no registrado")
+    if PENDIENTE_EXIGIR_FIRMA:
+        pub = (node["clave_publica"] or "") if "clave_publica" in node.keys() else ""
+        if not pub:
+            raise HTTPException(401, "nodo sin clave registrada (firma obligatoria)")
+        if not firma:
+            raise HTTPException(401, "falta firma del nodo")
+        try:
+            ts_f = float(ts)
+        except Exception:
+            raise HTTPException(401, "ts invalido")
+        if abs(time.time() - ts_f) > VENTANA_FIRMA:
+            raise HTTPException(401, "firma caducada (revisa el reloj)")
+        if nonce:
+            if not (8 <= len(nonce) <= 64) or any(
+                    not (c.isalnum() or c in "-_") for c in nonce):
+                raise HTTPException(400, "nonce invalido")
+        mensaje = f"pendiente:{nodo_id}:{int(ts_f)}"
+        if nonce:
+            mensaje += f":{nonce}"
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                bytes.fromhex(firma), mensaje.encode())
+        except Exception:
+            raise HTTPException(401, "firma invalida")
+        if nonce and not _nonce_nuevo(nodo_id, nonce):
+            raise HTTPException(401, "nonce repetido (peticion reutilizada)")
+    try:
+        castigo = float(node["castigado_hasta"] or 0.0)
+    except Exception:
+        castigo = 0.0
+    if castigo > time.time():
+        raise HTTPException(429, f"nodo castigado por resultados incorrectos durante "
+                                 f"{int(castigo - time.time())} s")
+    # Marca de actividad: solo los nodos vistos en 24 h cuentan para TOPS.
+    try:
+        with _escritura():
+            con.execute("UPDATE nodos SET visto=? WHERE id=?", (time.time(), nodo_id))
+    except Exception:
+        pass
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            raise HTTPException(503, "Core ocupado, reintentar")
+        try:
+            # Recuperacion oportunista (el hilo lo hace igual cada 60 s)
+            con.execute("UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL, "
+                        "intentos=COALESCE(intentos,0)+1 "
+                        "WHERE estado='ejecutando' AND COALESCE(asignado,0) < ?",
+                        (time.time() - ABANDONO_SEG,))
+            # Nodos sin trabajo pagado: vencen a los 2 min y no acumulan
+            # intentos (no es un fallo, es un nodo lento o un sybil).
+            con.execute("UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL "
+                        "WHERE estado='ejecutando' AND COALESCE(asignado,0) < ? "
+                        "AND nodo_id IN (SELECT id FROM nodos WHERE COALESCE(tareas_ok,0)=0)",
+                        (time.time() - ABANDONO_SEG_NUEVO,))
+            # Tope de tareas simultaneas por nodo (anti-acaparamiento).
+            en_curso = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ejecutando' "
+                                   "AND nodo_id=?", (nodo_id,)).fetchone()["c"]
+            # Las replicas reclamadas tambien ocupan turno: si no, un nodo
+            # podria llenarse de replicas sin minar nada propio.
+            en_curso += con.execute("SELECT COUNT(*) c FROM tareas_replica WHERE nodo_id=? "
+                                    "AND estado='reclamando'", (nodo_id,)).fetchone()["c"]
+            cap = MAX_TAREAS_NODO if int(node["tareas_ok"] or 0) > 0 else MAX_TAREAS_NODO_NUEVO
+            if int(en_curso or 0) >= cap:
+                con.execute("ROLLBACK")
+                return {"tarea": None, "motivo": "limite de tareas simultaneas por nodo"}
+            vram = int(node["vram_gb"] or 0)
+            excl = [e.strip()[:64] for e in (excluir or "").split(",") if e.strip()]
+            _q = ("SELECT id,tipo,params,cola,campana FROM tareas WHERE estado='queued' "
+                  "AND COALESCE(vram_min,0) <= ? "
+                  "AND COALESCE(nodos_intento,'') NOT LIKE ? ")
+            _args = [vram, f"%{nodo_id}%"]
+            if excl:
+                _q += "AND COALESCE(campana,'') NOT IN (%s) " % ",".join("?" * len(excl))
+                _args += excl
+            _colas = [c.strip().upper() for c in (colas or "").split(",")
+                      if c.strip().upper() in ("A", "B", "C")]
+            if _colas:
+                _q += "AND COALESCE(cola,'B') IN (%s) " % ",".join("?" * len(_colas))
+                _args += _colas
+            _q += ("ORDER BY CASE COALESCE(cola,'B') WHEN 'A' THEN 0 WHEN 'B' THEN 1 ELSE 2 END, "
+                   "COALESCE(prioridad,0) DESC, creado LIMIT 1")
+            if REPLICA_ACTIVA and not solo_primaria:
+                rep = _reclamar_replica(nodo_id, vram)
+                if rep is not None:
+                    con.commit()
+                    return {"tarea": {"id": rep[0], "tipo": rep[1], "params": rep[2]},
+                            "replica": True}
+            row = con.execute(_q, _args).fetchone()
+            if not row:
+                con.execute("ROLLBACK")
+                return {"tarea": None}
+            chk = con.execute("SELECT estado FROM tareas WHERE id=?", (row["id"],)).fetchone()
+            if not chk or chk["estado"] != "queued":
+                con.execute("ROLLBACK")
+                return {"tarea": None}
+            con.execute("UPDATE tareas SET estado='ejecutando', nodo_id=?, asignado=? WHERE id=?",
+                        (nodo_id, time.time(), row["id"]))
+            try:
+                _cola = row["cola"] or "B"
+            except Exception:
+                _cola = "B"
+            con.execute("INSERT INTO planificador_log(tarea_id,nodo_id,cola,motivo,ts) VALUES(?,?,?,?,?)",
+                        (row["id"], nodo_id, _cola,
+                         f"A>B>C,prioridad,vram_min_ok(vram={vram},excl={len(excl)})", time.ctime()))
+            con.commit()
+            return {"tarea": {"id": row["id"], "tipo": row["tipo"], "params": json.loads(row["params"])}}
+        except HTTPException:
+            raise
+        except Exception:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise HTTPException(500, "error interno asignando tarea")
+
+def _castigar_nodo(tid: str, nid: str) -> float:
+    """Penalizacion + perdida de reputacion + bloqueo temporal de un nodo.
+
+    Se usa para el primario que miente y para el que verifica y tambien
+    miente. Cobra de la MISMA cuenta a la que se le paga (_cuenta_de), que era
+    el fallo original: se miraba el saldo del id y nunca habia nada.
+    """
+    n = con.execute("SELECT * FROM nodos WHERE id=?", (nid,)).fetchone()
+    if not n:
+        return 0.0
+    cuenta = _cuenta_de(nid)
+    saldo = float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?",
+                              (cuenta,)).fetchone()["s"] or 0.0)
+    castigo = min(castigo_por_fallo(float(n["tier"] or 1.0)), max(0.0, saldo))
+    if castigo > 0:
+        _asiento(tid, cuenta, -castigo, "penalizacion por resultado incorrecto")
+    con.execute("UPDATE nodos SET reputacion=max(0,reputacion-0.5), castigado_hasta=?, "
+                "fallos=COALESCE(fallos,0)+1 WHERE id=?", (time.time() + CASTIGO_SEG, nid))
+    return castigo
+
+
+@app.post("/tareas/resultado")
+def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: str = "",
+              device: str = "", duracion_ms: float = 0.0, telemetria: str = ""):
+    """El Core recalcula la tarea y compara el RESULTADO EXACTO (trustless).
+
+    AUDITORIA: el orden importa. ANTES se recalculaba el resultado y DESPUES
+    se miraba la firma: cualquiera (sin firma) podia quemar la CPU del Core
+    con tareas pesadas. Ahora: 1) existe la tarea, 2) firma del nodo,
+    3) recien entonces se recalcula, 4) transaccion de pago.
+
+    Un resultado incorrecto ya NO condena la tarea a la primera: se cuenta
+    el intento, ese nodo no la vuelve a recibir, se le castiga (reputacion,
+    penalizacion en KIA y unos minutos sin tareas) y solo se cierra como
+    fallo tras MAX_FALLOS intentos distintos.
+    """
+    # 0. TOPES DE ENTRADA (antes de tocar la base). Un minero malicioso podia
+    # mandar una 'metrica' de megabytes o un duracion_ms=NaN y ensuciar la DB
+    # o las medias del panel. Se corta antes de verificar la firma: es barato.
+    if not (1 <= len(str(tid)) <= 64) or not (1 <= len(str(nodo_id)) <= 64):
+        raise HTTPException(400, "tid o nodo_id invalido")
+    if not metrica or len(metrica) > 16384:
+        raise HTTPException(400, "metrica vacia o demasiado grande (max 16 KB)")
+    if len(hash_res) > 128:
+        raise HTTPException(400, "hash_res demasiado largo (max 128)")
+    if len(str(device)) > 32:
+        raise HTTPException(400, "device demasiado largo (max 32)")
+    if len(telemetria) > 8192:
+        raise HTTPException(400, "telemetria demasiado grande (max 8 KB)")
+    try:
+        dur = float(duracion_ms)
+    except Exception:
+        raise HTTPException(400, "duracion_ms invalida")
+    if not math.isfinite(dur) or not (0.0 <= dur <= 86_400_000.0):
+        raise HTTPException(400, "duracion_ms fuera de rango")
+    duracion_ms = dur
+
+    # 1. Existencia y tipo (lectura sin lock)
+    task = con.execute("SELECT * FROM tareas WHERE id=?", (tid,)).fetchone()
+    if not task:
+        raise HTTPException(404, "tarea no encontrada")
+    params = json.loads(task["params"])
+    tipo = task["tipo"]
+
+    # 2. AUTENTICACION PRIMERO (vale para correctos E incorrectos)
+    node = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
+    if not node:
+        raise HTTPException(404, "nodo no registrado")
+    pub = (node["clave_publica"] or "") if "clave_publica" in node.keys() else ""
+    if EXIGIR_FIRMA_GLOBAL and not pub:
+        raise HTTPException(401, "nodo sin clave registrada (firma obligatoria)")
+    if pub:
+        if not firma:
+            raise HTTPException(401, "falta firma del nodo (suplantacion bloqueada)")
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                bytes.fromhex(firma), f"{tid}:{metrica}".encode())
+        except Exception:
+            raise HTTPException(401, "firma invalida (suplantacion bloqueada)")
+    # Rechazo temprano si la tarea no es pagable (evita trabajo inutil)
+    if task["estado"] == "ok":
+        raise HTTPException(409, "tarea ya pagada (doble pago bloqueado)")
+    if task["estado"] == "fallo":
+        raise HTTPException(409, "tarea ya cerrada con fallo (no reintentable)")
+    if task["estado"] != "ejecutando":
+        raise HTTPException(409, f"tarea en estado '{task['estado']}', no pagable")
+    if task["nodo_id"] and task["nodo_id"] != nodo_id:
+        raise HTTPException(409, "tarea asignada a otro nodo")
+
+    # 3. Verificacion (ya autenticado), con limite de concurrencia.
+    # AUDITORIA 2026-10-20: una entrega falsa de 200 bytes obliga a recalcular
+    # la tarea entera (~32 s de CPU en difusion si cae a CPU). Sin limite, 40
+    # peticiones simultaneas saturan la maquina. Si no hay hueco, la tarea
+    # vuelve a la cola y NO se castiga al nodo (no ha hecho nada malo).
+    # 3.a EJECUCION REDUNDANTE: si otro nodo ya entrego el mismo resultado y
+    # coincide, NO se recalcula. Solo se muestrea 1 de cada AUDITORIA_1_DE
+    # para que una colusion entre dos nodos tenga probabilidad de caer.
+    replica = None
+    try:
+        replica = con.execute("SELECT * FROM tareas_replica WHERE tarea_id=?",
+                              (tid,)).fetchone()
+    except Exception:
+        replica = None
+    # MARGEN PARA LA REPLICA: si hay una verificacion EN CURSO de esta tarea,
+    # se espera unos segundos a que llegue en vez de recalcular. El verificador
+    # arranca despues que el primario, asi que su resultado llega unas decimas
+    # mas tarde: sin esta espera el Core recalculaba igual y el 30 % del
+    # premio que iba a cobrar el verificador se quedaba sin pagar.
+    if REPLICA_ESPERA_SEG > 0 and replica is not None \
+            and not (replica["metrica"] or "").strip() \
+            and (time.time() - float(replica["asignado"] or 0.0)) <= REPLICA_TTL:
+        limite = time.time() + REPLICA_ESPERA_SEG
+        while time.time() < limite:
+            time.sleep(0.1)
+            try:
+                replica = con.execute("SELECT * FROM tareas_replica WHERE tarea_id=?",
+                                      (tid,)).fetchone()
+            except Exception:
+                break
+            if replica is None or (replica["metrica"] or "").strip():
+                break
+    _rep_ok = False
+    esperado = None
+    verificado_por = "recalculo"
+    if _es_replicable(tipo, params) and replica is not None \
+            and (replica["metrica"] or "").strip() \
+            and _coinciden(tipo, params, metrica, replica["metrica"]) \
+            and not _toca_auditoria(tid):
+        ok = True
+        _rep_ok = True
+        verificado_por = "replica"
+    else:
+        if not _verif_sem.acquire(timeout=VERIF_TIMEOUT):
+            try:
+                with _escritura():
+                    con.execute("UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL "
+                                "WHERE id=? AND estado='ejecutando' AND nodo_id=?", (tid, nodo_id))
+            except Exception:
+                pass
+            raise HTTPException(503, "Core ocupado verificando; la tarea vuelve a la cola")
+        try:
+            try:
+                esperado = computar_tarea(tipo, params)
+                _tol = (tipo in ("embeddings", "lote_embeddings") and ONNXCPU is not None) or tipo == "difusion_calor"
+                if esperado is None and not _tol:
+                    raise HTTPException(400, "tipo de tarea no soportado")
+
+                def _cmp(valor):
+                    if tipo in ("embeddings", "lote_embeddings") and ONNXCPU is not None:
+                        return _verificar_embeddings(tipo, params, valor)
+                    if tipo == "difusion_calor":
+                        return _verificar_difusion(params, valor)
+                    return str(valor).strip() == str(esperado).strip()
+
+                ok = _cmp(metrica)
+                if replica is not None and (replica["metrica"] or "").strip():
+                    _rep_ok = _cmp(replica["metrica"])
+                verificado_por = "auditoria" if (replica is not None and _rep_ok) else "recalculo"
+            except MemoryError:
+                # AUDITORIA 21-10-2026: el Core se quedo sin RAM al recalcular
+                # (numpy no pudo reservar 4 MB) y el nodo cobraba un 500, con la
+                # tarea atascada en 'ejecutando'. No es culpa del minero ni se
+                # puede pagar sin comprobar: vuelve a la cola y se responde 503.
+                try:
+                    with _escritura():
+                        con.execute("UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL "
+                                    "WHERE id=? AND estado='ejecutando' AND nodo_id=?", (tid, nodo_id))
+                except Exception:
+                    pass
+                print(f"[KUKIA] sin memoria para verificar {tid}: vuelve a la cola", flush=True)
+                raise HTTPException(503, "sin memoria para verificar ahora; la tarea vuelve a la cola")
+        finally:
+            _verif_sem.release()
+
+    # 4. TRANSACCION ATOMICA con bloqueo de escritura inmediato.
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            raise HTTPException(503, "Core ocupado, reintentar")
+        try:
+            con.execute("UPDATE nodos SET visto=? WHERE id=?", (time.time(), nodo_id))
+            task2 = con.execute("SELECT * FROM tareas WHERE id=?", (tid,)).fetchone()
+            if task2 is None:
+                # AUDITORIA 21-10-2026 (500 con el nodo existiendo): la tarea
+                # puede desaparecer entre la primera lectura y esta transaccion.
+                # Pasa cuando la recuperacion la cierra como 'fallo' por abandono
+                # (asignado viejo) y el archivador la borra en la misma ventana
+                # por ser antigua. Antes `task2["estado"]` lanzaba TypeError y el
+                # minero recibia un 500 opaco; ahora es un 409 claro y NO se paga
+                # nada (la tarea ya estaba cerrada, no habia premio que dar).
+                con.execute("ROLLBACK")
+                raise HTTPException(
+                    409, "la tarea ya no existe (cerrada por abandono y archivada); "
+                         "no hay nada que pagar, no reintentes")
+            if task2["estado"] == "ok":
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "tarea ya pagada (doble pago bloqueado)")
+            if task2["estado"] == "fallo":
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "tarea ya cerrada con fallo (no reintentable)")
+            if task2["estado"] != "ejecutando":
+                con.execute("ROLLBACK")
+                raise HTTPException(409, f"tarea en estado '{task2['estado']}', no pagable")
+            if task2["nodo_id"] and task2["nodo_id"] != nodo_id:
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "tarea asignada a otro nodo")
+
+            kuki = 0.0
+            info_pago = {}
+            # POTENCIA DEMOSTRADA: se paga el tier declarado solo si la GPU lo
+            # ha respaldado con trabajo verificado (ver tier_verificado).
+            tier_pago = tier_verificado(node)
+            if ok:
+                kuki, info_pago = recompensa_pago(tier_pago)
+                info_pago = dict(info_pago or {})
+                info_pago["tier_pagado"] = round(float(tier_pago), 3)
+                info_pago["tier_declarado"] = round(float(node["tier"] or 1.0), 3)
+                info_pago["verificado_por"] = verificado_por
+                # REPARTO DE LA EJECUCION REDUNDANTE: el total NO cambia. El
+                # ejecutor cobra el 70 % y el que verifico el 30 %. Pagar el
+                # 100 % a cada uno dispararia la emision y la fecha de 2150
+                # dejaria de ser cierta.
+                kuki_rep = 0.0
+                if replica is not None and _rep_ok:
+                    kuki_rep = round(kuki * PARTE_REPLICA, 6)
+                    kuki = round(kuki - kuki_rep, 6)
+                    info_pago["parte_replica"] = kuki_rep
+                # Muestra de potencia: FLOPs de la tarea / segundos CRONOMETRADOS
+                # POR EL CORE (asignado -> ahora). El minero no puede acortarlo.
+                _seg = 0.0
+                try:
+                    _asig = float(task2["asignado"] or 0.0)
+                    _seg = time.time() - _asig if _asig > 0 else 0.0
+                except Exception:
+                    _seg = 0.0
+                _g = gflops_de_tarea(task2["tipo"], task2["params"], _seg)
+                if _g > 0:
+                    _prev = float(node["gflops_medido"] or 0.0)
+                    _nuevo = _g if _prev <= 0 else (0.8 * _prev + 0.2 * _g)
+                    con.execute("UPDATE nodos SET gflops_medido=?, "
+                                "potencia_muestras=COALESCE(potencia_muestras,0)+1 "
+                                "WHERE id=?", (round(_nuevo, 4), nodo_id))
+                con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, reputacion=min(5,reputacion+0.05) "
+                            "WHERE id=?", (nodo_id,))
+                h = hashlib.sha256(f"{tid}:{nodo_id}:{metrica}".encode()).hexdigest()
+                con.execute("UPDATE tareas SET estado='ok', hash=?, metrica=?, fin=?, verificado=1, device=?, duracion_ms=? WHERE id=?",
+                            (h, metrica[:2000], time.ctime(), device_limpio(device), float(duracion_ms or 0.0), tid))
+                try:
+                    con.execute("CREATE TABLE IF NOT EXISTS gpu_telemetria(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                                "nodo_id TEXT, device TEXT, metricas TEXT, ts TEXT, origen TEXT)")
+                    if telemetria:
+                        con.execute("INSERT INTO gpu_telemetria(nodo_id,device,metricas,ts,origen) VALUES(?,?,?,?,?)",
+                                    (nodo_id, device_limpio(device), telemetria[:2000], time.ctime(), "worker"))
+                except Exception:
+                    pass
+                # Contador historico: sobrevive al archivado de tareas viejas.
+                con.execute("INSERT INTO meta(clave,valor) VALUES('tareas_ok_total',1) "
+                            "ON CONFLICT(clave) DO UPDATE SET valor=valor+1")
+                _asiento(tid, _cuenta_de(nodo_id), kuki, "trabajo verificado")
+                if kuki_rep > 0 and replica is not None:
+                    # El verificador cobra su parte: la red pago el mismo total
+                    # por tarea, repartido entre los dos que la resolvieron.
+                    _asiento(tid, _cuenta_de(replica["nodo_id"]), kuki_rep,
+                             "verificacion redundante")
+                    con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, "
+                                "reputacion=min(5,reputacion+0.05) WHERE id=?",
+                                (replica["nodo_id"],))
+                    con.execute("UPDATE tareas_replica SET estado='pagada' WHERE tarea_id=?",
+                                (tid,))
+                elif replica is not None and (replica["metrica"] or "").strip() and not _rep_ok:
+                    # Verifico y mintio: mismo castigo que a un primario falso.
+                    _castigar_nodo(tid, replica["nodo_id"])
+                    con.execute("DELETE FROM tareas_replica WHERE tarea_id=?", (tid,))
+                _marcar_ok()
+                _anotar_duracion(task2["tipo"], duracion_ms)
+            elif replica is not None and _rep_ok:
+                # El primario mintio y la REPLICA acerto. Se paga el trabajo
+                # entero a quien dijo la verdad, se castiga al mentiroso y la
+                # tarea se cierra (no vuelve a la cola).
+                rep_node = con.execute("SELECT * FROM nodos WHERE id=?",
+                                       (replica["nodo_id"],)).fetchone()
+                kuki_r, info_pago = recompensa_pago(
+                    tier_verificado(rep_node) if rep_node else 1.0)
+                info_pago = dict(info_pago or {})
+                info_pago["verificado_por"] = "replica"
+                info_pago["pago_al_verificador"] = True
+                h = hashlib.sha256(f"{tid}:{replica['nodo_id']}:{replica['metrica']}".encode()).hexdigest()
+                con.execute("UPDATE tareas SET estado='ok', hash=?, metrica=?, fin=?, "
+                            "verificado=1, device=?, duracion_ms=? WHERE id=?",
+                            (h, (replica["metrica"] or "")[:2000], time.ctime(),
+                             device_limpio(replica["device"]),
+                             float(replica["duracion_ms"] or 0.0), tid))
+                con.execute("UPDATE nodos SET tareas_ok=tareas_ok+1, "
+                            "reputacion=min(5,reputacion+0.05) WHERE id=?",
+                            (replica["nodo_id"],))
+                con.execute("INSERT INTO meta(clave,valor) VALUES('tareas_ok_total',1) "
+                            "ON CONFLICT(clave) DO UPDATE SET valor=valor+1")
+                _asiento(tid, _cuenta_de(replica["nodo_id"]), kuki_r,
+                         "trabajo verificado (replica)")
+                con.execute("UPDATE tareas_replica SET estado='pagada' WHERE tarea_id=?",
+                            (tid,))
+                _castigar_nodo(tid, nodo_id)
+                _marcar_ok()
+            else:
+                # AUDITORIA: castigo + reintento en vez de cerrar la tarea
+                intentos = int(task2["intentos"] or 0) + 1
+                lista = (task2["nodos_intento"] or "")
+                if nodo_id not in [x for x in lista.split(",") if x]:
+                    lista = (lista + "," + nodo_id).strip(",")
+                # Castigo al primario que mintio (sin dejar saldo negativo).
+                _castigar_nodo(tid, nodo_id)
+                # Si habia replica y TAMBIEN mintio, se va con el primario.
+                if replica is not None and (replica["metrica"] or "").strip():
+                    _castigar_nodo(tid, replica["nodo_id"])
+                # La replica se borra siempre: la tarea vuelve a la cola y no
+                # puede heredar un resultado de un intento fallido.
+                con.execute("DELETE FROM tareas_replica WHERE tarea_id=?", (tid,))
+                if intentos >= MAX_FALLOS:
+                    con.execute("UPDATE tareas SET estado='fallo', fin=?, intentos=?, nodos_intento=? WHERE id=?",
+                                (time.ctime(), intentos, lista, tid))
+                else:
+                    con.execute("UPDATE tareas SET estado='queued', nodo_id=NULL, asignado=NULL, "
+                                "intentos=?, nodos_intento=? WHERE id=?", (intentos, lista, tid))
+                _asiento(tid, _cuenta_de(nodo_id), 0.0, "resultado incorrecto")
+            con.commit()
+        except HTTPException:
+            # AUDITORIA 2026-10-19: con el ledger bloqueado, _asiento lanza 503
+            # DESPUES de abrir la transaccion. Sin este ROLLBACK la transaccion
+            # se quedaba abierta (y el siguiente pago fallaba con 503 en bucle).
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        except Exception as e:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            # AUDITORIA 2026-10-21: antes esto se comia la excepcion y solo
+            # devolvia "error interno en el pago", asi que depurar un fallo
+            # real (el de la ejecucion redundante) era a ciegas. Ahora queda en
+            # el log con tipo y mensaje, sin datos de nadie.
+            print(f"[KUKIA Core] ERROR en el pago de {tid}: {type(e).__name__}: {e}",
+                  flush=True)
+            raise HTTPException(500, "error interno en el pago")
+    return {"ok": ok, "kuki": kuki, "esperado": esperado, "pago": info_pago}
+
+@app.post("/tareas/resultado_json")
+def resultado_json(r: ResultadoIn):
+    """Misma verificacion y pago que /tareas/resultado, con cuerpo JSON.
+
+    AUDITORIA 2026-10-20: el resultado viajaba en la query string; con
+    embeddings (JSON grande) choca con el limite de URL de los proxies y deja
+    firmas en logs. La ruta antigua sigue viva para mineros ya descargados.
+    """
+    return resultado(r.tid, r.nodo_id, r.metrica, r.hash_res, r.firma,
+                     r.device, r.duracion_ms, r.telemetria)
+
+class ReplicaIn(BaseModel):
+    """Resultado de un nodo que verifica una tarea ya asignada a otro."""
+    tid: str
+    nodo_id: str
+    metrica: str
+    firma: str = ""
+    device: str = ""
+    duracion_ms: float = 0.0
+
+
+@app.post("/tareas/replica")
+def tarea_replica(r: ReplicaIn):
+    """Un nodo entrega el resultado de una REPLICA (verificacion redundante).
+
+    Aqui no se paga: el pago sale cuando llega el primario y se comprueba que
+    los dos coinciden (70 % ejecutor / 30 % verificador, total igual). Si el
+    primario mintio, cobra el verificador y el mentiroso se lleva el castigo.
+    """
+    if not (1 <= len(str(r.tid)) <= 64) or not (1 <= len(str(r.nodo_id)) <= 64):
+        raise HTTPException(400, "tid o nodo_id invalido")
+    if not r.metrica or len(r.metrica) > 16384:
+        raise HTTPException(400, "metrica vacia o demasiado grande (max 16 KB)")
+    if len(str(r.device)) > 32:
+        raise HTTPException(400, "device demasiado largo (max 32)")
+    node = con.execute("SELECT * FROM nodos WHERE id=?", (r.nodo_id,)).fetchone()
+    if not node:
+        raise HTTPException(404, "nodo no registrado")
+    pub = (node["clave_publica"] or "") if "clave_publica" in node.keys() else ""
+    if pub:
+        if not r.firma:
+            raise HTTPException(401, "falta firma del nodo")
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                bytes.fromhex(r.firma), f"{r.tid}:{r.metrica}".encode())
+        except Exception:
+            raise HTTPException(401, "firma invalida")
+    rep = con.execute("SELECT * FROM tareas_replica WHERE tarea_id=?", (r.tid,)).fetchone()
+    if not rep:
+        # AUDITORIA 21-10-2026: la fila de la replica se borra en cuanto la tarea
+        # deja de estar 'ejecutando' (el primario entrego antes, o caduco). El
+        # nodo verificador que ya habia calculado el trabajo llegaba despues y se
+        # llevaba un 404 que en el minero parecia un fallo suyo: era el 65 % de
+        # los 404 del Core (344 de 526 en el log). Si la tarea ya no esta en
+        # ejecucion no hay nada que guardar y no hay error: se responde 200 con
+        # guardada=false. Si sigue en ejecucion y no hay replica pedida, el 404
+        # se queda (eso si seria un nodo inventandose trabajo).
+        t = con.execute("SELECT estado FROM tareas WHERE id=?", (r.tid,)).fetchone()
+        if t is None or t["estado"] != "ejecutando":
+            return {"ok": True, "guardada": False,
+                    "motivo": "la replica ya no aplica: la tarea se cerro"}
+        raise HTTPException(404, "no hay replica pedida para esa tarea")
+    if rep["nodo_id"] != r.nodo_id:
+        raise HTTPException(403, "esa replica esta asignada a otro nodo")
+    if (rep["metrica"] or "").strip():
+        raise HTTPException(409, "replica ya entregada")
+    tarea = con.execute("SELECT estado FROM tareas WHERE id=?", (r.tid,)).fetchone()
+    if not tarea or tarea["estado"] != "ejecutando":
+        # Misma razon que arriba: la replica llego tarde. No se guarda nada (la
+        # tarea ya se cerro y su premio se repartio o se anulo), pero el nodo no
+        # ha hecho nada malo y no tiene que reintentar: 200 con guardada=false.
+        return {"ok": True, "guardada": False,
+                "motivo": "la tarea ya no esta en ejecucion; la replica no se guarda"}
+    try:
+        dur = float(r.duracion_ms or 0.0)
+    except Exception:
+        dur = 0.0
+    if not math.isfinite(dur) or not (0.0 <= dur <= 86_400_000.0):
+        dur = 0.0
+    with _escritura():
+        con.execute("UPDATE tareas_replica SET estado='entregada', metrica=?, firma=?, "
+                    "device=?, duracion_ms=?, ts=? WHERE tarea_id=? AND nodo_id=?",
+                    (r.metrica[:16384], r.firma[:256], device_limpio(r.device), dur,
+                     time.time(), r.tid, r.nodo_id))
+        con.execute("UPDATE nodos SET visto=? WHERE id=?", (time.time(), r.nodo_id))
+    return {"ok": True, "guardada": True}
+
+
+@app.get("/ledger")
+def ledger():
+    return [dict(r) for r in con.execute("SELECT * FROM ledger ORDER BY id DESC LIMIT 200").fetchall()]
+
+@app.get("/ledger/verificar")
+def verificar_ledger():
+    """AUDITORIA: comprueba la cadena de hashes del ledger.
+
+    Devuelve los ids que no cuadran (alterados a mano en el .db). La cadena
+    empieza en el primer asiento que tiene hash (los anteriores, de versiones
+    sin encadenar, se ignoran)."""
+    prev = ""
+    n_hash = 0
+    alterados = []
+    for r in con.execute("SELECT id,tarea_id,nodo_id,kuki,motivo,ts,hash_prev,hash FROM ledger ORDER BY id").fetchall():
+        if not r["hash"]:
+            continue
+        base = f"{r['tarea_id']}|{r['nodo_id']}|{r['kuki']}|{r['motivo']}|{r['ts']}|{r['hash_prev'] or ''}"
+        if hashlib.sha256(base.encode()).hexdigest() != r["hash"] or (r["hash_prev"] or "") != prev:
+            alterados.append(r["id"])
+        prev = r["hash"]
+        n_hash += 1
+    total = con.execute("SELECT COUNT(*) c FROM ledger").fetchone()["c"]
+    return {"asientos": total, "encadenados": n_hash, "cadena_ok": not alterados,
+            "ids_alterados": alterados[:20]}
+
+@app.get("/ledger/sellos")
+def ledger_sellos(limite: int = 20):
+    """Ultimos sellos firmados (publico). Fijan el historial sin confiar en el Core."""
+    sellos = _sellos_leidos()
+    limite = max(1, min(200, int(limite or 20)))
+    return {"clave_publica": _sello_pub, "total": len(sellos),
+            "sellos": sellos[-limite:]}
+
+_integridad_cache = {"ts": 0.0, "datos": None}
+
+@app.get("/ledger/integridad")
+def ledger_integridad():
+    """Cadena + sellos + si los pagos estan bloqueados (cacheado 30 s)."""
+    ahora = time.time()
+    if _integridad_cache["datos"] is None or ahora - _integridad_cache["ts"] > 30:
+        sellos = _sellos_leidos()
+        est = SELLOS.estado_ledger(con) if SELLOS else {}
+        cadena = SELLOS.verificar_cadena_db(con) if SELLOS else {"ok": False, "ids_alterados": []}
+        r = SELLOS.verificar_sellos(con, sellos, _sello_pub) if SELLOS else {"ok": False, "problemas": []}
+        _integridad_cache["datos"] = {
+            "cadena_ok": bool(cadena.get("ok")),
+            "ids_alterados": cadena.get("ids_alterados", [])[:20],
+            "asientos_vivos": int(est.get("asientos", 0)),
+            "sellos": len(sellos),
+            "ultimo_sello": sellos[-1] if sellos else None,
+            "sellos_ok": bool(r.get("ok")),
+            "problemas": (r.get("problemas") or [])[:20],
+            "pagos_bloqueados": LEDGER_ROTO,
+            "clave_publica": _sello_pub,
+        }
+        _integridad_cache["ts"] = ahora
+    return _integridad_cache["datos"]
+
+# ============================================================
+#  DIFICULTAD ADAPTATIVA (potencia de LA RED KUKIA, no mundial)
+#  + RECOMPENSA DINAMICA (garantiza agotar justo el 13-04-2150)
+# ============================================================
+# Tiempo objetivo por tarea (media, sin checksum). Con tareas de milisegundos
+# el premio por tarea quedaba en 0,004 KIA; con tareas de ~2 s el ritmo baja y
+# cada tarea paga mas, sin tocar el presupuesto de 1,31 KIA/min ni la fecha 2150.
+OBJETIVO_TAREA_MS = float(os.environ.get("KUKIA_TAREA_MS", "2000"))
+ESCALA_MIN, ESCALA_MAX = 0.5, 8.0
+_dur_reciente = collections.deque(maxlen=800)   # ms de tareas con FLOPs
+_ESCALA_TAREA = 1.0
+_escala_pendiente = False
+_escala_cargada = False
+
+
+def _anotar_duracion(tipo: str, ms: float) -> None:
+    """Guarda la duracion de una tarea util (checksum no cuenta: no tiene FLOPs)."""
+    try:
+        ms = float(ms or 0.0)
+    except (TypeError, ValueError):
+        return
+    if tipo == "checksum" or ms <= 0:
+        return
+    _dur_reciente.append(ms)
+
+
+def escala_tarea() -> float:
+    """Factor de tamano que acerca la duracion media de tarea al objetivo.
+
+    Ajuste suave (+-15 % por vuelta) y solo con >=30 muestras. Sube el tamano
+    si las tareas salen cortas, lo baja si se pasan. Se guarda en 'meta' desde
+    el bucle de auto-tareas (aqui no se escribe: puede llamarse dentro de una
+    transaccion de pago).
+    """
+    global _ESCALA_TAREA, _escala_pendiente, _escala_cargada
+    if not _escala_cargada:
+        _escala_cargada = True
+        try:
+            guardada = _meta_float("escala_tarea", 1.0) or 1.0
+            _ESCALA_TAREA = min(ESCALA_MAX, max(ESCALA_MIN, guardada))
+        except Exception:
+            pass
+    if len(_dur_reciente) < 30:
+        return _ESCALA_TAREA
+    medido = sum(_dur_reciente) / len(_dur_reciente)
+    if medido <= 0:
+        return _ESCALA_TAREA
+    # raiz cuadrada: matriz crece ~n^3 y la difusion ~pasos; asi el ajuste no
+    # oscila. Tope de +-15 % por vuelta para no dar saltos bruscos.
+    ajuste = (OBJETIVO_TAREA_MS / medido) ** 0.5
+    nuevo = _ESCALA_TAREA * min(1.15, max(0.85, ajuste))
+    nuevo = min(ESCALA_MAX, max(ESCALA_MIN, nuevo))
+    # Freno por cola: si el Core no da abasto (la verificacion cuesta lo mismo
+    # que minar), no se siguen agrandando tareas; se retrocede un poco.
+    try:
+        pend = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='queued'").fetchone()["c"]
+    except Exception:
+        pend = 0
+    if pend > 400:
+        nuevo = min(nuevo, _ESCALA_TAREA * 0.97)
+    if abs(nuevo - _ESCALA_TAREA) > 1e-3:
+        _ESCALA_TAREA = nuevo
+        _escala_pendiente = True
+        _dur_reciente.clear()
+    return _ESCALA_TAREA
+
+REFERENCIA_TOPS = 1747.0   # red inicial (5070 + 5060 Ti): punto de calibracion
+BASE_MATRIX_N = 256
+BASE_INFER_N = 64
+
+def tops_red() -> float:
+    """TOPS de los nodos ACTIVOS Y CON TRABAJO VERIFICADO (24 h).
+
+    Antes sumaba todos los registros, vivos o no: 34 nodos decian 11.192 TOPS
+    cuando los reales eran ~200, y eso inflaba la dificultad 2,5x. Despues se
+    filtro por 'visto', pero bastaba pedir trabajo (gratis) para figurar.
+    AUDITORIA 2026-10-20: ahora hace falta al menos una tarea PAGADA. Asi un
+    nodo recien registrado no cuenta hasta que demuestra trabajo real, y
+    registrar nodos fantasma con tops=100.000 ya no agranda las tareas de
+    toda la red (era un ataque de dificultad a coste cero).
+    """
+    desde = time.time() - 86400.0
+    row = con.execute("SELECT COALESCE(SUM(tops),0) s FROM nodos "
+                      "WHERE visto>=? AND COALESCE(tareas_ok,0)>0",
+                      (desde,)).fetchone()
+    return float(row["s"] or 0.0)
+
+def dificultad() -> dict:
+    """Tamano de tarea segun la potencia de la red (tarea ~constante en tiempo)."""
+    tops = tops_red()
+    factor = 1.0 if tops <= 0 else min(4.0, max(0.5, (tops / REFERENCIA_TOPS) ** 0.5))
+    escala = escala_tarea()
+    return {
+        "tops_red": round(tops, 1),
+        "tops_referencia": REFERENCIA_TOPS,
+        "factor": round(factor, 3),
+        "escala_tarea": round(escala, 3),
+        "objetivo_ms": OBJETIVO_TAREA_MS,
+        # La difusion es la que se lleva el tiempo; la matriz crece con techo
+        # (3x) para que no explote cuando los pasos ya tocan el limite.
+        "matriz_n": min(LIMITE_N, max(64, int(BASE_MATRIX_N * factor * min(escala, 3.0)))),
+        "inferencia_n": min(LIMITE_N, max(32, int(BASE_INFER_N * factor * min(escala, 3.0)))),
+        "difusion_pasos": min(LIMITE_PASOS, pasos_max_difusion(1024),
+                              max(300, int(1500 * escala * escala))),
+    }
+
+def supply_emitido() -> float:
+    """Suministro desde el total materializado (con respaldo al ledger)."""
+    try:
+        fila = con.execute("SELECT valor FROM meta WHERE clave='supply_emitido'").fetchone()
+        if fila is not None:
+            return float(fila["valor"] or 0.0)
+    except Exception:
+        pass
+    return float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger").fetchone()["s"] or 0.0)
+
+def _epoch(ts: str) -> float:
+    try:
+        return time.mktime(time.strptime(ts))
+    except Exception:
+        return time.time()
+
+
+@app.get("/red/serie_gpu")
+def red_serie_gpu(minutos: int = 60):
+    """Serie por minuto y GPU de lo medido EN LA PROPIA GPU.
+
+    Sale de `gpu_telemetria`, que rellena el minero en cada tarea con el
+    tiempo que tardo de verdad (`tarea_ms`) y los FLOPs de esa tarea. No se
+    usa `duracion_ms` del pago ni una media declarada: es lo que la tarjeta
+    acaba de hacer, con la mezcla real de trabajo de la red.
+
+    Devuelve, por minuto y por device: GFLOPS medidos (FLOPs / segundos),
+    latencia media por tarea y pico de VRAM reservada. Tambien la mezcla de
+    tareas ejecutadas en la ventana, que es lo que se puede dibujar sin
+    inventar nada.
+    """
+    minutos = max(5, min(180, int(minutos or 60)))
+    ahora = time.time()
+    desde = ahora - minutos * 60
+    filas = con.execute("SELECT device, metricas, ts FROM gpu_telemetria "
+                        "ORDER BY id DESC LIMIT 20000").fetchall()
+    devices = []
+    puntos = [dict() for _ in range(minutos)]
+    tipos = {}
+    for r in filas:
+        e = _epoch(r["ts"])
+        if e < desde:
+            continue
+        try:
+            m = json.loads(r["metricas"] or "{}")
+        except Exception:
+            continue
+        dev = str(r["device"] or "gpu")
+        if dev not in devices:
+            devices.append(dev)
+        i = min(minutos - 1, max(0, int((e - desde) // 60)))
+        a = puntos[i].setdefault(dev, {"ms": 0.0, "flops": 0.0, "n": 0, "vram": 0.0,
+                                       "nc": 0, "ms_c": 0.0})
+        a["ms"] += float(m.get("tarea_ms") or 0.0)
+        a["flops"] += float(m.get("flops") or 0.0)
+        a["n"] += 1
+        # Solo las tareas de COMPUTO miden potencia: un checksum son 0 FLOPs y
+        # su tiempo (casi 0) hundiria la media y no dice nada de la GPU.
+        if float(m.get("flops") or 0.0) > 0:
+            a["nc"] += 1
+            a["ms_c"] += float(m.get("tarea_ms") or 0.0)
+        a["vram"] = max(a["vram"], float(m.get("vram_usada_mb") or 0.0))
+        t = str(m.get("tipo") or "")
+        if t:
+            tipos[t] = tipos.get(t, 0) + 1
+    devices.sort()
+    salida = []
+    for i in range(minutos):
+        e = desde + (i + 1) * 60
+        gpus = {}
+        for dev, a in puntos[i].items():
+            seg = a["ms_c"] / 1000.0
+            # Sin tareas de computo en ese minuto el dato es null, NO 0: un
+            # cero se dibuja como "la GPU rindio 0" y es mentira, simplemente
+            # no hubo nada que medir.
+            gpus[dev] = {
+                "tareas": a["n"],
+                "tareas_computo": a["nc"],
+                "ms": round(a["ms_c"] / a["nc"], 1) if a["nc"] else None,
+                "gflops": round(a["flops"] / seg / 1e9, 2) if seg > 0 else None,
+                "vram_mb": round(a["vram"], 0) if a["vram"] else None,
+            }
+        salida.append({"t": int(e), "hora": time.strftime("%H:%M", time.localtime(e)),
+                       "gpus": gpus})
+    return {"minutos": minutos, "devices": devices, "puntos": salida,
+            "tipos": dict(sorted(tipos.items(), key=lambda kv: -kv[1])),
+            "fuente": "tiempo y FLOPs medidos por el minero en cada tarea"}
+
+def _meta_float(clave: str, defecto: float = 0.0) -> float:
+    """Lee un contador historico de 'meta' (0/-1 si no existe o falla)."""
+    try:
+        row = con.execute("SELECT valor FROM meta WHERE clave=?", (clave,)).fetchone()
+        return float(row["valor"]) if row else defecto
+    except Exception:
+        return defecto
+
+def tasa_tareas_seg() -> float:
+    """Ritmo medio real de la red (tareas OK / segundo). Minimo: 1 tarea/dia.
+
+    ARCHIVADO: usa el contador historico de 'meta', no las filas que queden en
+    'tareas'. Si contara filas, borrar tareas viejas hundiria el ritmo medido y
+    el premio por tarea se dispararia al techo (emitiria demasiado deprisa).
+    """
+    n = _meta_float("tareas_ok_total", -1.0)
+    if n < 0:  # base anterior al archivado: degradar a conteo real
+        n = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"]
+    if n <= 0:
+        return 1.0 / 86400.0
+    primera = _meta_float("primera_ok_epoch", 0.0)
+    if primera <= 0:
+        m = con.execute("SELECT MIN(fin) m FROM tareas WHERE estado='ok' AND fin IS NOT NULL").fetchone()["m"]
+        primera = _epoch(m) if m else time.time()
+    elapsed = max(3600.0, time.time() - primera)
+    return max(1.0 / 86400.0, n / elapsed)
+
+
+# Marcas de tiempo de las tareas OK recientes: sirven para medir el ritmo de
+# AHORA. La media historica no vale: si la red acelera, la media va por detras
+# y el objetivo de calendario sale alto (se emitia 18x de mas).
+_ok_reciente = collections.deque(maxlen=20000)
+
+
+def _marcar_ok() -> None:
+    _ok_reciente.append(time.time())
+
+
+def tasa_reciente(ventana: float = 180.0) -> float:
+    """Tareas OK por segundo en los ultimos `ventana` segundos.
+
+    Con menos de 20 muestras cae a la media historica (arranque del Core).
+    Ventana corta a proposito: con 10 min el ritmo subia antes de que la
+    ventana lo viera y se emitia de mas (1,52 KIA/min medidos frente a 1,31
+    de presupuesto).
+    """
+    ahora = time.time()
+    while _ok_reciente and ahora - _ok_reciente[0] > ventana:
+        _ok_reciente.popleft()
+    if len(_ok_reciente) >= 20:
+        span = max(1.0, ahora - _ok_reciente[0])
+        return len(_ok_reciente) / span
+    return tasa_tareas_seg()
+
+def recompensa_pago(tier: float) -> tuple:
+    """Pago que garantiza: (1) nunca pasar de 100M, (2) agotar justo el 13-04-2150.
+
+    - objetivo = restante / tareas_restantes_estimadas (persigue la fecha)
+    - techo/suelo = bandas del halving x10 / x0.1 (predecible, anti-spikes)
+    - pago final = min(base x tier, restante) -> el ledger JAMAS supera 100M
+    """
+    emit = supply_emitido()
+    restante = MAX_SUPPLY - emit
+    if restante <= 0:
+        return 0.0, {"agotado": True}
+    fin_dt = datetime(EMISSION_END.year, EMISSION_END.month, EMISSION_END.day)
+    seg_rest = max(1.0, (fin_dt - datetime.now()).total_seconds())
+    tasa = tasa_reciente()
+    tareas_rest = max(1.0, tasa * seg_rest)
+    objetivo = restante / tareas_rest
+    techo = REWARD_BASE * emission_mult()
+    # Pago = objetivo de calendario, punto. El techo (10 KIA x era) solo recorta
+    # el caso raro de red parada; NO hay suelo. El antiguo suelo de
+    # techo*0.1 (=1 KIA/tarea) era lo que agotaba los 100M en meses: con
+    # ~300 tareas/min son 430.000 KIA/dia, o sea 197 dias para los 85M que
+    # quedan, en vez de llegar al 13-04-2150.
+    base = min(objetivo, techo) if techo > 0 else 0.0
+    pago = round(min(base * tier, restante), 6)
+    return pago, {"objetivo": round(objetivo, 6), "techo_halving": round(techo, 4),
+                  "tasa_dia": round(tasa * 86400, 2), "restante": round(restante, 2),
+                  "emision_por_min": round(restante / (seg_rest / 60.0), 4)}
+
+
+def castigo_por_fallo(tier: float) -> float:
+    """Castigo por resultado incorrecto, proporcional al premio de una tarea.
+
+    100 tareas de castigo, con suelo de 0,1 y tope de 25 KIA. Antes eran 25
+    fijos: con el premio actual (0,0037) un solo fallo costaba 6.757 tareas, y
+    un nodo nuevo sin saldo no pagaba nada (el castigo se capa al saldo).
+    """
+    pago, _ = recompensa_pago(tier)
+    return min(PENALIZACION, max(PENALIZACION_MIN, PENALIZACION_MULT * pago))
+
+@app.get("/stats")
+def stats():
+    # AUDITORIA 2026-10-20: total materializado; antes era un SUM de todo el
+    # ledger en cada peticion (el panel lo pide cada 2 s).
+    sum = min(supply_emitido(), MAX_SUPPLY)
+    pago1, info1 = recompensa_pago(1.0)
+    total_ok = int(_meta_float("tareas_ok_total", -1.0))
+    if total_ok < 0:
+        total_ok = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"]
+    en_tabla = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"]
+    _ss = _sellos_leidos()
+    return {
+        "version": app.version,
+        "supply_emitido": sum,
+        "max_supply": MAX_SUPPLY,
+        "nodos": con.execute("SELECT COUNT(*) c FROM nodos").fetchone()["c"],
+        # Historico real (sobrevive al archivado); 'en_tabla' son las que quedan
+        # guardadas por si se quiere auditar el detalle.
+        "tareas_ok": total_ok,
+        "tareas_ok_en_tabla": en_tabla,
+        "tareas_archivadas": int(_meta_float("tareas_archivadas", 0.0)),
+        "tareas_pend": con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='queued'").fetchone()["c"],
+        "registros": con.execute("SELECT COUNT(*) c FROM registros").fetchone()["c"],
+        "emision": emission_info(),
+        "dificultad": dificultad(),
+        "recompensa_base_actual": pago1,
+        "pago_por_tarea": pago1,
+        "emision_por_min": info1.get("emision_por_min"),
+        "detalle_pago": info1,
+        "auto_tareas": {"activo": AUTO_ACTIVO, "objetivo_cola": AUTO_COLA_OBJETIVO,
+                        "intervalo_seg": AUTO_INTERVALO},
+        "archivado": {"activo": ARCHIVAR_ACTIVO, "retencion": RETENCION_TAREAS,
+                      "lote": ARCHIVAR_LOTE, "intervalo_seg": ARCHIVAR_INTERVALO},
+        # Resumen barato (sin recorrer la cadena): el detalle completo esta en
+        # /ledger/integridad. El panel lo usa para el semaforo de seguridad.
+        "integridad": {"sellos": len(_ss),
+                       "ultimo_sello_hash": (_ss[-1].get("hash") if _ss else None),
+                       "pagos_bloqueados": LEDGER_ROTO},
+    }
+
+@app.post("/tareas/crear_auto")
+def crear_auto(tipo: str = "matriz", _ok: None = Depends(exigir_admin)):
+    """Crea una tarea con la dificultad ACTUAL de la red (tamano segun TOPS)."""
+    dif = dificultad()
+    tid = crear_tarea_auto(tipo)
+    return {"tarea_id": tid, "estado": "queued", "dificultad": dif}
+
+@app.post("/admin/liberar_atascadas")
+def admin_liberar(_ok: None = Depends(exigir_admin)):
+    """AUDITORIA: libera YA las tareas 'ejecutando' colgadas (sin esperar 30 min)."""
+    forzar = True
+    r, c = liberar_atascadas(forzar=True)
+    return {"devueltas_a_la_cola": r, "cerradas_como_fallo": c}
+
+# ============================================================
+#  AUDITORIA 2026-10-18: generador automatico de trabajo
+#  El minero no inventa tareas: solo pide trabajo. Si la cola se vacia,
+#  la red se queda parada (paso de verdad: se quedo a 0 y el minero ocioso).
+#  Este bucle mantiene la cola llena con la dificultad actual de la red.
+#  Se apaga con KUKIA_AUTO_TAREAS=0 o desde /admin/auto_tareas.
+# ============================================================
+AUTO_ACTIVO = os.environ.get("KUKIA_AUTO_TAREAS", "1") != "0"
+# Un colchon de 120 tareas con lote de 40 cada 10 s: el minero va a ~20
+# tareas/min, asi que nunca se queda sin trabajo (con 40/20/15 se vaciaba
+# entre pasadas y las GPUs esperaban).
+AUTO_COLA_OBJETIVO = max(0, int(os.environ.get("KUKIA_AUTO_COLA", "120")))
+AUTO_INTERVALO = max(3.0, float(os.environ.get("KUKIA_AUTO_SEG", "5")))
+AUTO_POR_PASADA = max(1, int(os.environ.get("KUKIA_AUTO_LOTE", "40")))
+
+# Trabajo variado (todas las tareas pagan lo mismo, el pago lo fija la emision):
+# matriz e inferencia (aritmetica determinista), checksum y difusion de calor.
+MEZCLA_AUTO = ("matriz", "matriz", "matriz", "checksum", "checksum",
+               "checksum", "difusion_calor", "difusion_calor", "inferencia")
+
+def params_auto(tipo: str) -> dict:
+    """Parametros de una tarea automatica, con el tamano que toca a la red."""
+    dif = dificultad()
+    rnd = secrets.randbelow
+    if tipo == "matriz":
+        return {"n": max(64, min(LIMITE_N, int(dif["matriz_n"]))), "seed": rnd(1_000_000)}
+    if tipo == "inferencia":
+        return {"n": max(32, min(LIMITE_N, int(dif["inferencia_n"]))), "seed": rnd(1_000_000)}
+    if tipo == "checksum":
+        return {"data": "kukia-" + secrets.token_hex(12)}
+    if tipo == "difusion_calor":
+        # Los pasos los fija el control de dificultad (objetivo ~2 s por tarea).
+        # Antes una tarea n=2048/pasos=4000 costaba 7,4 min de verificacion en
+        # CPU; hoy la verificacion va en GPU y el control no deja crecer sin tope.
+        return {"n": 1024, "pasos": min(int(dif.get("difusion_pasos") or 1500),
+                                         pasos_max_difusion(1024)),
+                "seed": rnd(1_000_000), "tolerancia_rel": 1e-9}
+    raise HTTPException(400, "tipo no soportado")
+
+def crear_tarea_auto(tipo: str = None, cola: str = "C", prioridad: float = 0.0) -> str:
+    """Crea una tarea de trabajo (misma validacion que /tareas/crear)."""
+    if tipo is None:
+        tipo = MEZCLA_AUTO[secrets.randbelow(len(MEZCLA_AUTO))]
+    params = validar_params(tipo, params_auto(tipo))
+    tid = uuid.uuid4().hex[:12]
+    with _escritura():
+        con.execute("INSERT INTO tareas(id,tipo,params,estado,creado,cola,campana,prioridad,vram_min) "
+                    "VALUES(?,?,?,?,?,?,?,?,?)",
+                    (tid, tipo, json.dumps(params), "queued", time.ctime(), cola, "auto",
+                     float(prioridad), 0))
+    return tid
+
+def _bucle_auto_tareas():
+    """Mantiene la cola con trabajo para que el minero nunca se quede parado."""
+    while True:
+        try:
+            if LEDGER_ROTO:
+                # Historial alterado: no se crea trabajo (el minero cobraria 0).
+                pass
+            elif AUTO_ACTIVO and AUTO_COLA_OBJETIVO > 0:
+                en_cola = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='queued'").fetchone()["c"]
+                faltan = AUTO_COLA_OBJETIVO - en_cola
+                if faltan > 0:
+                    for _ in range(min(faltan, AUTO_POR_PASADA)):
+                        crear_tarea_auto()
+                    print(f"[KUKIA Core] auto-tareas: cola {en_cola} -> {en_cola + min(faltan, AUTO_POR_PASADA)}", flush=True)
+        except Exception as e:
+            print(f"[KUKIA Core] auto-tareas error: {e}", flush=True)
+        # Persistir el tamano de tarea que ha aprendido el control de dificultad.
+        global _escala_pendiente
+        if _escala_pendiente:
+            try:
+                with _escritura():
+                    con.execute("INSERT INTO meta(clave,valor) VALUES('escala_tarea',?) "
+                                "ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor",
+                                (round(_ESCALA_TAREA, 4),))
+                _escala_pendiente = False
+            except Exception:
+                pass
+        time.sleep(AUTO_INTERVALO)
+
+threading.Thread(target=_bucle_auto_tareas, daemon=True).start()
+
+# ============================================================
+#  ARCHIVADO DE TAREAS VIEJAS
+#  A pleno ritmo (~380 tareas/min) la tabla 'tareas' mete unos 500.000
+#  registros al dia (~400 MB/dia). Se borran SOLO las terminadas (ok/fallo)
+#  mas antiguas, dejando las ultimas KUKIA_RETENCION_TAREAS para auditar.
+#  El ledger (donde estan los saldos) NO se toca, y los contadores de 'meta'
+#  conservan el historico. SQLite reutiliza las paginas libres, asi que el
+#  fichero deja de crecer en cuanto alcanza el tamano de la ventana.
+# ============================================================
+ARCHIVAR_ACTIVO = os.environ.get("KUKIA_ARCHIVAR", "1") != "0"
+RETENCION_TAREAS = max(1000, int(os.environ.get("KUKIA_RETENCION_TAREAS", "200000")))
+ARCHIVAR_LOTE = max(100, int(os.environ.get("KUKIA_ARCHIVAR_LOTE", "20000")))
+ARCHIVAR_INTERVALO = max(30.0, float(os.environ.get("KUKIA_ARCHIVAR_SEG", "120")))
+
+def archivar_tareas(retencion: int = None, lote: int = None) -> dict:
+    """Borra tareas terminadas antiguas, en lotes, bajo el lock de escritura."""
+    ret = max(1000, int(retencion or RETENCION_TAREAS))
+    bat = max(100, int(lote or ARCHIVAR_LOTE))
+    corte = con.execute("SELECT rowid r FROM tareas WHERE estado IN ('ok','fallo') "
+                        "ORDER BY rowid DESC LIMIT 1 OFFSET ?", (ret - 1,)).fetchone()
+    if not corte:
+        return {"borradas": 0, "retencion": ret, "lote": bat}
+    borradas = 0
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            return {"borradas": 0, "retencion": ret, "lote": bat,
+                    "error": "base ocupada, se reintenta"}
+        try:
+            cur = con.execute("DELETE FROM tareas WHERE rowid IN (SELECT rowid FROM tareas "
+                              "WHERE rowid < ? AND estado IN ('ok','fallo') LIMIT ?)",
+                              (corte["r"], bat))
+            borradas = cur.rowcount or 0
+            if borradas:
+                con.execute("INSERT INTO meta(clave,valor) VALUES('tareas_archivadas',?) "
+                            "ON CONFLICT(clave) DO UPDATE SET valor=valor+excluded.valor", (float(borradas),))
+            con.commit()
+        except Exception:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+    return {"borradas": borradas, "retencion": ret, "lote": bat,
+            "archivadas_total": int(_meta_float("tareas_archivadas", 0.0))}
+
+def _bucle_archivado():
+    while True:
+        try:
+            if ARCHIVAR_ACTIVO:
+                for _ in range(20):  # vaciar el atraso sin esperar a la siguiente vuelta
+                    r = archivar_tareas()
+                    if r.get("borradas"):
+                        print(f"[KUKIA Core] archivado: {r['borradas']} tareas viejas "
+                              f"(total {r['archivadas_total']})", flush=True)
+                    if r.get("borradas", 0) < ARCHIVAR_LOTE or r.get("error"):
+                        break
+                    time.sleep(1)
+        except Exception as e:
+            print(f"[KUKIA Core] archivado error: {e}", flush=True)
+        try:
+            n = podar_nodos()
+            if n:
+                print(f"[KUKIA Core] podados {n} nodos que nunca trabajaron", flush=True)
+        except Exception as e:
+            print(f"[KUKIA Core] poda de nodos error: {e}", flush=True)
+        time.sleep(ARCHIVAR_INTERVALO)
+
+threading.Thread(target=_bucle_archivado, daemon=True).start()
+
+@app.post("/admin/archivar")
+def admin_archivar(retencion: int = -1, lote: int = -1, _ok: None = Depends(exigir_admin)):
+    """Fuerza una pasada de archivado (sin esperar al bucle)."""
+    return archivar_tareas(None if retencion < 0 else retencion,
+                           None if lote < 0 else lote)
+
+@app.post("/admin/podar_nodos")
+def admin_podar_nodos(horas: float = -1, _ok: None = Depends(exigir_admin)):
+    """Fuerza la poda de nodos que nunca trabajaron (pruebas y mantenimiento)."""
+    return {"podados": podar_nodos(None if horas < 0 else horas)}
+
+@app.post("/admin/recalcular_resumen")
+def admin_recalcular_resumen(_ok: None = Depends(exigir_admin)):
+    """Reconstruye saldos y suministro desde el ledger (reparacion)."""
+    return recalcular_resumen()
+
+@app.post("/admin/auto_tareas")
+def admin_auto_tareas(activo: int = -1, objetivo: int = -1, _ok: None = Depends(exigir_admin)):
+    """Enciende/apaga el generador de trabajo y fija el tamano de la cola.
+    activo=1/0 y objetivo=N (tareas en cola que intenta mantener)."""
+    global AUTO_ACTIVO, AUTO_COLA_OBJETIVO
+    if activo >= 0:
+        AUTO_ACTIVO = bool(activo)
+    if objetivo >= 0:
+        AUTO_COLA_OBJETIVO = int(objetivo)
+    return {"activo": AUTO_ACTIVO, "objetivo_cola": AUTO_COLA_OBJETIVO,
+            "intervalo_seg": AUTO_INTERVALO, "lote": AUTO_POR_PASADA}
+
+class RegistroIn(BaseModel):
+    nombre: str
+    email: str
+    gpu: str = ""
+    tops: str = ""
+    ceder_potencia: str = ""
+    ref: str = ""
+
+@app.post("/registro")
+def registro(r: RegistroIn, request: Request):
+    """Registro publico de la lista de espera (desde la web).
+
+    AUDITORIA: antes el 'ref' se guardaba en la columna 'ip' y la IP real no
+    se guardaba nunca. Ahora cada dato va a su columna."""
+    ip = request.client.host if request.client else ""
+    with _escritura():
+        con.execute("INSERT INTO registros(nombre,email,gpu,tops,ceder,ref,ip,ts) VALUES(?,?,?,?,?,?,?,?)",
+                    (r.nombre[:120], r.email[:160], r.gpu[:80], r.tops[:40],
+                     r.ceder_potencia[:40], r.ref[:64], ip, time.ctime()))
+    return {"ok": True, "mensaje": "Registrado. Te avisaremos al lanzamiento.",
+            "posicion": con.execute("SELECT COUNT(*) c FROM registros").fetchone()["c"]}
+
+@app.get("/registros")
+def registros(_ok: None = Depends(exigir_admin)):
+    return [dict(x) for x in con.execute("SELECT * FROM registros ORDER BY id DESC LIMIT 500").fetchall()]
+
+@app.get("/saldo/{direccion}")
+def saldo(direccion: str):
+    """Saldo publico de una direccion (cualquiera puede consultarlo)."""
+    fila = con.execute("SELECT total FROM saldos_cuenta WHERE cuenta=?",
+                       (direccion,)).fetchone()
+    s = fila["total"] if fila is not None else 0.0
+    # AUDITORIA 2026-10-20: REAL de SQLite deja residuos (-4,6e-13) al sumar
+    # muchos asientos. Se redondea SOLO al mostrar (el ledger sigue exacto).
+    # CAOS 2026-10-22: ese residuo negativo se pintaba como "-0.0 KIA" y
+    # parecia una cuenta en deuda. Polvo (< 1e-9) es cero, no deuda.
+    valor = float(s or 0.0)
+    if abs(valor) < 1e-9:
+        valor = 0.0
+    return {"direccion": direccion, "saldo": round(valor, 6)}
+
+@app.get("/saldos")
+def saldos():
+    """Mapa publico direccion -> saldo (desde los totales materializados)."""
+    filas = con.execute("SELECT cuenta,total FROM saldos_cuenta").fetchall()
+    return {"saldos": {r["cuenta"]: (0.0 if abs(float(r["total"] or 0.0)) < 1e-9
+                                      else round(float(r["total"] or 0.0), 6)) for r in filas},
+            "direcciones": len(filas)}
+
+class TransferIn(BaseModel):
+    de_nodo: str          # id de nodo O direccion KUK... de una billetera
+    a_direccion: str
+    monto: float
+    nonce: str = ""
+    firma: str = ""
+    clave_publica: str = ""   # solo si el origen es una billetera (no un nodo)
+
+@app.post("/transferir")
+def transferir(t: TransferIn):
+    """Transfiere KIA con firma Ed25519 y anti-repeticion.
+
+    Dos origenes validos:
+      1) Un NODO registrado con clave publica (worker/minero).
+      2) Una BILLETERA KUK... que presenta su clave publica. La direccion se
+         deriva de esa clave (KUK + SHA256(pub)[:38]) y tiene que coincidir con
+         el origen, asi que nadie puede gastar el saldo de otra billetera. No
+         hay que registrar la billetera como nodo: no ensucia la red.
+
+    La firma es sobre "transferir:<de>:<a>:<monto>:<nonce>". El nonce solo
+    vale una vez (UNIQUE en transferencias). Todo ocurre en una transaccion:
+    sin saldo no hay debito ni credito. No crea moneda: los dos asientos se
+    compensan, por eso /stats.supply_emitido no cambia con una transferencia.
+    """
+    de = (t.de_nodo or "").strip()
+    a = (t.a_direccion or "").strip()
+    # Las direcciones KUK... se guardan en mayusculas en el ledger; los ids de
+    # nodo son hex en minusculas. Normalizar solo lo que es una direccion.
+    if direccion_valida(de):
+        de = de.upper()
+    if direccion_valida(a):
+        a = a.upper()
+    if not a or len(a) > 128:
+        raise HTTPException(400, "destino invalido")
+    if a == de:
+        raise HTTPException(400, "origen y destino iguales")
+    try:
+        monto = round(float(t.monto), 4)
+    except Exception:
+        raise HTTPException(400, "monto invalido")
+    # AUDITORIA: NaN esquiva "monto <= 0" y "saldo < monto" (NaN no es ni
+    # mayor ni menor), y acababa escribiendo asientos NULL y devolviendo 500.
+    if not math.isfinite(monto):
+        raise HTTPException(400, "monto debe ser un numero finito")
+    if monto <= 0:
+        raise HTTPException(400, "monto debe ser positivo")
+    if monto > MAX_SUPPLY:
+        raise HTTPException(400, "monto mayor que el suministro total")
+    if not t.nonce or len(t.nonce) > 64:
+        raise HTTPException(400, "nonce invalido")
+    if LEDGER_ROTO:
+        raise HTTPException(503, "ledger alterado: transferencias bloqueadas (ver /ledger/integridad)")
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            raise HTTPException(503, "Core ocupado, reintentar")
+        try:
+            con.execute("CREATE TABLE IF NOT EXISTS transferencias(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                        "de_nodo TEXT, a_direccion TEXT, monto REAL, nonce TEXT, ts TEXT, "
+                        "UNIQUE(de_nodo, nonce))")
+            # El destino solo puede ser una direccion KUK... o un nodo que
+            # exista: antes se aceptaba cualquier cadena y el saldo se quemaba.
+            if not direccion_valida(a) and not con.execute(
+                    "SELECT 1 FROM nodos WHERE id=?", (a,)).fetchone():
+                con.execute("ROLLBACK")
+                raise HTTPException(400, "destino invalido: usa una direccion KUK... o un nodo registrado")
+            node = con.execute("SELECT clave_publica FROM nodos WHERE id=?", (de,)).fetchone()
+            pub = ((node["clave_publica"] if node else "") or "").strip().lower()
+            if not pub:
+                # Camino BILLETERA: origen KUK... + clave publica que deriva
+                # exactamente en esa direccion (nada que registrar).
+                candidata = (t.clave_publica or "").strip().lower()
+                if not pubkey_valida(candidata) or direccion_de_pubkey(candidata) != de:
+                    con.execute("ROLLBACK")
+                    raise HTTPException(401, "emisor sin clave registrada "
+                                             "(billetera: envia clave_publica y firma)")
+                pub = candidata
+            if not t.firma:
+                con.execute("ROLLBACK")
+                raise HTTPException(401, "falta firma")
+            try:
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+                Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+                    bytes.fromhex(t.firma),
+                    f"transferir:{de}:{a}:{monto}:{t.nonce}".encode())
+            except Exception:
+                con.execute("ROLLBACK")
+                raise HTTPException(401, "firma invalida")
+            saldo = float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?",
+                                      (de,)).fetchone()["s"] or 0.0)
+            if saldo < monto:
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "saldo insuficiente")
+            try:
+                con.execute("INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts) VALUES(?,?,?,?,?)",
+                            (de, a, monto, t.nonce, time.ctime()))
+            except Exception:
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "nonce ya usado (repeticion bloqueada)")
+            _asiento(f"tx-{t.nonce[:12]}", de, -monto, "transferencia salida")
+            _asiento(f"tx-{t.nonce[:12]}", a, monto, "transferencia entrada")
+            con.commit()
+            return {"ok": True, "de": de, "a": a, "monto": monto,
+                    "supply": round(supply_emitido(), 6)}
+        except HTTPException:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        except Exception:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise HTTPException(500, "error interno en transferencia")
+
+# ============================================================
+#  SERIE TEMPORAL (panel y web)
+#  Se calcula en el Core para que el dashboard NO abra una segunda conexion
+#  a la base (lector + escritor a la vez = bloqueos). Cache de 5 s.
+# ============================================================
+def _es_replicable(tipo: str, params) -> bool:
+    """Merece la pena que la resuelva un segundo nodo?
+
+    Solo las tareas CARAS: duplicar una tarea de 3 ms cuesta mas (asignar,
+    firmar, red) que recalcularla en el Core. El umbral es el mismo que usa la
+    medida de potencia: 1 GFLOP. En la practica esto cubre las difusiones,
+    que son las que se comian el 99 % del CPU de verificacion.
+    """
+    if not REPLICA_ACTIVA:
+        return False
+    if tipo not in ("matriz", "difusion_calor", "inferencia"):
+        return False      # embeddings: comparar dos JSON con tolerancia es delicado
+    return _flops_tarea(tipo, params) >= REPLICA_FLOPS_MIN
+
+
+def _reclamar_replica(nodo_id: str, vram: int):
+    """Se lleva una tarea CARA asignada a OTRO nodo para verificarla.
+
+    Se llama dentro de la transaccion de /tareas/pendiente (BEGIN IMMEDIATE),
+    asi que dos nodos no pueden quedarse la misma replica: la PRIMARY KEY de
+    tareas_replica lo impide y se prueba con INSERT OR IGNORE.
+
+    Devuelve (id, tipo, params) o None.
+    """
+    ahora = time.time()
+    # Replicas caducadas.
+    con.execute("DELETE FROM tareas_replica WHERE estado='reclamando' "
+                "AND COALESCE(asignado,0) < ?", (ahora - REPLICA_TTL,))
+    # Huerfanas (su tarea ya no esta en ejecucion). Con LIMIT y JOIN por clave
+    # primaria: un DELETE ... IN (SELECT ... FROM tareas) recorreria las 94.000
+    # tareas en CADA peticion de trabajo.
+    con.execute("DELETE FROM tareas_replica WHERE rowid IN ("
+                "SELECT r.rowid FROM tareas_replica r JOIN tareas t ON t.id=r.tarea_id "
+                "WHERE t.estado!='ejecutando' LIMIT 20)")
+    # Techo de verificacion simultanea: nunca mas de REPLICA_FRACCION de los
+    # nodos activos. El resto ejecuta, que es lo que hace avanzar la cola
+    # (sin tareas ejecutandose tampoco habria nada que verificar).
+    try:
+        activos = int(con.execute("SELECT COUNT(*) c FROM nodos WHERE visto > ?",
+                                  (ahora - 300.0,)).fetchone()["c"] or 0)
+    except Exception:
+        activos = 0
+    tope = max(1, int(round(activos * REPLICA_FRACCION)))
+    en_curso = int(con.execute("SELECT COUNT(*) c FROM tareas_replica "
+                               "WHERE estado='reclamando'").fetchone()["c"] or 0)
+    if en_curso >= tope:
+        return None
+    filas = con.execute(
+        "SELECT t.id,t.tipo,t.params FROM tareas t "
+        "WHERE t.estado='ejecutando' AND t.nodo_id IS NOT NULL AND t.nodo_id!=? "
+        "AND COALESCE(t.asignado,0) > ? AND COALESCE(t.vram_min,0) <= ? "
+        "AND COALESCE(t.nodos_intento,'') NOT LIKE ? "
+        "AND NOT EXISTS (SELECT 1 FROM tareas_replica r WHERE r.tarea_id=t.id) "
+        "ORDER BY t.asignado DESC LIMIT 8",
+        (nodo_id, ahora - ABANDONO_SEG, vram, f"%{nodo_id}%")).fetchall()
+    for f in filas:
+        try:
+            p = json.loads(f["params"])
+        except Exception:
+            continue
+        if not _es_replicable(f["tipo"], p):
+            continue
+        cur = con.execute("INSERT OR IGNORE INTO tareas_replica"
+                          "(tarea_id,nodo_id,estado,asignado) VALUES(?,?,'reclamando',?)",
+                          (f["id"], nodo_id, ahora))
+        if cur.rowcount == 1:
+            return (f["id"], f["tipo"], p)
+    return None
+
+
+def _toca_auditoria(tid: str) -> bool:
+    """1 de cada AUDITORIA_1_DE, decidido por el ID (determinista, auditable).
+
+    Determinista y no aleatorio: el mismo id cae siempre en el mismo lado, asi
+    que un nodo no puede "probar suerte" repitiendo la entrega, y una prueba
+    puede saber de antemano si esa tarea sera auditada.
+    """
+    if AUDITORIA_1_DE <= 0:
+        return False
+    if AUDITORIA_1_DE == 1:
+        return True
+    n = int(hashlib.sha256(str(tid).encode()).hexdigest()[:8], 16)
+    return n % AUDITORIA_1_DE == 0
+
+
+def _coinciden(tipo: str, params, a: str, b: str) -> bool:
+    """Dos resultados de dos nodos distintos: son el mismo resultado?"""
+    a = str(a or "").strip()
+    b = str(b or "").strip()
+    if not a or not b:
+        return False
+    if tipo == "difusion_calor":
+        try:
+            fa, fb = float(a), float(b)
+            if not (math.isfinite(fa) and math.isfinite(fb)):
+                return False
+            ref = max(abs(fa), abs(fb), 1e-12)
+            return abs(fa - fb) / ref <= 1e-6
+        except Exception:
+            return False
+    return a == b
+
+
+def _flops_tarea(tipo: str, params) -> float:
+    """FLOPs aproximados de una tarea, para medir potencia REAL (no declarada)."""
+    try:
+        p = json.loads(params) if isinstance(params, str) else (params or {})
+    except Exception:
+        return 0.0
+    try:
+        n = int(p.get("n") or 0)
+        if tipo == "matriz":
+            return 2.0 * n ** 3
+        if tipo == "inferencia":
+            return 18.0 * n ** 2
+        if tipo == "difusion_calor":
+            return 10.0 * n ** 2 * int(p.get("pasos") or 0)
+    except Exception:
+        return 0.0
+    return 0.0
+
+
+_serie_cache = {"ts": 0.0, "minutos": 0, "datos": None}
+
+@app.get("/red/serie")
+def red_serie(minutos: int = 60):
+    """Serie por minuto: emision acumulada, tareas y GFLOPS medidos.
+
+    GFLOPS = FLOPs de las tareas verificadas / segundos que tardaron de verdad.
+    No es lo que declara el nodo al registrarse: es trabajo comprobado.
+    """
+    minutos = max(5, min(180, int(minutos or 60)))
+    ahora = time.time()
+    if (_serie_cache["datos"] is not None and _serie_cache["minutos"] == minutos
+            and ahora - _serie_cache["ts"] < 5.0):
+        return _serie_cache["datos"]
+    desde = ahora - minutos * 60
+    supply = float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger").fetchone()["s"] or 0.0)
+    add = [0.0] * minutos
+    for r in con.execute("SELECT kuki, ts FROM ledger ORDER BY id DESC LIMIT 20000").fetchall():
+        e = _epoch(r["ts"])
+        if e < desde:
+            continue
+        i = min(minutos - 1, max(0, int((e - desde) // 60)))
+        add[i] += float(r["kuki"] or 0.0)
+    tareas = [0] * minutos
+    flops = [0.0] * minutos
+    ms = [0.0] * minutos
+    for r in con.execute("SELECT tipo, params, fin, duracion_ms FROM tareas "
+                         "WHERE estado='ok' AND fin IS NOT NULL "
+                         "ORDER BY rowid DESC LIMIT 15000").fetchall():
+        e = _epoch(r["fin"])
+        if e < desde:
+            continue
+        i = min(minutos - 1, max(0, int((e - desde) // 60)))
+        tareas[i] += 1
+        ms[i] += float(r["duracion_ms"] or 0.0)
+        flops[i] += _flops_tarea(r["tipo"], r["params"])
+    sufijo = [0.0] * (minutos + 1)
+    for i in range(minutos - 1, -1, -1):
+        sufijo[i] = sufijo[i + 1] + add[i]
+    puntos = []
+    for i in range(minutos):
+        e = desde + (i + 1) * 60
+        puntos.append({
+            "t": int(e),
+            "hora": time.strftime("%H:%M", time.localtime(e)),
+            "supply": round(supply - sufijo[i + 1], 4),
+            "tareas": tareas[i],
+            "gflops": round(flops[i] / (ms[i] / 1000.0) / 1e9, 3) if ms[i] > 0 else 0.0,
+            "seg_computo": round(ms[i] / 1000.0, 2),
+        })
+    total_ms = sum(ms)
+    datos = {
+        "minutos": minutos,
+        "bucket_seg": 60,
+        "supply_actual": round(supply, 4),
+        "tareas_ventana": sum(tareas),
+        "gflops_ventana": round(sum(flops) / (total_ms / 1000.0) / 1e9, 3) if total_ms > 0 else 0.0,
+        "puntos": puntos,
+    }
+    _serie_cache.update({"ts": ahora, "minutos": minutos, "datos": datos})
+    return datos
+
+class AtestacionIn(BaseModel):
+    validador: str
+    clave_publica: str
+    desde: float = 0.0
+    hasta: float = 0.0
+    revisadas: int = 0
+    ok: bool = True
+    discrepancias: list = []
+    huella: str = ""
+    ts: float = 0.0
+    firma: str = ""
+
+
+@app.get("/red/witness")
+def red_witness(desde: float = 0.0, limite: int = 20):
+    """Trabajo ya verificado para que un validador independiente lo recalcule.
+
+    Devuelve un manifiesto JSON canonico FIRMADO con la clave del sello del
+    Core. El validador comprueba la firma antes de fiarse del contenido: asi
+    nadie puede colarle tareas falsas por el camino.
+
+    Solo incluye trabajo verificado (tipo, params, resultado, nodo y hora).
+    No hay claves privadas, saldos ni datos personales.
+    """
+    desde = max(0.0, min(float(desde or 0.0), time.time()))
+    limite = max(1, min(100, int(limite or 20)))
+    filas = con.execute("SELECT id,tipo,params,metrica,fin,nodo_id FROM tareas "
+                        "WHERE estado='ok' AND metrica IS NOT NULL "
+                        "ORDER BY rowid DESC LIMIT 1500").fetchall()
+    items = []
+    for r in filas:
+        try:
+            params = json.loads(r["params"])
+        except Exception:
+            continue
+        e = _epoch(r["fin"])
+        if e < desde:
+            continue
+        items.append({"id": r["id"], "tipo": r["tipo"], "params": params,
+                      "metrica": r["metrica"], "fin": round(e, 3),
+                      "nodo": r["nodo_id"]})
+    items.sort(key=lambda x: (x["fin"], x["id"]))
+    items = items[:limite]
+    hasta = max([i["fin"] for i in items], default=desde)
+    manifiesto = {"items": items, "desde": round(desde, 3),
+                  "hasta": round(hasta, 3), "ts": int(time.time()), "v": 1}
+    texto = (SELLOS.canonico(manifiesto) if SELLOS is not None
+             else json.dumps(manifiesto, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=False))
+    return {"manifiesto": texto, "firma": _firmar_texto(texto),
+            "clave_publica": _sello_pub, "items": len(items),
+            "hasta": round(hasta, 3)}
+
+
+@app.post("/validador/atestacion")
+def validador_atestacion(a: AtestacionIn):
+    """Registra la conformidad (o discrepancia) de un validador independiente.
+
+    Firma Ed25519 del propio validador sobre el JSON canonico de la
+    atestacion. Es informativo: NO paga, NO bloquea pagos y NO cambia saldos.
+    Su valor es que varias maquinas distintas recalculen lo mismo y lo firmen:
+    si una discrepa, queda registrado y se ve en el panel.
+    """
+    nombre = (a.validador or "").strip()[:64]
+    pub = (a.clave_publica or "").strip().lower()
+    if not nombre or not pubkey_valida(pub):
+        raise HTTPException(400, "validador o clave_publica invalidos")
+    if not a.firma:
+        raise HTTPException(401, "falta firma del validador")
+    try:
+        revisadas = max(0, min(1000, int(a.revisadas)))
+        desde = round(float(a.desde or 0.0), 3)
+        hasta = round(float(a.hasta or 0.0), 3)
+        ts = int(float(a.ts or 0.0))
+    except Exception:
+        raise HTTPException(400, "campos numericos invalidos")
+    if ts <= 0 or abs(time.time() - ts) > 3600:
+        raise HTTPException(401, "atestacion caducada (revisa el reloj)")
+    dis = a.discrepancias if isinstance(a.discrepancias, list) else []
+    dis = dis[:50]
+    datos = {"validador": nombre, "clave_publica": pub, "desde": desde,
+             "hasta": hasta, "revisadas": revisadas, "ok": bool(a.ok),
+             "discrepancias": dis, "huella": (a.huella or "").strip()[:64],
+             "ts": ts}
+    texto = (SELLOS.canonico(datos) if SELLOS is not None
+             else json.dumps(datos, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=False))
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+            bytes.fromhex(a.firma), texto.encode())
+    except Exception:
+        raise HTTPException(401, "firma de validador invalida")
+    with _escritura():
+        con.execute("INSERT INTO validador_atestaciones(validador,clave_publica,desde,hasta,"
+                    "revisadas,ok,discrepancias,detalle,huella,ts,firma) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                    (nombre, pub, desde, hasta, revisadas, 1 if a.ok else 0, len(dis),
+                     json.dumps(dis)[:8000], (a.huella or "")[:64], float(ts), a.firma[:256]))
+        # Historial acotado: 7 dias bastan para auditar y no crece sin freno.
+        con.execute("DELETE FROM validador_atestaciones WHERE ts < ?",
+                    (time.time() - 7 * 86400,))
+    return {"ok": True, "aceptada": True, "validador": nombre,
+            "revisadas": revisadas, "discrepancias": len(dis)}
+
+
+@app.get("/validador/estado")
+def validador_estado():
+    """Ultima atestacion de cada validador, actividad 24 h y discrepancias."""
+    hace24 = time.time() - 86400
+    filas = con.execute("SELECT * FROM validador_atestaciones "
+                        "ORDER BY id DESC LIMIT 500").fetchall()
+    vistos = {}
+    for r in filas:
+        if r["validador"] in vistos:
+            continue
+        vistos[r["validador"]] = {
+            "validador": r["validador"],
+            "clave_publica": (r["clave_publica"] or "")[:16] + "...",
+            "ts": r["ts"], "desde": r["desde"], "hasta": r["hasta"],
+            "revisadas": r["revisadas"], "ok": bool(r["ok"]),
+            "discrepancias": r["discrepancias"],
+        }
+    activos = [v for v in vistos.values() if float(v["ts"] or 0) >= hace24]
+    dis24 = con.execute("SELECT COUNT(*) c FROM validador_atestaciones "
+                        "WHERE ts>=? AND ok=0", (hace24,)).fetchone()["c"]
+    rev24 = con.execute("SELECT COALESCE(SUM(revisadas),0) s FROM validador_atestaciones "
+                        "WHERE ts>=?", (hace24,)).fetchone()["s"]
+    return {"clave_witness": _sello_pub, "activos": len(activos),
+            "total": len(vistos), "revisadas_24h": int(rev24 or 0),
+            "discrepancias_24h": int(dis24 or 0),
+            "validadores": sorted(vistos.values(),
+                                  key=lambda x: -float(x["ts"] or 0))}
+
+
+@app.get("/red/telemetria")
+def red_telemetria():
+    """Estado EN VIVO por nodo/GPU + historico de tareas (solo lectura).
+
+    El panel elige la primera fila de cada (nodo, device): por eso las filas
+    vivas van primero. Solo se muestran latidos de los ultimos 5 minutos; si
+    el minero se para, la tarjeta vuelve al ultimo dato historico."""
+    vivas = []
+    try:
+        filas = con.execute("SELECT nodo_id,device,metricas,ts,origen FROM gpu_estado "
+                            "WHERE ts>=? ORDER BY ts DESC LIMIT 100",
+                            (time.time() - 300.0,)).fetchall()
+        vivas = [dict(r) for r in filas]
+    except Exception:
+        pass
+    # Una fila por (nodo, GPU): la ULTIMA de cada una. Con "las 200 mas
+    # recientes" una GPU que solo hace tareas largas (difusiones) desaparecia
+    # de la lista y el panel sumaba 42 GFLOPS en vez de 84 (visto 20-10-2026).
+    ultimas = []
+    try:
+        ultimas = con.execute(
+            "SELECT nodo_id,device,metricas,ts,origen FROM gpu_telemetria "
+            "WHERE id IN (SELECT MAX(id) FROM gpu_telemetria GROUP BY nodo_id, device) "
+            "ORDER BY id DESC LIMIT 50").fetchall()
+    except Exception:
+        pass
+    try:
+        hist = con.execute("SELECT nodo_id,device,metricas,ts,origen FROM gpu_telemetria "
+                           "ORDER BY id DESC LIMIT 200").fetchall()
+    except Exception:
+        hist = []
+    # Las vivas primero (el panel se queda con la primera de cada nodo|GPU),
+    # luego la ultima de cada GPU, y despues el historico para lo que falte.
+    vistas = set()
+    salida = []
+    for r in vivas + [dict(x) for x in ultimas] + [dict(x) for x in hist]:
+        clave = (str(r.get("nodo_id") or ""), str(r.get("device") or ""))
+        if clave in vistas:
+            continue
+        vistas.add(clave)
+        salida.append(r)
+    return {"telemetria": salida}
+
+# el coordinador corre: uvicorn kukia_core:app --port 8300

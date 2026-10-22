@@ -1,0 +1,6 @@
+# KUKIA - direccion del Core (una sola linea, sin espacios)
+# Minar en ESTE mismo PC: deja la linea de abajo como esta.
+# Minar contra otro Core: sustituye la linea por la URL publica, por ejemplo
+#   https://kukia.tudominio.com
+# Las lineas que empiezan por # se ignoran; solo cuenta la primera que no.
+http://127.0.0.1:8300

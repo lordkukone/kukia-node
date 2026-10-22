@@ -1,0 +1,7 @@
+KUKIA - sello del ledger (anclado en Bitcoin con OpenTimestamps)
+hasta      : 134138
+asientos   : 133963
+suma_kia   : 15083874.8977
+hash_ultimo: None
+firma      : f5fa4f26e55f74db9fc8138dc8aa573f35146f4c1960189ee51ef8360b9ac5659a4d8b56d7e238cc6aaa57a7ff2da9a6f3ea62e1041a41709c96b8f156980501
+canonico   : {"asientos":133963,"hash":"e4bd4beb8c25e326922bda1512ab7018ecf3a421de6e837b45384618661f3a07","hasta":134138,"legado":{"hash":"49dd4c6ed1a5b62e2bda158ab1ddb1b487ba97ee6b022576d68391e2851efb98","hasta":175,"n":175,"suma":15000802.2563},"prev":"18930d8b202b9e9b3db749576705b818b68aeecf37567cf40005934427e2bd27","suma":15083874.8977,"ts":1792518447,"v":2}

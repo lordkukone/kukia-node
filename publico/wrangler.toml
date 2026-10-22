@@ -1,0 +1,12 @@
+# Solo para probar el rele en local (wrangler dev). El despliegue real usa
+# publico/manifest.json y el binding FILES lo crea la plataforma.
+name = "kukia-metricas"
+main = "relay.js"
+compatibility_date = "2026-10-19"
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "kukia-metricas"
+
+[vars]
+KUKIA_CLAVE = "clave-de-prueba-local"
