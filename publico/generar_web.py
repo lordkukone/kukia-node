@@ -106,6 +106,25 @@ EN_ZIP = [
     "ARRANCAR_TUNEL.cmd",
     "PREPARAR_DOMINIO.cmd",
     "tools/saldo_minero.py",
+    # AUDITORIA 2026-10-22: el paquete llevaba los documentos pero no los ficheros
+    # que esos documentos mandan ejecutar. SEGURIDAD.md daba la orden exacta
+    # `python tools/prueba_gasto_billetera.py ...` y ese fichero no venia; el
+    # README prometia las suites y tampoco venian. Quien se descargaba el nodo
+    # no podia comprobar nada de lo que el propio paquete afirma: se queda sin
+    # la prueba de que el gasto de la billetera funciona y sin las herramientas
+    # de blindaje. Se incluyen aqui (son codigo, no llevan claves); seguir la
+    # norma que ya estaba escrita para ARRANCAR_TUNEL.cmd: si un documento del
+    # paquete nombra un fichero, el fichero va dentro.
+    "tools/prueba_gasto_billetera.py",
+    "tools/verificar_moneda.py",
+    "tools/pruebas_seguridad.py",
+    "tools/pruebas_caos.py",
+    "tools/prueba_failover_negativas.py",
+    "tools/prueba_vigilante_indexado.py",
+    "tools/replica_ledger.py",
+    "tools/volver_al_original.py",
+    "tools/cerrar_puertos_abiertos.ps1",
+    "tools/proteger_claves.ps1",
     "README.md",
     "requirements.txt",
 ]

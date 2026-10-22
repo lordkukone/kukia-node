@@ -16,6 +16,13 @@ Que hace:
 Uso:
   python publico/desplegar_sitio.py --dominio https://<sitio>.freebuff.page
   python publico/desplegar_sitio.py --dominio ... --sin-regenerar
+
+OJO al desplegar en Freebuff (22-10-2026): el publicador solo ve ficheros que
+estan DENTRO del workspace del hilo, no en esta carpeta. Si se le pasa un
+manifiesto de fuera, el despliegue "sale bien" pero sube lo que haya en el
+workspace (o nada) y el sitio sigue con la version vieja sin dar error. Hay que
+copiar sitio_publicado/ al workspace (carpeta deploy_site/) y desplegar desde
+alli. Perdido 20 minutos por esto: tres despliegues en verde sin cambiar nada.
 """
 import argparse
 import json

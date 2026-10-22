@@ -87,10 +87,10 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>e4b64809b77b06ea30dbbb7198ad32195fd326822c97facda83bb53818550899</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>f11ce53863a261640ea3df880f314a0840160c1dd08105393339a6042c8ae221</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
-<br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
+<br><br>Generado desde los ficheros reales el 22-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
 
 <h2>Coordinador (Core) - coordinator/kukia_core.py</h2>
 
@@ -333,7 +333,19 @@ def host_permitido(host: str) -&gt; bool:
 # faltaban las cabeceras CORS, con lo que el fetch fallaba igualmente.
 # Ahora: vale cualquier origen de loopback (el puerto da igual), la web
 # publica del proyecto, y lo que se anada en KUKIA_ORIGENES=&quot;https://a,...&quot;.
-ORIGENES_PERMITIDOS = {&quot;https://lordkukone.github.io&quot;, &quot;null&quot;} | {
+# WEBS PROPIAS (22-10-2026): la billetera del navegador vive en el sitio del
+# proyecto. Sin estas lineas, quien abriera wallet.html en
+# kukia-network.surge.sh no podia ni mirar su saldo ni gastar: el navegador
+# bloqueaba el fetch por CORS. No abre nada: /transferir exige firma Ed25519 de
+# la clave que deriva en la direccion, y el resto de escrituras exigen firma o
+# token de admin.
+ORIGENES_PERMITIDOS = {
+    &quot;https://lordkukone.github.io&quot;,
+    &quot;https://kukia-network.surge.sh&quot;,
+    &quot;https://kukia-network.freebuff.page&quot;,
+    &quot;https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page&quot;,
+    &quot;null&quot;,   # wallet.html abierto desde el disco (file://)
+} | {
     o.strip().lower() for o in (os.environ.get(&quot;KUKIA_ORIGENES&quot;, &quot;&quot;) or &quot;&quot;).split(&quot;,&quot;) if o.strip()
 }
 
@@ -973,11 +985,58 @@ def _n_sellos_meta() -&gt; int:
     except Exception:
         return 0
 
+
+def _apartar_sellos_ajenos() -&gt; &quot;Path | None&quot;:
+    &quot;&quot;&quot;Aparta el sellos.jsonl del repo cuando esta instalacion es nueva.
+
+    POR QUE (22-10-2026): el repo publica los sellos del fundador, firmados con
+    SU clave, que no se publica (ni debe). Quien clona el proyecto genera su
+    propia clave, no puede verificar esas firmas, y el Core arrancaba con
+    &quot;EL HISTORIAL NO CUADRA&quot; y los pagos bloqueados: se clonaba para minar y no
+    se cobraba NUNCA. Aqui se renombra el fichero (no se borra: queda como
+    evidencia) y esta instalacion empieza su propia cadena de sellos.
+
+    Solo se aparta si (a) la base no tiene sellos propios anotados Y (b) no hay
+    ni un sello en el fichero firmado con nuestra clave. En el PC del fundador
+    las dos cosas son al reves, asi que no se toca nada, ni siquiera si un dia
+    el fichero se corrompe: ahi hay que verlo, no esconderlo.
+    &quot;&quot;&quot;
+    if SELLOS is None or not _sello_pub:
+        return None
+    if _n_sellos_meta() &gt; 0:
+        return None
+    try:
+        sellos = SELLOS.leer_sellos(SELLOS_FILE)
+    except Exception:
+        return None
+    if not sellos or any(SELLOS.verificar_firma(s, _sello_pub)
+                         for s in sellos if isinstance(s, dict)):
+        return None
+    destino = SELLOS_FILE.with_name(SELLOS_FILE.name + &quot;.de_otra_instalacion&quot;)
+    n = 1
+    while destino.exists():
+        destino = SELLOS_FILE.with_name(f&quot;{SELLOS_FILE.name}.de_otra_instalacion{n}&quot;)
+        n += 1
+    try:
+        SELLOS_FILE.replace(destino)
+        return destino
+    except Exception as e:
+        print(f&quot;[KUKIA] AVISO: no se pudo apartar {SELLOS_FILE.name}: {e}&quot;, flush=True)
+        return None
+
 def _verificar_integridad() -&gt; dict:
     global LEDGER_ROTO
     problemas = []
     cadena = {}
     sellos = _sellos_leidos()
+    if sellos:
+        # Clon recien descargado: los sellos del repo son de otra instalacion.
+        apartado = _apartar_sellos_ajenos()
+        if apartado is not None:
+            print(f&quot;[KUKIA] instalacion nueva: los sellos del repo son de otra &quot;
+                  f&quot;cadena. Apartados en {apartado.name}; esta empieza la suya.&quot;,
+                  flush=True)
+            sellos = []
     if SELLOS is None:
         problemas.append(&quot;modulo de sellos no disponible&quot;)
     else:
@@ -6430,10 +6489,18 @@ def main() -&gt; int:
     libre_pct = 100.0 * uso.free / uso.total
     datos[&quot;disco_libre_pct&quot;] = round(libre_pct, 1)
     datos[&quot;db_mb&quot;] = round(DB.stat().st_size / 1e6, 1) if DB.exists() else 0
+    libre_gb = uso.free / 1024 ** 3
+    datos[&quot;disco_libre_gb&quot;] = round(libre_gb, 1)
     if libre_pct &lt; 10:
-        fallos.append(f&quot;disco casi lleno: {libre_pct:.1f} % libre&quot;)
+        # El porcentaje solo no dice nada: 5 % de un disco de 2 TB son 98 GB y
+        # no es &quot;casi lleno&quot;; 5 % de uno de 256 GB son 13 GB y si lo es. Lo que
+        # importa es cuanto queda de verdad para el ledger (crece) y las copias.
+        if libre_gb &lt; 20:
+            fallos.append(f&quot;disco casi lleno: {libre_pct:.1f} % libre ({libre_gb:.0f} GB)&quot;)
+        else:
+            avisos.append(f&quot;disco al {libre_pct:.1f} % libre, pero quedan {libre_gb:.0f} GB&quot;)
     elif libre_pct &lt; 20:
-        avisos.append(f&quot;disco al {libre_pct:.1f} % libre&quot;)
+        avisos.append(f&quot;disco al {libre_pct:.1f} % libre ({libre_gb:.0f} GB)&quot;)
 
     # 5) antiguedad del ultimo sello
     try:
@@ -11178,7 +11245,16 @@ FICHERO = PUBLICO / &quot;core_actual.json&quot;
 CLOUDFLARED = RAIZ / &quot;tools&quot; / &quot;bin&quot; / &quot;cloudflared.exe&quot;
 DOMINIO = os.environ.get(&quot;KUKIA_WEB_DOMINIO&quot;, &quot;kukia-network.surge.sh&quot;)
 LOCAL = os.environ.get(&quot;KUKIA_CORE_LOCAL&quot;, &quot;http://127.0.0.1:8300&quot;)
-URL_RE = re.compile(r&quot;https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com&quot;)
+# FALLO REAL (22-10-2026): esta expresion aceptaba `https://api.trycloudflare.com`,
+# que aparece en el log de cloudflared como destino de su API. El supervisor se
+# creia que ese era su tunel, publicaba una direccion muerta en core_actual.json
+# y la red se quedaba inaccesible desde fuera (Cloudflare: 530) sin que nada
+# gritara. Los tuneles rapidos tienen forma de CUATRO palabras con guiones
+# (p. ej. warner-tablets-wonderful-tba) y nunca empiezan por &quot;api.&quot;.
+URL_RE = re.compile(r&quot;https://[a-z0-9]+(?:-[a-z0-9]+){3}\.trycloudflare\.com&quot;)
+# Por si Cloudflare cambia la forma: se acepta cualquier nombre del dominio,
+# pero NUNCA el host de la API.
+URL_LAXA = re.compile(r&quot;https://(?!api\.)[a-z0-9][a-z0-9-]*\.trycloudflare\.com&quot;)
 # Cada cuanto se comprueba que el tunel sigue sirviendo.
 VIGILIA_SEG = float(os.environ.get(&quot;KUKIA_TUNEL_VIGILIA&quot;, &quot;45&quot;))
 # Cerrojo de instancia unica: dos supervisores abririan DOS tuneles y se
@@ -11275,6 +11351,7 @@ def lee_url(proc: subprocess.Popen, seg: float = 90.0) -&gt; str:
 
     threading.Thread(target=bomba, daemon=True).start()
     fin = time.time() + seg
+    flojo = &quot;&quot;
     while time.time() &lt; fin:
         try:
             linea = cola.get(timeout=1)
@@ -11286,8 +11363,12 @@ def lee_url(proc: subprocess.Popen, seg: float = 90.0) -&gt; str:
             break
         m = URL_RE.search(linea)
         if m:
-            return m.group(0)
-    return &quot;&quot;
+            return m.group(0)     # la buena: cuatro palabras con guiones
+        if not flojo:
+            m2 = URL_LAXA.search(linea)
+            if m2:
+                flojo = m2.group(0)   # se guarda por si al final no hay mejor
+    return flojo
 
 
 def espera_tunel(url: str, seg: float = 120.0) -&gt; bool:
@@ -11462,7 +11543,7 @@ def main(argv=None) -&gt; int:
 
     if args.solo_publicar:
         url = (args.url or &quot;&quot;).strip().rstrip(&quot;/&quot;)
-        if not URL_RE.fullmatch(url):
+        if not URL_LAXA.fullmatch(url):
             print(&quot;[ERROR] --url tiene que ser una URL https://algo.trycloudflare.com&quot;)
             return 2
         if not espera_tunel(url, 60):

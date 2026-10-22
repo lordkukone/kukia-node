@@ -7,6 +7,11 @@ coordinator/admin_token.txt
 searchconsole_cuenta.json
 searchconsole_cuenta*.json
 
+# Sellos de OTRA instalacion: el Core los aparta al arrancar sobre un clon
+# (ver _apartar_sellos_ajenos en coordinator/kukia_core.py). Son del fundador,
+# no del que clona, y no deben acabar en su git status.
+coordinator/sellos.jsonl.de_otra_instalacion*
+
 # Bases de datos y copias
 *.db
 *.db-wal
