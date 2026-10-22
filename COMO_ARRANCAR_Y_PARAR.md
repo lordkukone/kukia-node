@@ -166,6 +166,30 @@ Para que se levante sola al encender el PC (sin ventana), el lanzador
 usuario. Para quitarlo: Win+R -> `shell:startup` -> borrar `KUKIA Guardia.vbs`.
 Eso no para nada de lo que este corriendo; solo deja de arrancarlo al entrar.
 
+### Que arranca solo al encender el PC (22-10-2026)
+
+Al entrar en Windows se lanza **solo la guardia** (el .vbs de la carpeta de
+Inicio). La guardia levanta, en este orden: **Core, minero, panel, validador,
+publicador y tunel**. No hace falta abrir nada a mano ni tener tareas
+programadas para el minero y el panel.
+
+Dos fallos de ese arranque, corregidos hoy:
+
+1. El .vbs de Inicio sacaba la ruta del proyecto de **su propia carpeta**
+   (`...\Startup\tools\guardia.py`), que no existe: salia con codigo 1 y no
+   arrancaba nada. Por eso el 22-10 no habia minero ni panel al encender.
+   Ahora la ruta va escrita entera, y espera 40 s (discos, red y drivers).
+2. El candado de instancia unica buscaba `tools/guardia.py` con barra
+   inclinada, pero el .vbs arranca el guardia con ruta de Windows
+   (`...\tools\guardia.py`, barra invertida) y no se veia al otro: llegaron a
+   correr **dos** guardias. Ahora se busca solo `guardia.py`, que vale para
+   las dos formas. Probado: el segundo se cierra con
+   `ya hay 1 guardia(s) corriendo`.
+
+Comprobarlo sin reiniciar: `netstat -ano | findstr "8300 8301"` (Core y
+panel), y las ultimas lineas de `logs/guardia.log` tienen que decir
+`[minero] arrancado` o `ya esta corriendo`.
+
 Motivo: el 20-10-2026 el minero se callo a las 12:28 y nadie lo noto hasta las
 15:00, con 121 tareas en cola. La guardia lo detecta en menos de un minuto
 (probado matando el minero: relanzado en 17 s).
@@ -350,6 +374,40 @@ Para crearla o repararla:
 powershell -ExecutionPolicy Bypass -File tools\programar_backup.ps1
 ```
 
+**Copia SEMANAL verificada a N: (22-10-2026):** la tarea `KUKIA Copia
+Seguridad` ejecuta `TAREA_COPIA_SEGURIDAD.cmd` los **domingos a las 04:00**
+(oculta, por el `.vbs`) y deja en `N:\COPIA_SEGURIDAD_20261022` una copia de
+`KUKIA`, `I:\CEREBRO` y `H:\Xoxete` con el SHA256 de cada fichero comparado
+contra el original. Lo que no ha cambiado no se recopia; lo que cambio se
+verifica otra vez. Log en `backups/copia_seguridad.log` y, en el destino,
+`RESUMEN.txt` (ultima pasada) e `historial/` (una linea y un resumen por
+pasada; ahi no se borra nada).
+
+```bash
+# a mano, viendo el progreso
+TAREA_COPIA_SEGURIDAD.cmd
+
+# comprobar una copia ya hecha (relee los ficheros y compara hashes)
+python tools\copia_seguridad.py --verificar N:\COPIA_SEGURIDAD_20261022
+
+# lanzar la tarea sin esperar al domingo
+schtasks /Run /TN "KUKIA Copia Seguridad"
+schtasks /Query /TN "KUKIA Copia Seguridad" /V /FO LIST   :: ultimo resultado
+schtasks /Delete /TN "KUKIA Copia Seguridad" /F           :: quitar la copia semanal
+```
+
+Para volver a crearla: `powershell -ExecutionPolicy Bypass -File
+tools\programar_copia_seguridad.ps1`. Para cambiar el destino (otro disco, otra
+carpeta) sin tocar el script, define `KUKIA_COPIA_DESTINO` antes de ejecutar
+el `.cmd`.
+
+Como sale `0` solo si no hubo ni un fallo, un resultado distinto de 0 en el
+Programador de tareas significa que hay algo que mirar en el `RESUMEN.txt`.
+Las bases SQLite abiertas se copian con `VACUUM INTO` (14 s el ledger de
+244 MB con el Core escribiendo); la API `backup()` se reinicia sola en cada
+escritura del Core y con un ledger asi **no termina nunca** (probado: 12 min
+y seguia). Los `-wal`/`-shm` de las bases no se copian: sobran.
+
 **Restauracion probada** (no basta con copiar):
 
 ```bash
@@ -449,16 +507,19 @@ ventana aunque el padre no tenga consola. Quedaron tres focos, ya tapados:
 | Minero leyendo la GPU | `nvidia-smi` visible **cada 3 s** | `CREATE_NO_WINDOW` |
 | Publicador de metricas | `cmd /c surge` visible cada 20 min | `CREATE_NO_WINDOW` |
 | Copia diaria de las 03:00 | ventana de CMD | `TAREA_BACKUP_OCULTA.vbs` (oculta) |
+| Copia semanal de seguridad | no existia | `TAREA_COPIA_SEGURIDAD_OCULTA.vbs` (oculta) |
 | Vigilante de la web | no existia | `pythonw` + tarea cada 10 min |
 
 Las dos tareas programadas y como se quitan:
 
 ```cmd
-schtasks /Query /TN "KUKIA Vigilante Web"      :: vigila la web y avisa/empuja
-schtasks /Query /TN "KUKIA Backup Ledger"      :: copia diaria a las 03:00
+schtasks /Query /TN "KUKIA Vigilante Web"       :: vigila la web y avisa/empuja
+schtasks /Query /TN "KUKIA Backup Ledger"       :: copia diaria a las 03:00
+schtasks /Query /TN "KUKIA Copia Seguridad"     :: copia semanal a N: (domingos)
 
-python tools\vigilante_web.py --quitar         :: quitar el vigilante
-schtasks /Delete /TN "KUKIA Backup Ledger" /F  :: quitar la copia diaria
+python tools\vigilante_web.py --quitar          :: quitar el vigilante
+schtasks /Delete /TN "KUKIA Backup Ledger" /F   :: quitar la copia diaria
+schtasks /Delete /TN "KUKIA Copia Seguridad" /F :: quitar la copia semanal
 ```
 
 Si alguna vez vuelve a aparecer una ventana, el sospechoso es un

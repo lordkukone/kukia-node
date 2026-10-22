@@ -137,7 +137,7 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
   <div class="card">
     <h3>Mi saldo</h3>
     <input id="v-addr" placeholder="Tu dirección KUK...">
-    <input id="v-core" placeholder="Dirección del Core (por defecto http://127.0.0.1:8300)">
+    <input id="v-core" placeholder="Dirección del Core (se detecta sola; 127.0.0.1 si abres el fichero del disco)">
     <button class="btn" onclick="saldo()">Ver saldo</button>
     <div id="v-out"></div>
     <div id="qrcode"></div>
@@ -176,9 +176,30 @@ fetch('wordlist.txt').then(function(r){ return r.text(); }).then(function(t){
   WORDS = t.split('\n').map(function(w){ return w.trim(); }).filter(Boolean);
 });
 
+// EL CORE PUBLICO, SOLO (22-10-2026). Hasta hoy la billetera apuntaba a
+// http://127.0.0.1:8300, que en el navegador de un visitante es SU ordenador:
+// no habia saldo, no habia red y no se podia gastar nada. Ahora, al abrir la
+// pagina desde la web del proyecto, se toma la misma direccion que usa el
+// minero (core_actual.json, que el tunel renueva solo). Si el usuario ya tenia
+// una guardada, manda la suya; y el campo de arriba siempre manda.
+function detectarCore(){
+  var c = document.getElementById('v-core');
+  if(c && c.value.trim()){ return; }
+  if(localStorage.getItem('kukia_core')){ return; }
+  fetch('core_actual.json', {cache: 'no-store'})
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){
+      if(!j || !j.core){ return; }
+      if(c){ c.value = j.core; }
+      localStorage.setItem('kukia_core', j.core);
+    })
+    .catch(function(){ /* desde el disco no hay core_actual.json: 127.0.0.1 */ });
+}
+
 window.addEventListener('load', function(){
   var c = document.getElementById('v-core');
-  if(c){ c.value = localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300'; }
+  if(c){ c.value = localStorage.getItem('kukia_core') || ''; }
+  detectarCore();
   var a = document.getElementById('v-addr');
   if(a){ a.value = localStorage.getItem('kukia_addr') || ''; }
 });

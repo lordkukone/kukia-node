@@ -77,10 +77,18 @@ def main() -> int:
     libre_pct = 100.0 * uso.free / uso.total
     datos["disco_libre_pct"] = round(libre_pct, 1)
     datos["db_mb"] = round(DB.stat().st_size / 1e6, 1) if DB.exists() else 0
+    libre_gb = uso.free / 1024 ** 3
+    datos["disco_libre_gb"] = round(libre_gb, 1)
     if libre_pct < 10:
-        fallos.append(f"disco casi lleno: {libre_pct:.1f} % libre")
+        # El porcentaje solo no dice nada: 5 % de un disco de 2 TB son 98 GB y
+        # no es "casi lleno"; 5 % de uno de 256 GB son 13 GB y si lo es. Lo que
+        # importa es cuanto queda de verdad para el ledger (crece) y las copias.
+        if libre_gb < 20:
+            fallos.append(f"disco casi lleno: {libre_pct:.1f} % libre ({libre_gb:.0f} GB)")
+        else:
+            avisos.append(f"disco al {libre_pct:.1f} % libre, pero quedan {libre_gb:.0f} GB")
     elif libre_pct < 20:
-        avisos.append(f"disco al {libre_pct:.1f} % libre")
+        avisos.append(f"disco al {libre_pct:.1f} % libre ({libre_gb:.0f} GB)")
 
     # 5) antiguedad del ultimo sello
     try:

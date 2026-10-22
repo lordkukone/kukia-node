@@ -23,5 +23,8 @@ If Not fso.FileExists(cmd) Then
     WScript.Quit 1
 End If
 
-' 0 = ventana oculta, True = esperar a que termine
-shell.Run """" & cmd & """", 0, True
+' 0 = ventana oculta, True = esperar a que termine. El codigo de salida se
+' devuelve tal cual: si se descarta, la tarea siempre diria "correcto" aunque
+' la copia hubiera fallado.
+rc = shell.Run("""" & cmd & """", 0, True)
+WScript.Quit rc

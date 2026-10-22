@@ -185,6 +185,30 @@ El Core comprueba, EN ESTE ORDEN y dentro de `BEGIN IMMEDIATE`:
 La firma se hace en el navegador (`nacl.sign.detached`). La clave privada no
 sale de la pestaña; al cerrarla desaparece de memoria.
 
+**Probado con dinero real el 22-10-2026.** Hasta hoy `verificar_moneda.py`
+avisaba de que los 15 M KIA de las billeteras estaban atrapados "porque solo se
+puede transferir desde un nodo". **Era falso**: el endpoint ya aceptaba el
+origen KUK... Lo que fallaba era que nadie lo habia probado nunca, y el aviso
+se creyo durante dias.
+
+```bash
+python tools/prueba_gasto_billetera.py --desde kuki_fundador_nueva     --a KUKE1A0EB09FD9BF49FF41B884EDBDF6DC0E3E96F --monto 0.01
+```
+
+16 comprobaciones en verde, incluidas las que importan:
+
+- la clave privada de la billetera deriva en su propia direccion (nadie gasta el saldo de otro);
+- una firma con **otra clave** se rechaza (401) y **no toca el saldo**;
+- la transferencia buena se acepta (200) y cada asiento cuadra al importe exacto;
+- los dos asientos **se compensan** (no se crea moneda) y quedan **encadenados** con hash;
+- repetir el mismo nonce se rechaza (409).
+
+Con dinero de verdad, no contra una copia: 0,03 KIA movidos de la billetera
+fundadora a la direccion que cobra el minero. `verificar_moneda.py` ahora
+informa de lo que hay (`15.073.316 KIA en 6 billeteras: gastables firmando`)
+y solo marcaria fallo si hubiera saldo en una cuenta que no es nodo ni
+direccion, que es lo unico que nadie podria firmar.
+
 ## Seguridad del minero (20-10-2026)
 
 El minero ya no confía en el Core para decidir cuánto trabajo hacer:
@@ -483,3 +507,143 @@ Regla que queda: **nunca se añade tolerancia a una comparacion de integridad**.
 Si dos caminos dan distinto, el arreglo es que calculen igual, no aceptar la
 diferencia. La suite lo comprueba en `prueba_sellos` (5.000 asientos pequenos:
 cuadra; un asiento cambiado: se caza).
+
+## Cierre al exterior y claves fuera del alcance del sandbox (22-10-2026)
+
+Esta pasada no toca el ledger ni el codigo de la moneda: toca la maquina, que
+es por donde se entra.
+
+**1. Cortafuegos: 13 reglas que dejaban entrar desde la LAN a CUALQUIER puerto.**
+
+Estaban abiertas para `pinokio.exe`, los dos `node.exe`, `opencode.exe`, los dos
+`python.exe` sueltos, `cloudflared.exe`, `quantus-miner`, `keryxd`, `ipfs`,
+`btqd`, `bzminer` y `ravend`. Es decir: cualquier vecino de la red podia hablar
+con el RPC de un nodo de minado, con IPFS o con el escritorio de Pinokio.
+
+Se han **desactivado, no borrado** (`Disable-NetFirewallRule`): reactivarlas es
+volver a encenderlas.
+
+```powershell
+# ver que cerraria, sin tocar nada
+powershell -ExecutionPolicy Bypass -File tools\cerrar_puertos_abiertos.ps1 -EnSeco
+# cerrar / volver atras
+powershell -ExecutionPolicy Bypass -File tools\cerrar_puertos_abiertos.ps1
+powershell -ExecutionPolicy Bypass -File tools\cerrar_puertos_abiertos.ps1 -Revertir
+```
+
+No afecta a nada que funcione: el Core (8300), el panel (8301), el minero,
+ComfyUI y Ollama van por **127.0.0.1**, y el cortafuegos de Windows no filtra
+loopback. El script lo comprueba al terminar (pide `/stats` al Core y la portada
+al panel). Despues del cambio, el minero siguio pagando: 264.356 -> 264.403
+tareas en 20 s.
+
+Se dejan **a proposito**: uTorrent (necesita entrada para sembrar), los juegos
+online y sus anticheats, y todo lo de Windows.
+
+**2. La clave del sello estaba al alcance del sandbox de Codex.**
+
+La app de Codex crea un grupo local `CodexSandboxUsers` con lectura heredada
+sobre la carpeta del usuario. En KUKIA eso llegaba a 792 ficheros, entre ellos
+`coordinator\sello_key.txt` (la clave que firma los sellos),
+`admin_token.txt`, las carteras de `ledger\wallet\` y las copias de
+`backups\`. Un sandbox de agentes no tiene por que poder leer la llave de la
+red.
+
+Se corto la herencia y se quito esa concesion en `coordinator\`, `ledger\`,
+`backups\` y las carpetas `_backup_*`. Los permisos anteriores quedaron
+guardados en `backups\acl_antes_<fecha>.txt`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\proteger_claves.ps1
+powershell -ExecutionPolicy Bypass -File tools\proteger_claves.ps1 -Revertir
+```
+
+Ahora `coordinator\sello_key.txt` lo leen solo `kuki`, SYSTEM y
+Administradores. El **codigo** del proyecto se deja legible: lo que habia que
+cerrar eran las llaves.
+
+Detalle que se aprendio a base de intentos: `icacls /remove:g "*CodexSandboxUsers"`
+contesta "correcto" y **no quita nada**. Hay que dar el nombre completo
+(`KUKIPCWIN11\CodexSandboxUsers`).
+
+**3. Lo que sigue pendiente, dicho claro:**
+
+- Los dos tokens (CivitAI y HuggingFace) siguen en claro en
+  `I:\CEREBRO\CEREBRO_TECNICO.md` y sus copias en `N:`. Ese disco es de solo
+  lectura para mi: hay que rotarlos desde las webs o sacarlos de ahi a mano.
+- La cuenta `kuki` es administradora y no hay UAC de por medio: quien entre en
+  la sesion manda. Lo de arriba cierra puertas, no convierte el PC en una caja
+  fuerte.
+- `I:` sigue con reglas de cortafuegos propias de Pinokio si se reinstalan
+  (sus python de miniforge/miniconda ya estaban cerrados el 21-10).
+
+## Nodos: un nombre, una identidad; prima solo con prueba (22-10-2026)
+
+Dos agujeros que se veian en `verificar_moneda.py` y ya no:
+
+**1. El registro estaba lleno de fantasmas.** Cada vez que un minero volvia a
+registrarse (billetera nueva, o el worker pidiendo identidad) se insertaba una
+fila nueva con el mismo nombre. El registro decia **34 nodos** donde habia 20,
+y `minero_pc[cuda:0]` aparecia 4 veces.
+
+- Al registrar, si ya existe ese nombre **con la misma clave publica**, se
+  reutiliza su fila (se actualizan VRAM, tier, TOPS y direccion de cobro; no se
+  tocan tareas, reputacion, castigos ni `visto`).
+- Las filas viejas de un nombre repetido se marcan `retirado=1`. **No se
+  borran**: el ledger apunta a `nodo_id` y borrarlas dejaria pagos huerfanos.
+  Dejan de contar en `/stats`, en `/nodos` y en las verificaciones.
+- Comprobado en vivo: reinicie el Core, los mineros se volvieron a registrar y
+  **no aparecio ni una fila nueva** (20 vivos, 14 retirados, 34 en total).
+
+**2. La prima por tier se pagaba sin demostrar nada.** El pago ya usaba
+`tier_verificado`, pero con menos de 20 muestras devolvia el tier *declarado*
+"para no castigar al nuevo". Ahi cabia el fraude: declarar 24 GB, cobrar x1,6 y
+no entregar nunca trabajo grande.
+
+- Ahora **sin prueba se paga 1,0**. La prima se gana con trabajo medido por el
+  Core (reloj del servidor): 20 muestras y al menos 0,25 GFLOPS por GB
+  declarado, que es cuatro veces por debajo de lo que mide una GPU real.
+- Lo unico que pierde un minero honesto es la diferencia de sus primeros
+  minutos minando.
+- `verificar_moneda.py` ya no avisa de cualquier `tier > 1`: avisa solo de los
+  que cobran prima **sin respaldo**, y dice a cuanto se les paga de verdad.
+
+Estado despues del cambio: **20 nodos vivos, 0 duplicados**, pagos saliendo
+(ultimo 16:45:35) y `tareas_ok` subiendo. El aviso que queda es el de siempre:
+15.073.293 KIA en 6 direcciones de billetera sin ruta de gasto.
+
+### Lo que de verdad impedia gastar desde el navegador (22-10-2026)
+
+Probar el endpoint no bastaba: la billetera vive en la web y por el camino habia
+tres cosas rotas, todas silenciosas.
+
+1. **La web apuntaba a `http://127.0.0.1:8300`.** En el navegador de un
+   visitante eso es *su* ordenador: no habia red, ni saldo, ni forma de gastar
+   nada. Ahora `wallet.html` lee `core_actual.json` (el mismo mecanismo que el
+   minero: `auto`) y se queda con la direccion publica viva; el campo de arriba
+   y lo que el usuario tenga guardado mandan siempre. Probado en un navegador
+   de verdad: la pagina sola eligio el Core publico y leyo el saldo (HTTP 200).
+
+2. **El Core cerraba el paso al navegador (CORS).** Solo permitia loopback y
+   `lordkukone.github.io`; desde `kukia-network.surge.sh` el fetch se bloqueaba
+   antes de salir. Añadidos a mano los origenes del proyecto (surge, freebuff de
+   la web y del sitio), y comprobado que un origen ajeno **sigue sin permiso**:
+
+   ```
+   GET  /saldo/...  Origin: https://kukia-network.surge.sh -> ACAO correcto
+   OPTIONS /transferir (preflight)                          -> 200 + metodos
+   GET  /saldo/...  Origin: https://sitio-malicioso.example  -> sin cabecera
+   ```
+
+   No abre nada: gastar exige firma Ed25519 de la clave que deriva en la
+   direccion.
+
+3. **El tunel publicaba una direccion muerta.** El supervisor leia la salida de
+   `cloudflared` con una expresion que tambien encajaba con
+   `https://api.trycloudflare.com` (el host de la API de Cloudflare, que sale
+   en su propio log). Publico esa direccion en `core_actual.json`, Cloudflare
+   contesto **530** y la red desaparecio de internet sin que nada avisara: ni la
+   billetera ni el minero de nadie podian conectar. Ahora solo se aceptan los
+   nombres de tunel rapido (cuatro palabras con guiones) y nunca `api.`.
+   Comprobado tras reiniciar el supervisor: publica
+   `dimension-jet-salmon-extra.trycloudflare.com` y `/stats` responde 200.

@@ -1,7 +1,8 @@
 KUKIA - estado para buscadores
-Actualizado: 2026-10-22 12:57:03
+Actualizado: 2026-10-22 17:07:10
 
-El sitio responde 200 y con el SEO nuevo. IndexNow: enviado el 2026-10-21 18:17
+El sitio esta caido (HTTP 503).
+Ultimo chequeo: 2026-10-22 17:07. No se puede indexar nada.
 
 Buscadores (2026-10-22): Google sin comprobar | Bing sin comprobar
 

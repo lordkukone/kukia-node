@@ -294,29 +294,80 @@ def verificar_sellos(con, sellos: list, publica_hex: str) -> dict:
 # ============================================================
 
 def leer_sellos(ruta) -> list:
+    """Lee el fichero append-only, saltandose una linea final a medias.
+
+    DISCO LLENO (22-10-2026): una escritura que se corta deja la ultima linea
+    SIN salto de linea. Esa linea nunca llego a ser un sello, pero antes se
+    contaba como "ilegible" y `verificar_sellos` la tomaba por historial
+    alterado: el Core bloqueaba TODOS los pagos por un sello que no existio.
+    Si el fichero no acaba en salto de linea y esa ultima linea no parsea, se
+    ignora. Cualquier otra linea ilegible sigue siendo un problema real.
+    """
     ruta = Path(ruta)
     if not ruta.exists():
         return []
+    crudo = ruta.read_text(encoding="utf-8")
+    sin_cerrar = bool(crudo) and not crudo.endswith("\n")
+    lineas = crudo.splitlines()
     out = []
-    for n, linea in enumerate(ruta.read_text(encoding="utf-8").splitlines(), 1):
+    for n, linea in enumerate(lineas, 1):
         linea = linea.strip()
         if not linea:
             continue
         try:
             out.append(json.loads(linea))
         except Exception:
+            if sin_cerrar and n == len(lineas):
+                continue        # resto de una escritura cortada: no es un sello
             out.append({"v": -1, "hasta": 0, "error": f"linea {n} ilegible"})
     return out
 
 
 def anadir_sello(ruta, sello: dict) -> None:
-    """Anade un sello al final, con flush a disco (no se pierde si se corta)."""
+    """Anade un sello al final, con flush a disco (no se pierde si se corta).
+
+    DISCO LLENO (22-10-2026): antes se escribia la linea de una vez y, si el
+    disco se llenaba a mitad, quedaba una linea CORTADA que el siguiente
+    arranque leia como historial alterado (pagos bloqueados). Ahora:
+      - si el fichero no acaba en salto de linea, se mira ese resto: si es un
+        sello valido solo se cierra la linea; si es una escritura cortada se
+        tira (nunca fue un sello) para que no cuente como historial alterado;
+      - si la escritura falla a medias, se recorta el fichero al tamano que
+        tenia: o entra el sello entero, o no entra nada.
+    """
     ruta = Path(ruta)
     ruta.parent.mkdir(parents=True, exist_ok=True)
-    with ruta.open("a", encoding="utf-8", newline="\n") as f:
-        f.write(canonico(sello) + "\n")
-        f.flush()
-        os.fsync(f.fileno())
+    tam = ruta.stat().st_size if ruta.exists() else 0
+    prefijo = ""
+    if tam > 0:
+        with ruta.open("rb") as f:
+            crudo = f.read()
+        if not crudo.endswith(b"\n"):
+            corte = crudo.rfind(b"\n") + 1
+            try:
+                json.loads(crudo[corte:].decode("utf-8"))
+                prefijo = "\n"          # sello bueno, solo le faltaba el salto
+            except Exception:
+                with ruta.open("r+b") as f:
+                    f.truncate(corte)
+                    f.flush()
+                    os.fsync(f.fileno())
+                tam = corte
+    texto = prefijo + canonico(sello) + "\n"
+    try:
+        with ruta.open("a+b") as f:
+            f.write(texto.encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        try:
+            with ruta.open("r+b") as f:
+                f.truncate(tam)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception:
+            pass
+        raise
 
 
 # ============================================================

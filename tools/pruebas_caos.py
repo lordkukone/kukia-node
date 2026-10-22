@@ -17,6 +17,11 @@ Aqui se ataca lo que solo rompe cuando pasa a la vez o cuando se corta la luz:
                                rutas con ../ y un cuerpo gigante. Ni un 500.
   E. REPLAY TRAS EL CORTE      El nonce de una transferencia ya cobrada sigue
                                bloqueado despues del reinicio.
+  F. HOST                      El tunel de Cloudflare entra; lo ajeno no.
+  G. DISCO LLENO               SQLite responde "database or disk is full" en
+                               mitad de la faena: ni dinero a medias, ni una
+                               tarea marcada 'ok' sin pagar, ni un sello
+                               cortado que bloquee los pagos al reiniciar.
 
 Siempre sobre una COPIA del ledger y un Core aislado en un puerto libre:
 no toca la red real.
@@ -511,6 +516,261 @@ def prueba_host(base) -> None:
             check(nombre, False, str(e)[:100])
 
 
+def _paginas(db: Path) -> int:
+    con = sqlite3.connect(str(db), timeout=20)
+    try:
+        return int(con.execute("PRAGMA page_count").fetchone()[0])
+    finally:
+        con.close()
+
+
+def _llenar_bd(db: Path, hasta_paginas: int) -> int:
+    """Llena la base hasta el tope, desde FUERA del Core.
+
+    El Core corre con `KUKIA_DB_MAX_PAGINAS` (tope de paginas), asi que en
+    cuanto el fichero llega al tope cualquier escritura suya devuelve
+    SQLITE_FULL, igual que un disco lleno de verdad. Se rellena con una tabla
+    de basura en una conexion aparte para no gastar peticiones ni tiempo.
+    """
+    con = sqlite3.connect(str(db), timeout=30)
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS relleno(id INTEGER PRIMARY KEY AUTOINCREMENT, x BLOB)")
+        blob = b"k" * 3900
+        vueltas = 0
+        while int(con.execute("PRAGMA page_count").fetchone()[0]) < hasta_paginas and vueltas < 5000:
+            con.execute("INSERT INTO relleno(x) VALUES(?)", (blob,))
+            con.commit()
+            vueltas += 1
+        return int(con.execute("PRAGMA page_count").fetchone()[0])
+    finally:
+        con.close()
+
+
+def _sellos_resisten_un_corte(tmp: Path) -> None:
+    """El fichero de sellos no puede bloquear los pagos tras un disco lleno.
+
+    Antes: una escritura cortada dejaba una linea SIN salto de linea; el
+    siguiente arranque la leia como "linea ilegible", `verificar_sellos` la
+    tomaba por historial alterado y el Core bloqueaba TODOS los pagos por un
+    sello que nunca existio.
+    """
+    sys.path.insert(0, str(HERRAMIENTAS.parent))
+    from ledger import sellos as S
+
+    fichero = tmp / "sellos_corte.jsonl"
+    s1 = {"v": 2, "hasta": 100, "asientos": 90, "suma": 10.0, "ts": 1,
+          "prev": "", "legado": None, "hash": "aa", "firma": "ff"}
+    s2 = dict(s1, hasta=200, asientos=190, prev="aa", hash="bb")
+    S.anadir_sello(fichero, s1)
+    S.anadir_sello(fichero, s2)
+    # Simula el corte: media linea escrita al final, sin salto de linea.
+    with fichero.open("a", encoding="utf-8") as f:
+        f.write('{"v": 2, "hasta": 300, "asie')
+    leidos = S.leer_sellos(fichero)
+    check("un sello cortado a medias NO cuenta como historial alterado",
+          len(leidos) == 2 and not [s for s in leidos if s.get("v") == -1],
+          f"{len(leidos)} leidos")
+    s3 = dict(s1, hasta=400, asientos=390, prev="bb", hash="cc")
+    S.anadir_sello(fichero, s3)
+    leidos = S.leer_sellos(fichero)
+    check("el sello siguiente entra sin comerse la linea cortada",
+          len(leidos) == 3 and not [s for s in leidos if s.get("v") == -1]
+          and leidos[-1].get("hasta") == 400, f"{len(leidos)} leidos")
+
+
+def prueba_disco_lleno(token: str) -> None:
+    print("\n== G. DISCO LLENO: se acaba el espacio a mitad de faena ==")
+    tmp = Path(tempfile.mkdtemp(prefix="kukia_lleno_"))
+    _sellos_resisten_un_corte(tmp)
+    proc = log = None
+    try:
+        PS.copiar_estado(tmp)
+        (tmp / "admin_token.txt").write_text(token, encoding="utf-8")
+        entorno = entorno_core(tmp, token)
+        margen = 400
+        cap = _paginas(tmp / "kukia.db") + margen
+        entorno["KUKIA_DB_MAX_PAGINAS"] = str(cap)
+        puerto = PS.puerto_libre()
+        base = f"http://127.0.0.1:{puerto}"
+        proc, log = arrancar(tmp, entorno, puerto)
+        vivo = esperar(base, proc)
+        check("el Core arranca con el disco casi lleno", vivo, f"puerto {puerto}")
+        if not vivo:
+            return
+
+        # 1. Trabajo previo con sitio: nodo, tarea y asignacion.
+        _s, _p, dir_cobro = clave_nueva()
+        nid, seed, _pub = registrar_nodo(base, {}, dir_cobro, "nodo-disco-lleno")
+        check("nodo registrado antes de llenar", bool(nid), str(nid))
+        datos = "kukia-lleno-" + secrets.token_hex(8)
+        rt = requests.post(f"{base}/tareas/crear", headers={"X-Admin-Token": token},
+                           timeout=30, json={"tipo": "checksum", "params": {"data": datos},
+                                             "cola": "A", "prioridad": 1e9,
+                                             "campana": "pruebas-lleno"})
+        tid = (rt.json() or {}).get("tarea_id") if rt.status_code == 200 else None
+        check("tarea creada antes de llenar", bool(tid), rt.text[:120])
+        tarea = {}
+        if nid and tid:
+            con = sqlite3.connect(str(tmp / "kukia.db"), timeout=20)
+            con.execute("UPDATE nodos SET tareas_ok=1 WHERE id=?", (nid,))
+            con.commit()
+            con.close()
+            ts = int(time.time())
+            pend = requests.get(f"{base}/tareas/pendiente", timeout=60, params={
+                "nodo_id": nid, "colas": "A", "ts": ts, "solo_primaria": 1,
+                "firma": PS.firmar(seed, f"pendiente:{nid}:{ts}")}).json()
+            tarea = pend.get("tarea") or {}
+            check("tarea asignada antes de llenar", tarea.get("id") == tid,
+                  str(tarea.get("id"))[:12])
+
+        # 2. Disco lleno de verdad (para el Core).
+        paginas = _llenar_bd(tmp / "kukia.db", cap)
+        print(f"   base llenada hasta {paginas} paginas (tope {cap})")
+        r = requests.get(f"{base}/stats", timeout=30)
+        check("con el disco lleno el Core sigue sirviendo lecturas (/stats 200)",
+              r.status_code == 200, f"{r.status_code}")
+
+        # 3. Transferencias contra el disco lleno.
+        mejor = PS.elegir_cartera(base)
+        if not mejor or mejor[0] <= 1.0:
+            check("hay billetera con saldo para la prueba", False, "ninguna")
+            return
+        saldo0, de, wseed, wpub, _f = mejor
+        _s2, _p2, destino = clave_nueva()
+        antes = estado_bd(tmp)
+        codigos, nonces = [], []
+        for i in range(40):
+            n = secrets.token_hex(16)
+            nonces.append(n)
+            codigos.append(transferir(base, de, destino, 1.0, n, wseed, wpub).status_code)
+            if codigos[-1] == 507:
+                break
+        ok = [c for c in codigos if c == 200]
+        llenos = [c for c in codigos if c == 507]
+        check("sin espacio nada devuelve 500 (200 mientras cabe, 507 al llenarse)",
+              all(c in (200, 507) for c in codigos), f"codigos={codigos}")
+        check("SQLite llega a decir 'disco lleno' (el escenario se probo de verdad)",
+              bool(llenos), f"{len(llenos)} respuestas 507 de {len(codigos)}")
+        if llenos:
+            r = transferir(base, de, destino, 1.0, secrets.token_hex(16), wseed, wpub)
+            check("el 507 lo dice claro (menciona el espacio) y no miente",
+                  r.status_code == 507 and "espacio" in r.text.lower(),
+                  f"{r.status_code} {r.text[:120]}")
+
+        # 4. Cobrar una tarea con el disco lleno.
+        estado_pago = None
+        pago_kuki = 0.0
+        if tarea.get("id") == tid:
+            metrica = hashlib.sha256(datos.encode()).hexdigest()
+            firma = PS.firmar(seed, f"{tid}:{metrica}")
+            r = requests.post(f"{base}/tareas/resultado", timeout=180, params={
+                "tid": tid, "nodo_id": nid, "metrica": metrica, "firma": firma,
+                "device": "cpu", "duracion_ms": 5.0})
+            estado_pago = r.status_code
+            if r.status_code == 200:
+                try:
+                    pago_kuki = float((r.json() or {}).get("kuki") or 0.0)
+                except Exception:
+                    pago_kuki = 0.0
+            check("un pago sin espacio no devuelve 500 (507 como mucho)",
+                  r.status_code != 500, f"{r.status_code} {r.text[:120]}")
+            con = sqlite3.connect(str(tmp / "kukia.db"), timeout=20)
+            try:
+                filas = con.execute("SELECT COUNT(*) FROM ledger WHERE tarea_id=?",
+                                    (tid,)).fetchone()[0]
+                est = con.execute("SELECT estado FROM tareas WHERE id=?",
+                                  (tid,)).fetchone()[0]
+            finally:
+                con.close()
+            if r.status_code == 507:
+                check("si no se pudo pagar, la tarea NO queda 'ok' (se puede reintentar)",
+                      est != "ok" and filas == 0, f"estado={est} asientos={filas}")
+            else:
+                check("si se pago, fue un solo asiento", filas == 1,
+                      f"estado={est} asientos={filas}")
+
+        # 5. Invariantes del ledger: ni medio asiento ni dinero suelto.
+        con = sqlite3.connect(str(tmp / "kukia.db"), timeout=20)
+        try:
+            huerfanos = []
+            for n in nonces:
+                movs = con.execute("SELECT COUNT(*) FROM ledger WHERE tarea_id=?",
+                                   (f"tx-{n[:12]}",)).fetchone()[0]
+                cobrada = con.execute("SELECT COUNT(*) FROM transferencias WHERE nonce=?",
+                                      (n,)).fetchone()[0]
+                if movs not in (0, 2) or (movs == 2) != (cobrada == 1):
+                    huerfanos.append((n[:8], movs, cobrada))
+        finally:
+            con.close()
+        check("cero medios asientos con el disco lleno", not huerfanos, str(huerfanos[:4]))
+        e = estado_bd(tmp)
+        check("suministro = suma de saldos (no aparece ni se evapora dinero)",
+              abs(e["supply"] - e["suma_saldos"]) < 1e-3,
+              f"ledger={e['supply']:.6f} saldos={e['suma_saldos']:.6f}")
+        # Las transferencias NO acunan: el suministro solo puede subir por el
+        # pago del trabajo (que sale de la emision del Core), ni un centimo mas.
+        check("el suministro solo sube por el pago del trabajo (nada de dinero suelto)",
+              abs((e["supply"] - antes["supply"]) - pago_kuki) < 0.01,
+              f"{antes['supply']:.6f} -> {e['supply']:.6f}, pagado {pago_kuki:.6f}")
+        check("ninguna cuenta en negativo", e["negativos"] == 0)
+        print(f"   transferencias: {len(ok)} cobradas, {len(llenos)} rechazadas por espacio;"
+              f" pago de tarea: {estado_pago}")
+
+        # 6. Con espacio otra vez: el historial sigue bien y todo se reintenta.
+        matar(proc)
+        try:
+            log.close()
+        except Exception:
+            pass
+        entorno2 = entorno_core(tmp, token)
+        puerto = PS.puerto_libre()
+        base = f"http://127.0.0.1:{puerto}"
+        proc, log = arrancar(tmp, entorno2, puerto)
+        vivo = esperar(base, proc)
+        check("el Core rearranca con espacio y el historial lleno", vivo, f"puerto {puerto}")
+        if not vivo:
+            return
+        integ = requests.get(f"{base}/ledger/verificar", timeout=240).json()
+        check("la cadena sigue intacta tras el disco lleno", integ.get("cadena_ok") is True,
+              str(integ.get("ids_alterados"))[:160])
+        completo = requests.get(f"{base}/ledger/integridad", timeout=240).json()
+        check("los sellos cuadran y los pagos NO quedan bloqueados",
+              completo.get("sellos_ok") is True and completo.get("pagos_bloqueados") is False,
+              str(completo.get("problemas"))[:200])
+        rechazadas = [n for n, c in zip(nonces, codigos) if c == 507]
+        if rechazadas:
+            r = transferir(base, de, destino, 1.0, rechazadas[0], wseed, wpub)
+            check("una transferencia rechazada por espacio se puede reintentar",
+                  r.status_code == 200, r.text[:120])
+        if estado_pago == 507 and tarea.get("id") == tid:
+            metrica = hashlib.sha256(datos.encode()).hexdigest()
+            r = requests.post(f"{base}/tareas/resultado", timeout=240, params={
+                "tid": tid, "nodo_id": nid, "metrica": metrica,
+                "firma": PS.firmar(seed, f"{tid}:{metrica}"),
+                "device": "cpu", "duracion_ms": 5.0})
+            check("la tarea que no cobro se paga ahora (una sola vez)",
+                  r.status_code == 200 and (r.json() or {}).get("ok") is True,
+                  f"{r.status_code} {r.text[:120]}")
+            con = sqlite3.connect(str(tmp / "kukia.db"), timeout=20)
+            try:
+                filas = con.execute(
+                    "SELECT COUNT(*) FROM ledger WHERE tarea_id=? AND motivo LIKE 'trabajo verificado%'",
+                    (tid,)).fetchone()[0]
+                est = con.execute("SELECT estado FROM tareas WHERE id=?",
+                                  (tid,)).fetchone()[0]
+            finally:
+                con.close()
+            check("un solo asiento de pago y la tarea en 'ok'",
+                  filas == 1 and est == "ok", f"asientos={filas} estado={est}")
+    finally:
+        matar(proc) if proc is not None else None
+        try:
+            log.close()
+        except Exception:
+            pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dejar", action="store_true", help="no borrar la carpeta temporal")
@@ -546,6 +806,7 @@ def main() -> int:
         proc, log, puerto, base = prueba_corte(base, tmp, entorno, puerto, proc, log, admin)
         prueba_basura(base, admin)
         prueba_host(base)
+        prueba_disco_lleno(token)
 
         matar(proc)
         try:

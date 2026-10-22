@@ -246,7 +246,7 @@ cd ledger && python kukia_wallet.py nodo_fundador
 
 ```bash
 python tools/pruebas_seguridad.py       # 101 pruebas sobre una COPIA del ledger
-python tools/pruebas_caos.py            # 33 de caos: doble gasto, kill -9, basura
+python tools/pruebas_caos.py            # 57 de caos: doble gasto, kill -9, disco lleno, basura
 python tools/backup_ledger.py           # copia verificada en backups/
 python tools/probar_restauracion.py     # arranca un Core sobre la ultima copia
 python tools/prueba_failover_negativas.py  # la replica se NIEGA: ausente, vieja, rota, otra clave, bifurcada

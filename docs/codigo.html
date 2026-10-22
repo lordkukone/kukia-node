@@ -87,7 +87,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>4ca003ac713733059fb618d568f68a0656fa8a9c9d22b17853e40a879623a033</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>e4b64809b77b06ea30dbbb7198ad32195fd326822c97facda83bb53818550899</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -308,6 +308,24 @@ _extra = [h.strip().lower() for h in (os.environ.get(&quot;KUKIA_HOSTS&quot;, &q
 # Se puede desactivar con KUKIA_VERIF_GPU=0.
 USAR_GPU_VERIF = os.environ.get(&quot;KUKIA_VERIF_GPU&quot;, &quot;1&quot;) != &quot;0&quot;
 HOSTS_PERMITIDOS = {&quot;127.0.0.1&quot;, &quot;localhost&quot;, &quot;::1&quot;, &quot;0.0.0.0&quot;} | set(_extra)
+# ENSAYO DE FAILOVER 2026-10-22: el Core solo aceptaba loopback + KUKIA_HOSTS,
+# asi que al arrancar con la replica (o con un tunel nuevo) TODO lo que llegaba
+# por el tunel publico devolvia 403 &quot;Host no permitido&quot; y la red parecia caida
+# aunque estuviera sirviendo. Ahora se aceptan los dominios de los tuneles de
+# Cloudflare por SUFIJO, que es la puerta publica documentada del proyecto.
+# No abre un agujero: esos nombres resuelven en Cloudflare y solo llegan aqui a
+# traves de NUESTRO tunel; no se pueden apuntar a 127.0.0.1 como el DNS
+# rebinding que corta esta guardia. Se puede vaciar con KUKIA_HOSTS_SUFIJOS=&quot;&quot;.
+SUFIJOS_HOST_PERMITIDOS = tuple(
+    s.strip().lower().lstrip(&quot;.&quot;)
+    for s in (os.environ.get(&quot;KUKIA_HOSTS_SUFIJOS&quot;,
+                             &quot;trycloudflare.com,cfargotunnel.com&quot;) or &quot;&quot;).split(&quot;,&quot;)
+    if s.strip())
+
+def host_permitido(host: str) -&gt; bool:
+    if host in HOSTS_PERMITIDOS:
+        return True
+    return any(host == s or host.endswith(&quot;.&quot; + s) for s in SUFIJOS_HOST_PERMITIDOS)
 
 # AUDITORIA 2026-10-19: la billetera web consulta el saldo desde el navegador.
 # Antes el guardia solo aceptaba el Origin con el puerto DEL CORE (8300), asi
@@ -373,6 +391,17 @@ class _ConSegura:
                     # Un escritor puede tardar (archivado en lote); esperar en
                     # vez de devolver 500 por &quot;database is locked&quot;.
                     conexion.execute(&quot;PRAGMA busy_timeout=30000&quot;)
+                    # SOLO PRUEBAS (tools/pruebas_caos.py, seccion DISCO LLENO):
+                    # pone un tope de paginas a la base para simular un disco
+                    # lleno sin llenar el disco. SQLite responde SQLITE_FULL
+                    # (&quot;database or disk is full&quot;) al pasar del tope. Sin la
+                    # variable no hace nada.
+                    tope = (os.environ.get(&quot;KUKIA_DB_MAX_PAGINAS&quot;) or &quot;&quot;).strip()
+                    if tope:
+                        try:
+                            conexion.execute(f&quot;PRAGMA max_page_count={int(tope)}&quot;)
+                        except Exception as e:
+                            print(f&quot;[KUKIA] AVISO: tope de paginas ignorado ({e})&quot;, flush=True)
                     _local_bd.con = conexion
         return conexion
 
@@ -411,6 +440,25 @@ class _ConSegura:
 con = _ConSegura(DB)
 con.row_factory = sqlite3.Row
 
+def _disco_lleno(e) -&gt; bool:
+    &quot;&quot;&quot;¿La escritura fallo porque no queda espacio? (SQLITE_FULL / disco lleno).
+
+    Distinguirlo importa: &quot;no habia espacio&quot; no es un fallo interno del Core.
+    El minero o la billetera tienen que saber que NO se ha movido nada y que
+    pueden reintentar cuando haya sitio, no que el ledger este roto.
+    &quot;&quot;&quot;
+    t = str(e).lower()
+    return (&quot;disk is full&quot; in t or &quot;database or disk is full&quot; in t
+            or &quot;sqlite_full&quot; in t)
+
+
+def _error_escritura(e, defecto=&quot;error interno escribiendo&quot;):
+    if _disco_lleno(e):
+        return HTTPException(507, &quot;sin espacio en disco: no se ha escrito nada, &quot;
+                                  &quot;reintentar cuando haya espacio&quot;)
+    return HTTPException(500, defecto)
+
+
 @contextmanager
 def _escritura():
     &quot;&quot;&quot;Escritura corta y atomica: lock + BEGIN IMMEDIATE + commit.
@@ -441,12 +489,12 @@ def _escritura():
             except Exception:
                 pass
             raise
-        except Exception:
+        except Exception as e:
             try:
                 con.execute(&quot;ROLLBACK&quot;)
             except Exception:
                 pass
-            raise HTTPException(500, &quot;error interno escribiendo&quot;)
+            raise _error_escritura(e)
 
 def schema():
     con.execute(&quot;CREATE TABLE IF NOT EXISTS nodos(id TEXT PRIMARY KEY, nombre TEXT, vram_gb INT, &quot;
@@ -503,6 +551,13 @@ def schema():
         # decide si la prima por tier (x1,3 / x1,6) se paga o se anula.
         &quot;ALTER TABLE nodos ADD COLUMN gflops_medido REAL DEFAULT 0&quot;,
         &quot;ALTER TABLE nodos ADD COLUMN potencia_muestras INT DEFAULT 0&quot;,
+        # UN NOMBRE, UNA IDENTIDAD (22-10-2026): cada vez que un minero se
+        # registraba otra vez (billetera nueva, o el worker pidiendo identidad)
+        # se insertaba una fila nueva con el mismo nombre. En un dia habia 8
+        # nombres repetidos y el registro decia 34 nodos donde habia 20.
+        # Los sobrantes se marcan retirado=1: NO se borran (sus tareas y sus
+        # pagos siguen en el ledger), solo dejan de contar y de salir en listas.
+        &quot;ALTER TABLE nodos ADD COLUMN retirado INT DEFAULT 0&quot;,
     ):
         try:
             con.execute(_sql)
@@ -645,6 +700,47 @@ _n_podados = podar_nodos()
 if _n_podados:
     print(f&quot;[KUKIA] podados {_n_podados} nodos que nunca trabajaron&quot;, flush=True)
 
+
+def retirar_nodos_duplicados(con) -&gt; int:
+    &quot;&quot;&quot;Deja UNA identidad viva por nombre; las demas quedan retiradas.
+
+    No borra: la fila vieja conserva sus tareas, su reputacion y sus pagos (el
+    ledger apunta a `nodo_id`, borrarla dejaria asientos huerfanos). Se queda
+    la que mas ha trabajado y, a igualdad, la vista mas recientemente.
+
+    &quot;&quot;&quot;
+    try:
+        filas = con.execute(
+            &quot;SELECT id, nombre FROM nodos WHERE COALESCE(retirado,0)=0 &quot;
+            &quot;ORDER BY COALESCE(tareas_ok,0) DESC, COALESCE(visto,0) DESC, creado ASC&quot;
+        ).fetchall()
+    except Exception:
+        return 0
+    vistos = set()
+    sobran = []
+    for f in filas:
+        nombre = (f[&quot;nombre&quot;] or &quot;&quot;)
+        if nombre in vistos:
+            sobran.append(f[&quot;id&quot;])
+        else:
+            vistos.add(nombre)
+    if not sobran:
+        return 0
+    try:
+        with _escritura():
+            for nid in sobran:
+                con.execute(&quot;UPDATE nodos SET retirado=1 WHERE id=?&quot;, (nid,))
+    except Exception as e:
+        print(f&quot;[KUKIA] no se pudieron retirar nodos duplicados: {e}&quot;, flush=True)
+        return 0
+    return len(sobran)
+
+
+_n_retirados = retirar_nodos_duplicados(con)
+if _n_retirados:
+    print(f&quot;[KUKIA] retirados {_n_retirados} nodos con nombre repetido &quot;
+          f&quot;(un nombre, una identidad viva; no se borra nada)&quot;, flush=True)
+
 def direccion_valida(d: str) -&gt; bool:
     &quot;&quot;&quot;Formato de direccion KUKIA: KUK + 38 hex (41 caracteres).&quot;&quot;&quot;
     d = (d or &quot;&quot;).strip().upper()
@@ -780,10 +876,16 @@ def _asiento(tarea_id, nodo_id, kuki, motivo):
                 &quot;VALUES(?,?,?,?,?,?,?)&quot;, (tarea_id, nodo_id, kuki, motivo, ts, prev, h))
     # Totales materializados en la MISMA transaccion que el asiento: si el
     # asiento se revierte, el saldo tambien. Se reconstruyen al arrancar.
-    con.execute(&quot;INSERT INTO saldos_cuenta(cuenta,total) VALUES(?,?) &quot;
+    con.execute(&quot;INSERT INTO saldos_cuenta(cuenta,total) VALUES(?,?)&quot;
                 &quot;ON CONFLICT(cuenta) DO UPDATE SET total=total+excluded.total&quot;,
                 (nodo_id, float(kuki)))
-    con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;supply_emitido&#x27;,?) &quot;
+    # CAOS 2026-10-22: sumar y restar deja residuos de coma flotante (-4,6e-13)
+    # y la billetera los pintaba como &quot;-0.0 KIA&quot;: una cuenta parecia en deuda.
+    # No es deuda, es cero. Se limpia AQUI, en el unico camino de escritura,
+    # asi que ninguna cuenta puede volver a quedar con signo negativo.
+    con.execute(&quot;UPDATE saldos_cuenta SET total=0.0 WHERE cuenta=? &quot;
+                &quot;AND total &gt; -1e-9 AND total &lt; 1e-9&quot;, (nodo_id,))
+    con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;supply_emitido&#x27;,?)&quot;
                 &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+excluded.valor&quot;,
                 (float(kuki),))
     return h
@@ -826,14 +928,26 @@ def recalcular_resumen() -&gt; dict:
             except Exception:
                 pass
             raise
-        except Exception:
+        except Exception as e:
             try:
                 con.execute(&quot;ROLLBACK&quot;)
             except Exception:
                 pass
-            raise HTTPException(500, &quot;error reconstruyendo totales&quot;)
+            raise _error_escritura(e, &quot;error reconstruyendo totales&quot;)
 
-_RESUMEN_ARRANQUE = recalcular_resumen()
+# CON EL DISCO LLENO EL CORE TIENE QUE ARRANCAR IGUAL (22-10-2026): si aqui
+# revienta, no arranca la red entera por no poder reescribir dos totales que ya
+# eran correctos. Se sigue con los ultimos buenos y se reconstruyen al
+# siguiente arranque con sitio o con /admin/recalcular_resumen.
+try:
+    _RESUMEN_ARRANQUE = recalcular_resumen()
+except HTTPException as _e_resumen:
+    if getattr(_e_resumen, &quot;status_code&quot;, 0) != 507:
+        raise
+    _RESUMEN_ARRANQUE = {&quot;supply&quot;: None, &quot;cuentas&quot;: None,
+                         &quot;aviso&quot;: &quot;disco lleno: totales sin reconstruir&quot;}
+    print(&quot;[KUKIA] AVISO: disco lleno al arrancar; se mantienen los ultimos &quot;
+          &quot;totales buenos (se reconstruyen cuando haya espacio)&quot;, flush=True)
 
 # ============================================================
 #  INTEGRIDAD DEL HISTORIAL (sellos firmados)
@@ -1140,12 +1254,12 @@ def _nonce_nuevo(nodo_id: str, nonce: str) -&gt; bool:
         except sqlite3.IntegrityError:
             con.rollback()
             return False
-        except Exception:
+        except Exception as e:
             try:
                 con.rollback()
             except Exception:
                 pass
-            raise HTTPException(500, &quot;error interno guardando el nonce&quot;)
+            raise _error_escritura(e, &quot;error interno guardando el nonce&quot;)
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarRequest, call_next):
@@ -1192,7 +1306,7 @@ app.add_middleware(BodyLimitMiddleware)
 class HostGuardMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarRequest, call_next):
         host = (request.headers.get(&quot;host&quot;) or &quot;&quot;).split(&quot;:&quot;)[0].strip().lower()
-        if host and host not in HOSTS_PERMITIDOS:
+        if host and not host_permitido(host):
             return JSONResponse({&quot;detail&quot;: &quot;Host no permitido por el Core&quot;}, status_code=403)
         origen = (request.headers.get(&quot;origin&quot;) or &quot;&quot;).strip().lower()
         if origen and not _origen_ok(origen):
@@ -1286,7 +1400,12 @@ def tier_verificado(node) -&gt; float:
     except Exception:
         return declarado
     if muestras &lt; MIN_MUESTRAS_POTENCIA or medido &lt;= 0 or vram &lt;= 0:
-        return declarado          # sin pruebas suficientes: no se castiga
+        # SIN PRUEBAS NO HAY PRIMA (22-10-2026). Antes, hasta juntar 20 muestras
+        # se pagaba el tier declarado &quot;para no castigar&quot;, y ahi estaba el
+        # agujero: un nodo podia declarar 24 GB, cobrar x1,6 y no entregar
+        # nunca trabajo grande. Ahora la prima se GANA con trabajo medido; lo
+        # unico que se pierde es la diferencia de los primeros minutos.
+        return 1.0
     if medido &lt; GFLOPS_POR_GB_MIN * vram:
         return 1.0
     return declarado
@@ -1511,7 +1630,18 @@ def registrar(n: NodoIn, req: Request):
     if not direccion_valida(n.direccion_cobro):
         raise HTTPException(400, &quot;falta direccion_cobro: registra una billetera KUK... &quot;
                                  &quot;para poder cobrar (el pago va a la direccion, no al nodo)&quot;)
-    nid = uuid.uuid4().hex[:12]
+    # MISMA BILLETERA, MISMA FILA (22-10-2026): si este nombre ya existe con
+    # esta misma clave publica, se reutiliza su identidad en vez de crear otra.
+    # Antes cada registro insertaba una fila nueva con el mismo nombre y el
+    # registro se llenaba de &quot;minero_pc[cuda:0]&quot; repetidos.
+    nombre_nodo = n.nombre[:64]
+    previo = None
+    if pub:
+        previo = con.execute(
+            &quot;SELECT id FROM nodos WHERE nombre=? AND clave_publica=? &quot;
+            &quot;AND COALESCE(retirado,0)=0 ORDER BY COALESCE(tareas_ok,0) DESC LIMIT 1&quot;,
+            (nombre_nodo, pub)).fetchone()
+    nid = previo[&quot;id&quot;] if previo else uuid.uuid4().hex[:12]
     ip = _ip_cliente(req)
     with _escritura():   # AUDITORIA: antes escribia sin lock (500 con 2 GPUs)
         _cupo_registro(ip, pub)
@@ -1523,9 +1653,17 @@ def registrar(n: NodoIn, req: Request):
         # registrarse marcaba al nodo como activo 24 h, asi que un script podia
         # inflar los TOPS de la red (y la dificultad) sin minar ni una tarea.
         # Ahora solo cuenta cuando pide trabajo, y para eso hace falta firmar.
-        con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)&quot;,
-                    (nid, n.nombre[:64], vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
-                     pub, 1 if n.tops_estimado else 0, dir_cobro, 0.0))
+        if previo:
+            # Datos de la GPU se actualizan; tareas, reputacion, visto y
+            # castigos NO se tocan (eso es historial del nodo).
+            con.execute(&quot;UPDATE nodos SET vram_gb=?, tier=?, tops=?, tops_estimado=?, &quot;
+                        &quot;ref=?, direccion_cobro=? WHERE id=?&quot;,
+                        (vram, tier(vram), tops, 1 if n.tops_estimado else 0,
+                         n.ref[:64], dir_cobro, nid))
+        else:
+            con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)&quot;,
+                        (nid, nombre_nodo, vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
+                         pub, 1 if n.tops_estimado else 0, dir_cobro, 0.0))
     return {&quot;id&quot;: nid, &quot;tier&quot;: tier(vram), &quot;max_supply&quot;: MAX_SUPPLY, &quot;tops_registrados&quot;: tops,
             &quot;autenticado&quot;: bool(pub), &quot;direccion_cobro&quot;: dir_cobro}
 
@@ -1687,10 +1825,12 @@ def nodos(limite: int = 200, activos: int = 0):
     2 s: un DoS trivial. El total real esta en /stats (campo &#x27;nodos&#x27;).
     &quot;&quot;&quot;
     limite = max(1, min(1000, int(limite or 200)))
-    sql = &quot;SELECT * FROM nodos&quot;
+    # Los retirados (mismo nombre, identidad vieja) no salen: el registro
+    # muestra una fila por nodo de verdad.
+    sql = &quot;SELECT * FROM nodos WHERE COALESCE(retirado,0)=0&quot;
     args = []
     if activos:
-        sql += &quot; WHERE COALESCE(visto,0)&gt;=?&quot;
+        sql += &quot; AND COALESCE(visto,0)&gt;=?&quot;
         args.append(time.time() - 86400.0)
     sql += &quot; ORDER BY COALESCE(visto,0) DESC, creado DESC LIMIT ?&quot;
     args.append(limite)
@@ -1919,12 +2059,12 @@ def pendiente(nodo_id: str, excluir: str = &quot;&quot;, colas: str = &quot;&quo
             return {&quot;tarea&quot;: {&quot;id&quot;: row[&quot;id&quot;], &quot;tipo&quot;: row[&quot;tipo&quot;], &quot;params&quot;: json.loads(row[&quot;params&quot;])}}
         except HTTPException:
             raise
-        except Exception:
+        except Exception as e:
             try:
                 con.execute(&quot;ROLLBACK&quot;)
             except Exception:
                 pass
-            raise HTTPException(500, &quot;error interno asignando tarea&quot;)
+            raise _error_escritura(e, &quot;error interno asignando tarea&quot;)
 
 def _castigar_nodo(tid: str, nid: str) -&gt; float:
     &quot;&quot;&quot;Penalizacion + perdida de reputacion + bloqueo temporal de un nodo.
@@ -2273,7 +2413,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
             # el log con tipo y mensaje, sin datos de nadie.
             print(f&quot;[KUKIA Core] ERROR en el pago de {tid}: {type(e).__name__}: {e}&quot;,
                   flush=True)
-            raise HTTPException(500, &quot;error interno en el pago&quot;)
+            raise _error_escritura(e, &quot;error interno en el pago&quot;)
     return {&quot;ok&quot;: ok, &quot;kuki&quot;: kuki, &quot;esperado&quot;: esperado, &quot;pago&quot;: info_pago}
 
 @app.post(&quot;/tareas/resultado_json&quot;)
@@ -2726,7 +2866,10 @@ def stats():
         &quot;version&quot;: app.version,
         &quot;supply_emitido&quot;: sum,
         &quot;max_supply&quot;: MAX_SUPPLY,
-        &quot;nodos&quot;: con.execute(&quot;SELECT COUNT(*) c FROM nodos&quot;).fetchone()[&quot;c&quot;],
+        # Nodos VIVOS: los retirados (nombres repetidos de identidades viejas)
+        # no cuentan. Antes se contaban las filas, no los nodos.
+        &quot;nodos&quot;: con.execute(&quot;SELECT COUNT(*) c FROM nodos &quot;
+                             &quot;WHERE COALESCE(retirado,0)=0&quot;).fetchone()[&quot;c&quot;],
         # Historico real (sobrevive al archivado); &#x27;en_tabla&#x27; son las que quedan
         # guardadas por si se quiere auditar el detalle.
         &quot;tareas_ok&quot;: total_ok,
@@ -2981,13 +3124,19 @@ def saldo(direccion: str):
     s = fila[&quot;total&quot;] if fila is not None else 0.0
     # AUDITORIA 2026-10-20: REAL de SQLite deja residuos (-4,6e-13) al sumar
     # muchos asientos. Se redondea SOLO al mostrar (el ledger sigue exacto).
-    return {&quot;direccion&quot;: direccion, &quot;saldo&quot;: round(float(s or 0.0), 6)}
+    # CAOS 2026-10-22: ese residuo negativo se pintaba como &quot;-0.0 KIA&quot; y
+    # parecia una cuenta en deuda. Polvo (&lt; 1e-9) es cero, no deuda.
+    valor = float(s or 0.0)
+    if abs(valor) &lt; 1e-9:
+        valor = 0.0
+    return {&quot;direccion&quot;: direccion, &quot;saldo&quot;: round(valor, 6)}
 
 @app.get(&quot;/saldos&quot;)
 def saldos():
     &quot;&quot;&quot;Mapa publico direccion -&gt; saldo (desde los totales materializados).&quot;&quot;&quot;
     filas = con.execute(&quot;SELECT cuenta,total FROM saldos_cuenta&quot;).fetchall()
-    return {&quot;saldos&quot;: {r[&quot;cuenta&quot;]: round(float(r[&quot;total&quot;] or 0.0), 6) for r in filas},
+    return {&quot;saldos&quot;: {r[&quot;cuenta&quot;]: (0.0 if abs(float(r[&quot;total&quot;] or 0.0)) &lt; 1e-9
+                                      else round(float(r[&quot;total&quot;] or 0.0), 6)) for r in filas},
             &quot;direcciones&quot;: len(filas)}
 
 class TransferIn(BaseModel):
@@ -3101,12 +3250,12 @@ def transferir(t: TransferIn):
             except Exception:
                 pass
             raise
-        except Exception:
+        except Exception as e:
             try:
                 con.execute(&quot;ROLLBACK&quot;)
             except Exception:
                 pass
-            raise HTTPException(500, &quot;error interno en transferencia&quot;)
+            raise _error_escritura(e, &quot;error interno en transferencia&quot;)
 
 # ============================================================
 #  SERIE TEMPORAL (panel y web)
@@ -5808,29 +5957,80 @@ def verificar_sellos(con, sellos: list, publica_hex: str) -&gt; dict:
 # ============================================================
 
 def leer_sellos(ruta) -&gt; list:
+    &quot;&quot;&quot;Lee el fichero append-only, saltandose una linea final a medias.
+
+    DISCO LLENO (22-10-2026): una escritura que se corta deja la ultima linea
+    SIN salto de linea. Esa linea nunca llego a ser un sello, pero antes se
+    contaba como &quot;ilegible&quot; y `verificar_sellos` la tomaba por historial
+    alterado: el Core bloqueaba TODOS los pagos por un sello que no existio.
+    Si el fichero no acaba en salto de linea y esa ultima linea no parsea, se
+    ignora. Cualquier otra linea ilegible sigue siendo un problema real.
+    &quot;&quot;&quot;
     ruta = Path(ruta)
     if not ruta.exists():
         return []
+    crudo = ruta.read_text(encoding=&quot;utf-8&quot;)
+    sin_cerrar = bool(crudo) and not crudo.endswith(&quot;\n&quot;)
+    lineas = crudo.splitlines()
     out = []
-    for n, linea in enumerate(ruta.read_text(encoding=&quot;utf-8&quot;).splitlines(), 1):
+    for n, linea in enumerate(lineas, 1):
         linea = linea.strip()
         if not linea:
             continue
         try:
             out.append(json.loads(linea))
         except Exception:
+            if sin_cerrar and n == len(lineas):
+                continue        # resto de una escritura cortada: no es un sello
             out.append({&quot;v&quot;: -1, &quot;hasta&quot;: 0, &quot;error&quot;: f&quot;linea {n} ilegible&quot;})
     return out
 
 
 def anadir_sello(ruta, sello: dict) -&gt; None:
-    &quot;&quot;&quot;Anade un sello al final, con flush a disco (no se pierde si se corta).&quot;&quot;&quot;
+    &quot;&quot;&quot;Anade un sello al final, con flush a disco (no se pierde si se corta).
+
+    DISCO LLENO (22-10-2026): antes se escribia la linea de una vez y, si el
+    disco se llenaba a mitad, quedaba una linea CORTADA que el siguiente
+    arranque leia como historial alterado (pagos bloqueados). Ahora:
+      - si el fichero no acaba en salto de linea, se mira ese resto: si es un
+        sello valido solo se cierra la linea; si es una escritura cortada se
+        tira (nunca fue un sello) para que no cuente como historial alterado;
+      - si la escritura falla a medias, se recorta el fichero al tamano que
+        tenia: o entra el sello entero, o no entra nada.
+    &quot;&quot;&quot;
     ruta = Path(ruta)
     ruta.parent.mkdir(parents=True, exist_ok=True)
-    with ruta.open(&quot;a&quot;, encoding=&quot;utf-8&quot;, newline=&quot;\n&quot;) as f:
-        f.write(canonico(sello) + &quot;\n&quot;)
-        f.flush()
-        os.fsync(f.fileno())
+    tam = ruta.stat().st_size if ruta.exists() else 0
+    prefijo = &quot;&quot;
+    if tam &gt; 0:
+        with ruta.open(&quot;rb&quot;) as f:
+            crudo = f.read()
+        if not crudo.endswith(b&quot;\n&quot;):
+            corte = crudo.rfind(b&quot;\n&quot;) + 1
+            try:
+                json.loads(crudo[corte:].decode(&quot;utf-8&quot;))
+                prefijo = &quot;\n&quot;          # sello bueno, solo le faltaba el salto
+            except Exception:
+                with ruta.open(&quot;r+b&quot;) as f:
+                    f.truncate(corte)
+                    f.flush()
+                    os.fsync(f.fileno())
+                tam = corte
+    texto = prefijo + canonico(sello) + &quot;\n&quot;
+    try:
+        with ruta.open(&quot;a+b&quot;) as f:
+            f.write(texto.encode(&quot;utf-8&quot;))
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception:
+        try:
+            with ruta.open(&quot;r+b&quot;) as f:
+                f.truncate(tam)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception:
+            pass
+        raise
 
 
 # ============================================================
@@ -10597,7 +10797,13 @@ def main() -&gt; int:
     # (cada uno comprueba antes), pero si el minero se cae, los tres lo
     # relanzan a la vez y acabas con tres mineros peleando por la misma GPU.
     if not args.una:
-        otros = _contar_procesos(&quot;tools/guardia.py&quot;, excluir_pid=os.getpid())
+        # FALLO REAL (22-10-2026): se buscaba &quot;tools/guardia.py&quot; (con barra
+        # inclinada), pero el lanzador de Inicio arranca el guardia con la ruta
+        # completa de Windows, &quot;...\KUKIA\tools\guardia.py&quot; (con barra
+        # invertida). PowerShell -like no trata la barra invertida como
+        # comodin, asi que no se veia al otro y arrancaban DOS guardias. Se
+        # busca solo el nombre del fichero: vale para las dos formas.
+        otros = _contar_procesos(&quot;guardia.py&quot;, excluir_pid=os.getpid())
         if otros &gt; 0:
             log(f&quot;ya hay {otros} guardia(s) corriendo: esta no arranca &quot;
                 f&quot;(mata la otra o usa --una para un ciclo suelto)&quot;)

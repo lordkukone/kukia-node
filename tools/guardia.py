@@ -642,7 +642,13 @@ def main() -> int:
     # (cada uno comprueba antes), pero si el minero se cae, los tres lo
     # relanzan a la vez y acabas con tres mineros peleando por la misma GPU.
     if not args.una:
-        otros = _contar_procesos("tools/guardia.py", excluir_pid=os.getpid())
+        # FALLO REAL (22-10-2026): se buscaba "tools/guardia.py" (con barra
+        # inclinada), pero el lanzador de Inicio arranca el guardia con la ruta
+        # completa de Windows, "...\KUKIA\tools\guardia.py" (con barra
+        # invertida). PowerShell -like no trata la barra invertida como
+        # comodin, asi que no se veia al otro y arrancaban DOS guardias. Se
+        # busca solo el nombre del fichero: vale para las dos formas.
+        otros = _contar_procesos("guardia.py", excluir_pid=os.getpid())
         if otros > 0:
             log(f"ya hay {otros} guardia(s) corriendo: esta no arranca "
                 f"(mata la otra o usa --una para un ciclo suelto)")

@@ -122,31 +122,89 @@ def verificar_transferencias(con):
         aviso("tabla transferencias no existe todavia")
 
 
+def _es_direccion(d: str) -> bool:
+    """KUK + 38 hex (41 caracteres), igual que `direccion_valida` del Core."""
+    d = (d or "").strip().upper()
+    return len(d) == 41 and d.startswith("KUK") and all(c in "0123456789ABCDEF" for c in d[3:])
+
+
 def verificar_gasto(con):
-    """Direcciones KUK... con saldo: no son nodos, asi que hoy no pueden firmar."""
+    """¿El saldo que hay en una billetera se puede gastar?
+
+    Hasta el 22-10-2026 aqui se avisaba de que los 15 M KIA de las billeteras
+    estaban atrapados "porque solo se puede transferir desde un nodo". Era
+    FALSO: `POST /transferir` acepta el origen KUK... siempre que presente su
+    clave publica y la firma Ed25519 del mensaje
+    `transferir:<de>:<a>:<monto>:<nonce>` — la direccion se deriva de esa clave
+    (`KUK + SHA256(pub)[:38]`), asi que nadie puede gastar el saldo de otra.
+
+    Probado con dinero real el 22-10-2026: tools/prueba_gasto_billetera.py
+    (16 comprobaciones, incluida la firma con otra clave rechazada y el nonce
+    repetido bloqueado).
+
+    Lo que SI seria un agujero: saldo en una cuenta que no es ni un nodo
+    registrado ni una direccion valida. Eso no lo puede firmar nadie.
+    """
     nodos = {r["id"] for r in con.execute("SELECT id FROM nodos")}
     filas = [dict(r) for r in con.execute(
         "SELECT nodo_id, SUM(kuki) s FROM ledger GROUP BY nodo_id HAVING s > ?", (EPS,))]
-    atrapado = round(sum(f["s"] for f in filas if f["nodo_id"] not in nodos), 4)
-    billeteras = [f for f in filas if f["nodo_id"] not in nodos]
+    atrapado = 0.0
+    billeteras = []
+    for f in filas:
+        if f["nodo_id"] in nodos:
+            continue
+        if _es_direccion(f["nodo_id"]):
+            billeteras.append(f)
+        else:
+            atrapado += float(f["s"])
+    total = round(sum(float(f["s"]) for f in billeteras), 4)
     if atrapado > 0:
-        aviso(f"{atrapado} KIA en {len(billeteras)} direcciones de billetera: no hay "
-              f"endpoint para gastar desde una direccion (solo desde un nodo)")
+        fallo(f"{round(atrapado, 4)} KIA en cuentas que no son nodo ni direccion: "
+              f"nadie puede firmar eso")
+    elif billeteras:
+        ok(f"{total} KIA en {len(billeteras)} billeteras: gastables firmando con su "
+           f"clave (/transferir), sin registrar ningun nodo")
     else:
-        ok("no hay saldo en direcciones sin ruta de gasto")
+        ok("sin saldo en direcciones de billetera")
 
 
 def verificar_nodos(con):
-    total = con.execute("SELECT COUNT(*) c FROM nodos").fetchone()["c"]
-    sin_clave = con.execute("SELECT COUNT(*) c FROM nodos WHERE COALESCE(clave_publica,'')=''").fetchone()["c"]
+    """Nodos vivos, y quien cobra prima de verdad.
+
+    Desde el 22-10-2026 el registro tiene `retirado`: cuando un nombre se
+    registraba otra vez se quedaba la fila vieja, y el registro decia 34 nodos
+    donde habia 20. Esas filas se marcan, no se borran, y aqui no cuentan.
+
+    El tier de pago ya no sale de la VRAM declarada: sale de la potencia
+    medida (`tier_verificado`). Por eso la prima solo se avisa en los nodos que
+    NO la han demostrado; avisar de todos los tier>1 era una falsa alarma.
+    """
+    vivos = "COALESCE(retirado,0)=0"
+    total = con.execute(f"SELECT COUNT(*) c FROM nodos WHERE {vivos}").fetchone()["c"]
+    sin_clave = con.execute(f"SELECT COUNT(*) c FROM nodos WHERE {vivos} "
+                            "AND COALESCE(clave_publica,'')=''").fetchone()["c"]
+    retirados = con.execute("SELECT COUNT(*) c FROM nodos WHERE COALESCE(retirado,0)=1").fetchone()["c"]
     dup = [dict(r) for r in con.execute(
-        "SELECT nombre, COUNT(*) n FROM nodos GROUP BY nombre HAVING n > 1 ORDER BY n DESC LIMIT 5")]
-    tiers = {r["tier"]: r["n"] for r in con.execute("SELECT tier, COUNT(*) n FROM nodos GROUP BY tier")}
-    ok(f"{total} nodos registrados ({sin_clave} sin clave publica)")
+        f"SELECT nombre, COUNT(*) n FROM nodos WHERE {vivos} "
+        "GROUP BY nombre HAVING n > 1 ORDER BY n DESC LIMIT 5")]
+    # GFLOPS por GB declarado: 0,25 es el liston del Core. Los que estan por
+    # debajo no cobran prima, aunque su fila diga tier 1,3.
+    sin_prueba = [dict(r) for r in con.execute(
+        f"SELECT nombre, tier, vram_gb, ROUND(COALESCE(gflops_medido,0),2) gflops, "
+        f"COALESCE(potencia_muestras,0) muestras FROM nodos WHERE {vivos} AND tier > 1 "
+        "AND (COALESCE(potencia_muestras,0) < 20 OR COALESCE(gflops_medido,0) <= 0 "
+        "OR COALESCE(gflops_medido,0) < 0.25 * COALESCE(vram_gb,0))")]
+    ok(f"{total} nodos vivos ({sin_clave} sin clave publica)"
+       + (f", {retirados} retirados por nombre repetido" if retirados else ""))
     if dup:
-        aviso(f"nombres duplicados (nodos de prueba/viejos): {dup}")
-    if any(t != 1.0 for t in tiers):
-        aviso(f"tiers con multiplicador de pago: {tiers} (vram autodeclarada)")
+        aviso(f"nombres duplicados: {dup}")
+    else:
+        ok("un nombre, una identidad viva (sin duplicados)")
+    if sin_prueba:
+        aviso(f"{len(sin_prueba)} nodo(s) con prima sin demostrar: {sin_prueba[:5]}"
+              " - se les paga tier 1,0 hasta que midan")
+    else:
+        ok("todas las primas de tier estan respaldadas por potencia medida")
 
 
 def main():

@@ -55,7 +55,16 @@ FICHERO = PUBLICO / "core_actual.json"
 CLOUDFLARED = RAIZ / "tools" / "bin" / "cloudflared.exe"
 DOMINIO = os.environ.get("KUKIA_WEB_DOMINIO", "kukia-network.surge.sh")
 LOCAL = os.environ.get("KUKIA_CORE_LOCAL", "http://127.0.0.1:8300")
-URL_RE = re.compile(r"https://[a-z0-9][a-z0-9-]*\.trycloudflare\.com")
+# FALLO REAL (22-10-2026): esta expresion aceptaba `https://api.trycloudflare.com`,
+# que aparece en el log de cloudflared como destino de su API. El supervisor se
+# creia que ese era su tunel, publicaba una direccion muerta en core_actual.json
+# y la red se quedaba inaccesible desde fuera (Cloudflare: 530) sin que nada
+# gritara. Los tuneles rapidos tienen forma de CUATRO palabras con guiones
+# (p. ej. warner-tablets-wonderful-tba) y nunca empiezan por "api.".
+URL_RE = re.compile(r"https://[a-z0-9]+(?:-[a-z0-9]+){3}\.trycloudflare\.com")
+# Por si Cloudflare cambia la forma: se acepta cualquier nombre del dominio,
+# pero NUNCA el host de la API.
+URL_LAXA = re.compile(r"https://(?!api\.)[a-z0-9][a-z0-9-]*\.trycloudflare\.com")
 # Cada cuanto se comprueba que el tunel sigue sirviendo.
 VIGILIA_SEG = float(os.environ.get("KUKIA_TUNEL_VIGILIA", "45"))
 # Cerrojo de instancia unica: dos supervisores abririan DOS tuneles y se
@@ -152,6 +161,7 @@ def lee_url(proc: subprocess.Popen, seg: float = 90.0) -> str:
 
     threading.Thread(target=bomba, daemon=True).start()
     fin = time.time() + seg
+    flojo = ""
     while time.time() < fin:
         try:
             linea = cola.get(timeout=1)
@@ -163,8 +173,12 @@ def lee_url(proc: subprocess.Popen, seg: float = 90.0) -> str:
             break
         m = URL_RE.search(linea)
         if m:
-            return m.group(0)
-    return ""
+            return m.group(0)     # la buena: cuatro palabras con guiones
+        if not flojo:
+            m2 = URL_LAXA.search(linea)
+            if m2:
+                flojo = m2.group(0)   # se guarda por si al final no hay mejor
+    return flojo
 
 
 def espera_tunel(url: str, seg: float = 120.0) -> bool:
@@ -339,7 +353,7 @@ def main(argv=None) -> int:
 
     if args.solo_publicar:
         url = (args.url or "").strip().rstrip("/")
-        if not URL_RE.fullmatch(url):
+        if not URL_LAXA.fullmatch(url):
             print("[ERROR] --url tiene que ser una URL https://algo.trycloudflare.com")
             return 2
         if not espera_tunel(url, 60):
