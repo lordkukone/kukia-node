@@ -35,7 +35,7 @@ def prueba():
         r = requests.post(f"{CORE}/tareas/resultado",
                           params={"tid": pid, "nodo_id": nodo["id"],
                                   "hash_res": esperado, "metrica": res}).json()
-        print(f"  -> tarea {pid[:8]} verificado={r['ok']} recompensa={r['kuki']} KUKI")
+        print(f"  -> tarea {pid[:8]} verificado={r['ok']} recompensa={r['kuki']} KIA")
 
     print("=== PRUEBA 4: tarea FALSA no paga ===")
     r = requests.post(f"{CORE}/tareas/crear", json={"tipo": "checksum", "params": {"data": "fake"}})
@@ -51,9 +51,9 @@ def prueba():
     print("=== PRUEBA 5: ledger ===")
     led = requests.get(f"{CORE}/ledger").json()
     for l in led[:5]:
-        print(f"  -> {l['tarea_id'][:8]} | {l['nodo_id'][:8]} | +{l['kuki']} KUKI | {l['motivo']}")
+        print(f"  -> {l['tarea_id'][:8]} | {l['nodo_id'][:8]} | +{l['kuki']} KIA | {l['motivo']}")
     st = requests.get(f"{CORE}/stats").json()
-    print(f"=== SUPPLY: {st['supply_emitido']} / 100M KUKI | nodos: {st['nodos']} | tareas OK: {st['tareas_ok']} ===")
+    print(f"=== SUPPLY: {st['supply_emitido']} / 100M KIA | nodos: {st['nodos']} | tareas OK: {st['tareas_ok']} ===")
     print("PRUEBA COMPLETA: EL SISTEMA FUNCIONA (minado verificado OK, falso rechazado OK)")
 
 if __name__ == "__main__":

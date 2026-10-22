@@ -4,6 +4,7 @@ worker/identidad_minero.json
 validator/identidad*.json
 coordinator/sello_key.txt
 coordinator/admin_token.txt
+coordinator/telegram_aviso.json
 searchconsole_cuenta.json
 searchconsole_cuenta*.json
 
@@ -27,6 +28,9 @@ tools/bin/
 
 # Logs y artefactos locales
 *.log
+logs/vigilante_servicios.json
+logs/copia_integra.json
+ESTADO_WEBS.txt
 __pycache__/
 *.pyc
 publico/.wrangler/
@@ -34,3 +38,7 @@ publico/.wrangler/
 
 # Cópia para publicar (generada por publico/desplegar_sitio.py)
 sitio_publicado/
+
+# Respaldos generados del cortafuegos (llevan rutas y nombres del PC)
+cortafuegos/respaldo_firewall_*.wfw
+cortafuegos/reglas_cerradas_*

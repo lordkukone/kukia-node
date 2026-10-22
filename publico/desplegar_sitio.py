@@ -94,7 +94,7 @@ export default {
 # Lo que NUNCA puede acabar aqui. docs/ se genera sin secretos, pero se
 # comprueba igual: un despiste en un script futuro no debe publicar una llave.
 PROHIBIDO = ("wallet/", "admin_token", "sello_key", ".db", ".log",
-             "recuperacion", "identidad")
+             "recuperacion", "identidad", "telegram")
 
 
 def comprobar(destino: Path) -> None:

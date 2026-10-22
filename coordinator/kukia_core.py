@@ -90,7 +90,7 @@ if SELLOS is not None:
         print(f"[KUKIA] AVISO: no se pudo crear la clave del sello ({_e})", flush=True)
 
 MAX_SUPPLY = 100_000_000          # techo fijo 100M
-REWARD_BASE = 10.0                # KUKI por tarea base
+REWARD_BASE = 10.0                # KIA por tarea base
 # --- Bloque genesis fundacional (una sola vez) ---
 GENESIS_DIR = "KUK77D72508BD940C9BA969B0402A3CF1F9679BE3"   # wallet fundador (Kuki)
 GENESIS_MONTO = 15_000_000.0      # 15M reservados al fundador dentro del techo de 100M

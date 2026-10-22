@@ -4,16 +4,16 @@
 
 Red descentralizada que conecta GPUs de hogar para ejecutar trabajo de IA
 real (inferencia, imagen, video, RLVR, simulacion) y recompensa el trabajo
-VERIFICADO con KUKIA Coin (KUKI).
+VERIFICADO con KUKIA Coin (KIA).
 
 ## Concepto (30 segundos)
 
 - Tu GPU libre → se registra como nodo → pide tareas → ejecuta → devuelve hash
-- KUKIA Core verifica re-ejecutando la tarea (bit a bit) → si coincide, ganas KUKI
+- KUKIA Core verifica re-ejecutando la tarea (bit a bit) → si coincide, ganas KIA
 - La moneda NO se mina quemando electricidad (PoW). Se ACUNA con trabajo util verificado (Proof-of-Compute)
 - **Sin precio hasta que la red demuestre movimiento real verificado** (decision del creador)
 
-## Como se mina KUKI (lo que hay de verdad)
+## Como se mina KIA (lo que hay de verdad)
 
 1. El Core crea la tarea con ID unico: tipo + parametros + semilla + timestamp
 2. El nodo pide trabajo firmando la peticion y ejecuta en su GPU
@@ -309,12 +309,17 @@ que la recalcula y firma. También prueba los controles del minero (nonce
 anti-replay, validación local de tareas, topes de payload y clave pública).
 Sale 0 solo si pasan las 93 comprobaciones.
 
-## Tokenomics (propuesta)
+## Tokenomics (lo que hace el codigo, no una propuesta)
 
-- Maximo: 100.000.000 KUKI (fijo)
-- Fundacional 25M · Nodos 40M · Equipo 15M · Gobernanza 10M · Liquidez 10M
-- Expansion SOLO por gobernanza con demanda real (nunca 10.000M sin respaldo)
-- Salida a precio MUY BAJO cuando la red se mueva (condiciones en whitepaper)
+- Ticker: **KIA**. Maximo: 100.000.000 KIA, fijo (`max_supply` en el Core).
+- 15.000.000 KIA fundacionales al fundador en el bloque genesis
+  (`KUK9E8B44CD7FE3AF178039453D3EEDF391EEC0CE`).
+- El resto sale por emision de trabajo verificado: 1,31 KIA/min hoy, con
+  halvings cada ~20,7 anos y fin de emision el 2150-04-13. Nunca se acuña por
+  encima del tope: se comprueba en cada pago.
+- El reparto 25M/40M/15M/10M/10M que habia aqui era una propuesta antigua y no
+  es lo que corre: el codigo no tiene esas bolsas.
+- Sin precio: ni cotiza ni se vende. Saldra cuando haya demanda real medida.
 
 ## Roadmap
 

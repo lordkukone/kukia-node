@@ -14,7 +14,7 @@
 <meta name="keywords" content="KUKIA, KIA, KUKI, GPU, computo distribuido, IA descentralizada, criptomoneda GPU, mining GPU, decentralized AI, render network, quantum compute, QPU">
 <!-- Version del HTML: se compara con version.json para que nadie se quede
      viendo una copia vieja de la web por la cache del navegador. -->
-<meta name="kukia-build" content="v1.2.1-csp">
+<meta name="kukia-build" content="v1.2.2-csp">
 <style>
 :root { --gold:#d4af37; --gold2:#f0d060; --navy:#081a3a; --navy2:#0a1f44; --blue:#12305e; --line:#27487c; --soft:#9db6dd; --text:#c3d1ea; }
 * { margin:0; padding:0; box-sizing:border-box; }
@@ -169,7 +169,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
 <body>
 
 <nav>
-  <div class="logo">KUKIA <span style="font-size:.62rem;letter-spacing:.12em;padding:.16rem .5rem;border:1px solid #00ff88;border-radius:999px;color:#00ff88;vertical-align:middle;margin-left:.35rem;">v1.0 · EN VIVO</span></div>
+  <div class="logo">KUKIA <span style="font-size:.62rem;letter-spacing:.12em;padding:.16rem .5rem;border:1px solid #00ff88;border-radius:999px;color:#00ff88;vertical-align:middle;margin-left:.35rem;">v1.0 · EN VIVO · PRUEBAS ABIERTAS</span></div>
   <ul>
     <li><a href="#como">Como funciona</a></li>
     <li><a href="#tokenomics">Tokenomics</a></li>
@@ -226,9 +226,9 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   </div>
   <p style="text-align:center;color:var(--text);max-width:760px;margin:1.6rem auto 0;line-height:1.7;font-size:.92rem;">Hoy la red ejecuta y verifica trabajo de sus propios nodos. El <strong style="color:#fff;">pago de clientes externos (depósito y facturación)</strong> es la fase 3: hasta entonces no hay precio de KIA ni forma de comprarlo. Cuando lo haya, se anunciará aquí y solo por demanda real.</p>
   <div class="stats" id="liveStats" style="margin-top:2.5rem;">
-    <div class="stat"><span class="n" id="stSupply">15.053.428</span><span class="l" id="stSupplyLabel">KIA emitidos · +—/min</span></div>
-    <div class="stat"><span class="n" id="stNodes">34</span><span class="l">Nodos registrados</span></div>
-    <div class="stat"><span class="n" id="stTasks">21.013</span><span class="l">Tareas verificadas</span></div>
+    <div class="stat"><span class="n" id="stSupply">15.085.705</span><span class="l" id="stSupplyLabel">KIA emitidos · +—/min</span></div>
+    <div class="stat"><span class="n" id="stNodes">20</span><span class="l">Nodos registrados</span></div>
+    <div class="stat"><span class="n" id="stTasks">290.323</span><span class="l">Tareas verificadas</span></div>
     <div class="stat"><span class="n" id="stQueue">—</span><span class="l">Tareas en cola</span></div>
     <div class="stat"><span class="n" id="stRate">—</span><span class="l">Tareas por minuto</span></div>
     <div class="stat"><span class="n" id="stSeal">—</span><span class="l" id="stSealLabel">Último sello firmado</span></div>
@@ -281,7 +281,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
     <div class="stat"><span class="n">0%</span><span class="l">Comision por transferencia</span></div>
   </div>
   <p style="text-align:center;color:var(--text);margin-top:2.5rem;max-width:720px;margin-left:auto;margin-right:auto;line-height:1.7;">
-    KIA sale a precio <strong style="color:#fff;">segun demanda real</strong> cuando la red tenga nodos, trabajo y clientes de verdad. Ni antes, ni despues. Mes de prueba: 4-6 semanas de validacion.
+    KIA sale a precio <strong style="color:#fff;">segun demanda real</strong> cuando la red tenga nodos, trabajo y clientes de verdad. Ni antes, ni despues. Ahora: fase de pruebas abierta, con el minado publico ya funcionando.
   </p>
 </section>
 
@@ -310,7 +310,7 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
 <section id="roadmap" class="reveal">
   <h2>Roadmap</h2>
   <div class="timeline">
-    <div class="tl-item live"><h3>v1.0 · red en vivo <span style="color:#00ff88;">— hecho (20-10-2026)</span></h3><p>Minero público con la GPU medida de verdad, verificación redundante de las tareas caras, anclas en Bitcoin de cada sello y wallet que mueve saldo. 113.000+ tareas verificadas en el ledger.</p></div>
+    <div class="tl-item live"><h3>v1.0 · red en vivo <span style="color:#00ff88;">— hecho (20-10-2026)</span></h3><p>Minero público con la GPU medida de verdad, verificación redundante de las tareas caras, anclas en Bitcoin de cada sello y wallet que mueve saldo. 290.000+ tareas verificadas en el ledger.</p></div>
     <div class="tl-item"><h3>Fase 1: primeros nodos <span style="color:#00ff88;">— hecho</span></h3><p>Reputación, tiers por VRAM y potencia demostrada: la prima se paga con trabajo verificado, no con lo que declara el minero.</p></div>
     <div class="tl-item"><h3>Fase 2: apertura pública <span style="color:#00ff88;">— hecho (20-10-2026)</span></h3><p>Minado abierto: cualquiera descarga el nodo, cobra por tarea verificada y recibe la prima de su GPU si la demuestra.</p></div>
     <div class="tl-item"><h3>Fase 3: demanda real</h3><p>Primeros clientes de cómputo con depósito. <strong style="color:#fff;">Aquí sale el precio, solo por demanda.</strong> Todavía no está: no hay mercado ni precio.</p></div>
@@ -331,10 +331,10 @@ footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-s
   <h2>Preguntas frecuentes</h2>
   <div class="faq">
     <details class="qa"><summary>Cuanto cuesta KIA?</summary><p>No hay precio todavia. Sale al mercado segun demanda real cuando la red funcione de verdad, con nodos y clientes.</p></details>
-    <details class="qa"><summary>Cuanto puedo ganar minando?</summary><p>Depende de tu GPU y del trabajo disponible. El pago por tarea es <strong>dinámico</strong>: se ajusta para agotar los 100M justo en 2150, así que hoy ronda 0,004–0,01 KIA por tarea verificada (tier por VRAM aparte). El ledger público muestra cada pago.</p></details>
+    <details class="qa"><summary>Cuanto puedo ganar minando?</summary><p>Depende de tu GPU y del trabajo disponible. El pago por tarea es <strong>dinámico</strong>: se ajusta para agotar los 100M justo en 2150, así que hoy ronda 0,015 KIA por tarea verificada (tier por VRAM aparte). El ledger público muestra cada pago.</p></details>
     <details class="qa"><summary>Necesito comprar hardware?</summary><p>No. Usas la grafica que ya tienes. Cualquier NVIDIA de 8GB en adelante sirve para empezar.</p></details>
     <details class="qa"><summary>Que diferencia a KUKIA de otras criptos de computo?</summary><p>Verificacion bit a bit, trabajo UTIL (IA real, no hashes vacios), emision honesta hasta 2150 y precio que nace de demanda real, no de especulacion.</p></details>
-    <details class="qa"><summary>Cuando puedo empezar?</summary><p>Estamos en fase de pruebas (4-6 semanas). Registrate en la lista y te avisamos cuando abramos los primeros nodos.</p></details>
+    <details class="qa"><summary>Cuando puedo empezar?</summary><p>Ya esta abierto: descarga el nodo y empieza hoy. El minado publico funciona desde el 20-10-2026 y estamos en fase de pruebas, asi que el pago por tarea y los parametros pueden cambiar. La lista de registro queda para avisos, no hace falta esperar.</p></details>
     <details class="qa"><summary>Necesito billetera para registrarme?</summary><p>No. El registro es solo la lista de espera. Cuando instales el nodo, tu billetera se crea con <strong>tu contrasena + 20 palabras unicas de recuperacion</strong>: una direccion KUK unica con criptografia Ed25519 real. Escribelas en papel: con ambas recuperas la MISMA billetera en cualquier equipo. Tu clave nunca sale de tu PC.</p></details>
     <details class="qa"><summary>Estado real y transparencia</summary><p><strong>Fase de pruebas.</strong> Codigo 100% abierto: <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">GitHub</a> + ZIP descargable. Sin auditoria de seguridad independiente todavia (declarado). Recompensas = parametros de prueba con calendario hasta 13-04-2150, no ganancias garantizadas. Precio: no existe aun. Rentabilidad: no calculable sin precio/demanda/consumo medido. <a href="whitepaper.html" style="color:var(--gold);">Leer whitepaper completo</a>.</p></details>
   </div>

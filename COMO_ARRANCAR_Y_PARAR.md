@@ -360,6 +360,52 @@ python tools/salud.py --backups D:/KUKIA_backups --json
 python tools/backup_ledger.py --destino D:/KUKIA_backups --con-claves --mantener 14
 ```
 
+### Claves fuera del disco del Core (22-10-2026)
+
+El punto 2 del informe de auditoria era que la clave del sello, el token de
+admin y las billeteras viven en el **mismo disco** que la base: si ese disco
+muere, se pierde el historial y la llave a la vez. Ahora hay copia aparte en
+`N:\CLAVES_KUKIA\<fecha>\` (disco externo WD Elements, no es el SSD del PC):
+`sello_key.txt`, `admin_token.txt` y `wallet/` completas, con `LEEME.txt`
+(como se restaura) y `MANIFIESTO.json` (bytes y sha256 de cada fichero).
+
+```bash
+python tools/copia_claves.py                            # copia a N:\CLAVES_KUKIA\<hoy>
+python tools/copia_claves.py --destino E:\               # a un USB
+python tools/copia_claves.py --verificar N:\CLAVES_KUKIA\2026-10-22   # recomprobar
+python tools/copia_claves.py --instalar                  # tarea: domingos 04:20
+python tools/copia_claves.py --quitar                    # quitar la tarea
+```
+
+Comprueba que la copia sirve de verdad: relee cada fichero y compara el
+sha256, y ademas recalcula con la clave copiada la publica del sello y la
+compara con la del PC. **No mueve ni borra el original**: el Core necesita
+`sello_key.txt` donde esta.
+
+La tarea de Windows `KUKIA copia de claves` la repite sola **los domingos a las
+04:20** (despues de `KUKIA Copia Seguridad`, a las 04:00), con `pythonw` y sin
+ventana. Si el disco N: no esta conectado, escribe en
+`logs/copia_claves.out.log` que no pudo, en vez de morir en silencio.
+
+### Las 20 palabras, en papel
+
+El otro agujero era este: las palabras solo existian cifradas dentro del JSON.
+En este PC se abren solas (DPAPI), pero en otro PC o tras reinstalar Windows
+solo valen **contrasena + 20 palabras**.
+
+```bash
+python tools/palabras_papel.py                         # hoja para imprimir
+python tools/palabras_papel.py --comprobar kuki_fundador_nueva   # prueba real
+```
+
+La hoja sale en `N:\CLAVES_KUKIA\<hoy>\PALABRAS_PARA_PAPEL.txt`, con una linea
+de puntos para escribir la contrasena a mano. **Imprimir, apuntar, y borrar el
+fichero.** `--comprobar` pide la contrasena (no se guarda), deriva la clave y
+compara la direccion: si dice OK, ese papel recupera la billetera de verdad.
+
+Sigue sin `RECUPERACION_*.txt` la mayoria (solo la del minero lo tiene); cada
+copia avisa de cuales faltan.
+
 `salud.py` comprueba Core, cadena, sellos, pagos bloqueados, si el ledger se
 esta escribiendo, disco, antiguedad del sello, emision y ultima copia.
 `backup_ledger.py` usa la API de backup de SQLite, verifica la copia y escribe
@@ -494,6 +540,51 @@ Modelo de seguridad completo y limites: [SEGURIDAD.md](SEGURIDAD.md).
 - El respaldo de lo que habia antes de la auditoria esta en
   `_backup_seguridad_20261018-2040\`.
 
+## Cortafuegos: puertos abiertos cerrados (22-10-2026)
+
+El 21/10 se cerraron al exterior 5432 (PostgreSQL) y 8069 (Odoo) y las reglas
+"Python" de Pinokio. Faltaba lo que quedaba permitiendo **cualquier puerto
+desde cualquier IP** a otros programas. Cerrado el 22/10 a las 19:52:
+
+| programa | reglas cerradas |
+|---|---|
+| `C:\tmp_btq\btq-core\btqd.exe` (nodo JSON-RPC) | 1 (UDP) |
+| `C:\tmp_btq\bzminer\...\bzminer.exe` | 1 (UDP) |
+| `C:\tmp_keryx\keryxd.exe` | 1 (UDP) |
+| `C:\program files\nodejs\node.exe` | 1 (UDP) |
+| `I:\pinokio\api\uncensored-local-studio...\node-win\node.exe` | 1 (UDP) |
+| `...\@opencode-aidesktop\opencode.exe` | 1 (UDP) |
+| `...\programs\pinokio\pinokio.exe` | 1 (UDP) |
+| `...\uv\python\cpython-3.11...\python.exe` | 1 (UDP) |
+| `...\programs\python312\python.exe` | 1 (UDP) |
+
+Las de **TCP** de esos mismos programas ya estaban desactivadas; por eso lo que
+se cerró ahora son UDP (descubrimiento en LAN). Se **deshabilitan, no se
+borran**: no se pierde ninguna regla y se pueden volver a encender.
+
+**Loopback no se ve afectado**: Core (8300), panel (8301), ComfyUI, Maestro y el
+TTS siguen en `127.0.0.1` igual que antes. Solo deja de escucharse desde la LAN.
+
+Todo apuntado en `cortafuegos\`:
+
+```text
+respaldo_firewall_20261022_1952.wfw    todo el cortafuegos de antes (520.192 B, sha256 055C0DEE...)
+reglas_cerradas_20261022_1952.json     nombre, programa, puerto y perfil de cada una
+reglas_cerradas_20261022_1952.txt      solo los nombres, para volver a encenderlas
+cerrar_puertos_abiertos.ps1            lo que se hizo (-SoloListar mira sin tocar)
+marcha_atras.ps1                       la vuelta atras
+```
+
+```cmd
+:: volver a encender EXACTAMENTE las 9 que se cerraron (lo normal)
+powershell -ExecutionPolicy Bypass -File cortafuegos\marcha_atras.ps1
+
+:: o restaurar TODO el cortafuegos tal y como estaba antes
+powershell -ExecutionPolicy Bypass -File cortafuegos\marcha_atras.ps1 -RespaldoCompleto 20261022_1952
+```
+
+Las dos piden administrador. La segunda pide escribir `SI` antes de importar.
+
 ## Sin ventanas (21-10-2026)
 
 Si el PC empieza a abrir ventanas negras de CMD o PowerShell él solo, no es el
@@ -510,17 +601,101 @@ ventana aunque el padre no tenga consola. Quedaron tres focos, ya tapados:
 | Copia semanal de seguridad | no existia | `TAREA_COPIA_SEGURIDAD_OCULTA.vbs` (oculta) |
 | Vigilante de la web | no existia | `pythonw` + tarea cada 10 min |
 
-Las dos tareas programadas y como se quitan:
+Las tareas programadas y como se quitan:
 
 ```cmd
 schtasks /Query /TN "KUKIA Vigilante Web"       :: vigila la web y avisa/empuja
+schtasks /Query /TN "KUKIA_vigilante_webs"      :: vigila las 3 webs y el Core (cada 5 min)
 schtasks /Query /TN "KUKIA Backup Ledger"       :: copia diaria a las 03:00
 schtasks /Query /TN "KUKIA Copia Seguridad"     :: copia semanal a N: (domingos)
 
 python tools\vigilante_web.py --quitar          :: quitar el vigilante
+python tools\vigilante_servicios.py --quitar    :: quitar el vigilante de webs/Core
 schtasks /Delete /TN "KUKIA Backup Ledger" /F   :: quitar la copia diaria
 schtasks /Delete /TN "KUKIA Copia Seguridad" /F :: quitar la copia semanal
 ```
+
+## Vigilante de las webs y del Core (22-10-2026)
+
+`tools/vigilante_servicios.py` mira cada 5 minutos, desde la tarea de Windows
+`KUKIA_vigilante_webs` (con `pythonw`, sin ventana; solo con sesion iniciada):
+
+| que mira | como se da por bueno |
+|---|---|
+| web de Surge | 200 y HTML con KUKIA |
+| web de Freebuff | 200 y HTML con KUKIA |
+| web de GitHub Pages | 200 y HTML con KUKIA |
+| que las tres sirvan el mismo paquete | el `kukia-node.zip.sha256` de la web es el del `docs/` |
+| Core local | `127.0.0.1:8300/stats` con `supply_emitido` |
+| Core publico | el de `core_actual.json` responde `/stats` |
+| copia de claves | la ultima de `N:\CLAVES_KUKIA` tiene **7 dias o menos** |
+| copia integra | esa copia **revalidada**: sha256 de cada fichero + la clave del sello (una vez al dia) |
+
+Avisa **solo al cambiar**: cuando algo se cae (a la segunda pasada mala
+seguida, para no dar la lata por un fallo de un segundo) y cuando vuelve.
+
+### Aviso al movil por Telegram (22-10-2026)
+
+Dos canales independientes: la notificacion de Windows y **Telegram**. Si el PC
+esta apagado o sin sesion, el toast no se ve, pero el movil suena igual.
+
+```cmd
+python tools\avisos.py --configurar   :: alta: token del bot + tu chat + prueba
+python tools\avisos.py --probar       :: mandar un mensaje de prueba
+python tools\avisos.py --estado       :: si esta configurado y con que bot
+```
+
+Alta, una sola vez:
+
+1. En Telegram, habla con **@BotFather**, manda `/newbot`, apunta el token.
+2. Manda `/start` (o cualquier cosa) a tu bot nuevo.
+3. `python tools\avisos.py --configurar`, pega el token: el script busca solo
+   tu chat, manda la prueba y guarda todo en
+   `coordinator/telegram_aviso.json` (fuera de git, solo tu usuario lo lee).
+
+Prueba de punta a punta: provoca una caida REAL del Core local (lo apunta a
+un puerto vacio), espera el aviso de caida, lo levanta y espera el de vuelta.
+Usa estado temporal, asi que el vigilante de verdad no se entera.
+
+```cmd
+python tools\prueba_avisos_reales.py                 :: escritorio + Telegram
+python tools\prueba_avisos_reales.py --sin-telegram  :: solo escritorio
+```
+
+Por que Telegram y no WhatsApp: Telegram es gratis y se configura en dos
+minutos; WhatsApp por API exige cuenta de empresa (Meta) o pagar a un
+intermediario tipo Twilio, con numero verificado y plantillas aprobadas.
+Si algun dia hace falta, en `tools/avisos.py` solo se cambia `enviar()`.
+
+```cmd
+python tools\vigilante_servicios.py                 :: bucle en primer plano (cada 5 min)
+python tools\vigilante_servicios.py --una-vez       :: una pasada, como la tarea
+python tools\vigilante_servicios.py --estado        :: ultimo estado guardado, en JSON
+python tools\vigilante_servicios.py --probar-aviso  :: ver como suena el aviso
+python tools\vigilante_servicios.py --instalar      :: crear/rehacer la tarea de Windows
+python tools\vigilante_servicios.py --quitar        :: quitar la tarea
+```
+
+El aviso de la copia de claves llega como `KUKIA: copia-claves ATRASADA` cuando
+la ultima copia de `N:\CLAVES_KUKIA` pasa de una semana (tipico: el disco
+externo estaba desconectado el domingo). Se puede apuntar a otra carpeta con
+`--copias`, util para probarlo sin tocar la de verdad.
+
+Ademas, la copia se **revalida entera una vez al dia**: no basta con que el
+`MANIFIESTO.json` este ahi, se relee cada fichero, se compara su sha256 y se
+comprueba que la clave copiada es la que firma los sellos vivos. Si un fichero
+se corrompe o alguien lo cambia en el disco externo, avisa como
+`KUKIA: copia-integra CORRUPTA` diciendo cual. Un veredicto bueno se cachea 24 h
+(`logs/copia_integra.json`); uno malo **no** se cachea y se reintenta en cada
+pasada hasta que se arregle.
+
+```cmd
+python tools\vigilante_servicios.py --verificar-copia   :: revalidar ya, sin esperar al dia
+```
+
+Salidas: `logs/vigilante_servicios.log` (historial con hora),
+`logs/vigilante_servicios.json` (estado por servicio) y `ESTADO_WEBS.txt`
+(resumen legible de la ultima pasada).
 
 Si alguna vez vuelve a aparecer una ventana, el sospechoso es un
 `subprocess.run([...])` nuevo sin `creationflags`: se busca con
