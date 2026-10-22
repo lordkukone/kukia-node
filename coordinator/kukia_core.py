@@ -889,11 +889,58 @@ def _n_sellos_meta() -> int:
     except Exception:
         return 0
 
+
+def _apartar_sellos_ajenos() -> "Path | None":
+    """Aparta el sellos.jsonl del repo cuando esta instalacion es nueva.
+
+    POR QUE (22-10-2026): el repo publica los sellos del fundador, firmados con
+    SU clave, que no se publica (ni debe). Quien clona el proyecto genera su
+    propia clave, no puede verificar esas firmas, y el Core arrancaba con
+    "EL HISTORIAL NO CUADRA" y los pagos bloqueados: se clonaba para minar y no
+    se cobraba NUNCA. Aqui se renombra el fichero (no se borra: queda como
+    evidencia) y esta instalacion empieza su propia cadena de sellos.
+
+    Solo se aparta si (a) la base no tiene sellos propios anotados Y (b) no hay
+    ni un sello en el fichero firmado con nuestra clave. En el PC del fundador
+    las dos cosas son al reves, asi que no se toca nada, ni siquiera si un dia
+    el fichero se corrompe: ahi hay que verlo, no esconderlo.
+    """
+    if SELLOS is None or not _sello_pub:
+        return None
+    if _n_sellos_meta() > 0:
+        return None
+    try:
+        sellos = SELLOS.leer_sellos(SELLOS_FILE)
+    except Exception:
+        return None
+    if not sellos or any(SELLOS.verificar_firma(s, _sello_pub)
+                         for s in sellos if isinstance(s, dict)):
+        return None
+    destino = SELLOS_FILE.with_name(SELLOS_FILE.name + ".de_otra_instalacion")
+    n = 1
+    while destino.exists():
+        destino = SELLOS_FILE.with_name(f"{SELLOS_FILE.name}.de_otra_instalacion{n}")
+        n += 1
+    try:
+        SELLOS_FILE.replace(destino)
+        return destino
+    except Exception as e:
+        print(f"[KUKIA] AVISO: no se pudo apartar {SELLOS_FILE.name}: {e}", flush=True)
+        return None
+
 def _verificar_integridad() -> dict:
     global LEDGER_ROTO
     problemas = []
     cadena = {}
     sellos = _sellos_leidos()
+    if sellos:
+        # Clon recien descargado: los sellos del repo son de otra instalacion.
+        apartado = _apartar_sellos_ajenos()
+        if apartado is not None:
+            print(f"[KUKIA] instalacion nueva: los sellos del repo son de otra "
+                  f"cadena. Apartados en {apartado.name}; esta empieza la suya.",
+                  flush=True)
+            sellos = []
     if SELLOS is None:
         problemas.append("modulo de sellos no disponible")
     else:

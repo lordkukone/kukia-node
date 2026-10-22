@@ -1,0 +1,35 @@
+# Claves privadas y billeteras: NUNCA a un repositorio.
+ledger/wallet/
+worker/identidad_minero.json
+validator/identidad*.json
+coordinator/sello_key.txt
+coordinator/admin_token.txt
+searchconsole_cuenta.json
+searchconsole_cuenta*.json
+
+# Sellos de OTRA instalacion: el Core los aparta al arrancar sobre un clon
+# (ver _apartar_sellos_ajenos en coordinator/kukia_core.py). Son del fundador,
+# no del que clona, y no deben acabar en su git status.
+coordinator/sellos.jsonl.de_otra_instalacion*
+
+# Bases de datos y copias
+*.db
+*.db-wal
+*.db-shm
+*.db.predrill_*
+*.predrill_*
+_backup*/
+backups/
+
+# Binarios que se descargan, no se versionan (53 MB)
+tools/bin/
+
+# Logs y artefactos locales
+*.log
+__pycache__/
+*.pyc
+publico/.wrangler/
+.wrangler/
+
+# Cópia para publicar (generada por publico/desplegar_sitio.py)
+sitio_publicado/

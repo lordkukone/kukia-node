@@ -1,0 +1,10 @@
+# KUKIA - dependencias del Core y del minero
+# Instalar:  python -m pip install -r requirements.txt
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+cryptography>=42
+requests>=2.31
+numpy>=1.26
+# torch es imprescindible para calcular tareas (GPU si hay CUDA, si no CPU).
+torch>=2.2

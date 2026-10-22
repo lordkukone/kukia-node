@@ -200,6 +200,44 @@ Paso a paso, con lo que se gana y como no perder la billetera, en
 Como se publica el Core al exterior (tunel, direccion estable, limite de eso y
 paso a dominio propio) en [TUNEL_ESTABLE.md](TUNEL_ESTABLE.md).
 
+## Clonar y minar (3 pasos)
+
+Requisitos: Python 3.10 o superior en el PATH y, si tienes GPU NVIDIA, los
+drivers de CUDA. Sin GPU tambien se mina, en CPU (mas lento).
+
+```bash
+git clone https://github.com/lordkukone/kukia-node.git
+cd kukia-node
+python -m pip install -r requirements.txt
+python tools/instalar_minero.py     # comprueba paquetes, GPU, disco y Core
+```
+
+Despues hay dos caminos, y solo cambia **una linea** de `core_minero.txt`:
+
+- **Minar a la red que ya existe** (lo normal; no necesitas tu propio Core).
+  Deja en `core_minero.txt` esta linea sola:
+  `auto https://kukia-network.surge.sh/core_actual.json`
+  y doble clic en `ARRANCAR_MINERO.cmd`. Con `auto`, el minero le pregunta al
+  espejo cual es la direccion viva del Core, asi que no hay que tocarla cuando
+  el tunel cambia de nombre.
+- **Montar tu propio Core** (red local, para probar o para validar). Deja la
+  linea por defecto `http://127.0.0.1:8300`, arranca el Core y luego el minero:
+
+  ```bash
+  cd coordinator && python -m uvicorn kukia_core:app --port 8300
+  # en otra ventana
+  cd worker && python kukia_worker.py minero_pc
+  ```
+
+La primera vez el minero crea tu billetera, te da la direccion de cobro y guarda
+la contrasena y las 20 palabras en `ledger/wallet/RECUPERACION_*.txt`. **Sin ese
+fichero no se recupera el saldo**: apuntalo aparte y no lo subas a ningun sitio.
+
+El Core nace con su propio historial: si clonas el repo y arrancas tu propio
+Core, los sellos publicados (que son de la cadena del fundador) se apartan solos
+a `sellos.jsonl.de_otra_instalacion` y el tuyo empieza su cadena firmada. Los
+pagos nunca quedan bloqueados por sellos de otra instalacion.
+
 ## Arranque rapido (en el PC del Core)
 
 ```bash

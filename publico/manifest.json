@@ -1,0 +1,7 @@
+{
+  "entrypoint": "relay.js",
+  "compatibilityDate": "2026-10-19",
+  "modules": [
+    { "name": "relay.js", "type": "esm", "path": "./relay.js" }
+  ]
+}
