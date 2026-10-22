@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<link rel="canonical" href="https://kukia-network.surge.sh/whitepaper.html">
+<link rel="canonical" href="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/whitepaper">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KUKIA | Whitepaper - El proyecto en claro</title>
 <meta name="description" content="Whitepaper de KUKIA: emision 100M hasta 2150, verificacion bit a bit, tiers por VRAM, sin precio artificial. Transparencia total.">
@@ -24,6 +24,63 @@ th { color:var(--gold); background:rgba(18,48,94,.5); }
 .back { display:inline-block; margin-bottom:2rem; color:var(--gold); text-decoration:none; }
 .back:hover { text-decoration:underline; }
 </style>
+<!-- kukia-seo -->
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="google-site-verification" content="9d6cb22812b81092">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="KUKIA Network">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/whitepaper">
+<meta property="og:title" content="KUKIA | Whitepaper - El proyecto en claro">
+<meta property="og:description" content="Whitepaper de KUKIA: emision 100M hasta 2150, verificacion bit a bit, tiers por VRAM, sin precio artificial. Transparencia total.">
+<meta property="og:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="KUKIA | Whitepaper - El proyecto en claro">
+<meta name="twitter:description" content="Whitepaper de KUKIA: emision 100M hasta 2150, verificacion bit a bit, tiers por VRAM, sin precio artificial. Transparencia total.">
+<meta name="twitter:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "name": "KUKIA Network",
+   "alternateName": "KUKIA",
+   "inLanguage": "es",
+   "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
+   "publisher": {
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion",
+   "name": "KUKIA Network",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg",
+    "width": 512,
+    "height": 512
+   }
+  },
+  {
+   "@type": "WebPage",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/whitepaper#pagina",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/whitepaper",
+   "name": "KUKIA | Whitepaper - El proyecto en claro",
+   "description": "Whitepaper de KUKIA: emision 100M hasta 2150, verificacion bit a bit, tiers por VRAM, sin precio artificial. Transparencia total.",
+   "inLanguage": "es",
+   "isPartOf": {
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio"
+   }
+  }
+ ]
+}
+</script>
+<!-- /kukia-seo -->
 </head>
 <body>
 <div class="wrap">
@@ -52,7 +109,7 @@ th { color:var(--gold); background:rgba(18,48,94,.5); }
 <h2>4. Recompensas (fase de prueba)</h2>
 <table>
 <tr><th>Concepto</th><th>Valor actual de prueba</th></tr>
-<tr><td>Base por tarea verificada</td><td>10 KIA</td></tr>
+<tr><td>Pago por tarea verificada</td><td>Dinamico: se ajusta para agotar los 100M en 2150. Hoy ronda 0,004-0,01 KIA segun tier (el ledger publica cada pago)</td></tr>
 <tr><td>Tier por VRAM</td><td>12GB = x1.0 | 16GB = x1.3 | 24GB = x1.6</td></tr>
 <tr><td>Bonus referido</td><td>50 KIA al completar 10 tareas</td></tr>
 <tr><td>Fraude (hash invalido)</td><td>0 KIA + perdida de reputacion</td></tr>
@@ -64,10 +121,11 @@ th { color:var(--gold); background:rgba(18,48,94,.5); }
 <li>El Core propone una tarea con parametros unicos (con seed: reproducible).</li>
 <li>El nodo la ejecuta en su GPU y devuelve el <strong>resultado exacto</strong> (no un hash propio).</li>
 <li>El Core <strong>recalcula la tarea el mismo</strong> y compara el resultado numero a numero (trustless: no se fia del minero).</li>
+<li><strong>Redundancia:</strong> las tareas caras (>= 1 GFLOP) las ejecutan DOS nodos distintos; si coinciden, el Core no recalcula. 1 de cada 10 se recalcula igualmente para detectar colusion, y 1 de cada N tareas lleva el tiempo y los FLOPs medidos por la propia GPU.</li>
 <li>Si coincide: paga al nodo y sube su reputacion. Si no: tarea rechazada, 0 KIA.</li>
 <li><strong>Anti-doble-pago:</strong> cada tarea solo se puede cobrar UNA vez (segundo intento = error 409).</li>
 <li><strong>Tope en cada pago:</strong> el pago nunca supera lo que falta hasta 100M (el ledger jamas pasa del techo).</li>
-<li><strong>Recompensa dinamica:</strong> cada pago se ajusta para agotar justo el 13-04-2150 al ritmo real de la red, dentro de bandas del halving.</li>
+<li><strong>Recompensa dinamica:</strong> cada pago se ajusta para agotar justo el 13-04-2150 al ritmo real de la red, dentro de bandas del halving. Lo que gana el ejecutor y lo que gana el verificador suman lo mismo por tarea: la duplicacion no infla la emision.</li>
 <li>Ademas: reputacion por nodo (max 5.0) y nonce por tarea.</li>
 </ul>
 

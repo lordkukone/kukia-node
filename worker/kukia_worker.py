@@ -15,22 +15,93 @@ AUDITORIA 2026-10-18:
     (antes un 429 reventaba con KeyError y solo ponia "err").
   - El resultado de difusion va como numero con toda la precision
     (float64), que es lo que el Core verifica con tolerancia relativa.
+
+AUDITORIA 2026-10-21 (por que el minero se quedaba sin minar):
+  - El Core pierde de vista un nodo (o una tarea) unos instantes y responde
+    404 "nodo no registrado". Antes eso dejaba al minero pidiendo trabajo cada
+    10 s PARA SIEMPRE con la GPU encendida (233 veces en el log). Ahora se
+    comprueba el mismo id y, si de verdad no existe, se registra otra vez.
+  - Las tareas que quedan 'ejecutando' a nombre del nodo le ocupan el cupo (4)
+    y el Core le responde "limite de tareas simultaneas" durante 30 minutos.
+    Ahora un vigia pide el reinicio del propio nodo (firmado) si lleva 2 min
+    sin cobrar con el cupo lleno, y reinicia el proceso si a los 5 min sigue
+    igual con el Core en pie.
+  - La entrega tenia timeout de 900 s: una respuesta colgada dejaba la GPU
+    parada 15 minutos. Ahora son 90 s y, si falla la red, se reintenta una vez
+    (un 409 confirma que ya estaba pagada: no hay doble pago).
+  - Cada minuto se escribe un resumen (tareas/min, KIA/min, fallos) para que
+    "esta minando" sea un dato y no una suposicion.
 """
-import hashlib, json, os, secrets, subprocess, sys, time, threading, socket, urllib.parse
+import hashlib, json, os, queue, secrets, subprocess, sys, time, threading, socket, urllib.parse
 import requests
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "ledger"))
 import kukia_wallet as WALLET
 
 # Se puede apuntar a otro Core para pruebas: KUKIA_CORE=http://127.0.0.1:8403
-CORE = (os.environ.get("KUKIA_CORE", "http://127.0.0.1:8300") or "").strip()
+#
+# La direccion del Core puede venir de tres sitios, por este orden:
+#   1. KUKIA_CORE (lo que pone ARRANCAR_MINERO.cmd), que puede ser una URL o
+#      una indireccion: "auto https://kukia-network.surge.sh/core_actual.json".
+#   2. core_minero.txt del directorio de arriba (si se lanza a mano).
+#   3. el Core de este mismo PC.
+# La indireccion existe porque el tunel publico cambia de nombre: el fichero
+# del espejo dice cual esta vivo. Ver tools/core_destino.py.
+sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+try:
+    import core_destino as _DESTINO
+except Exception as _e:  # sin el modulo se mina igual, con la linea tal cual
+    _DESTINO = None
+    print(f"[worker] AVISO: sin core_destino ({_e})", flush=True)
+
+
+def _leer_core() -> str:
+    """Primera linea util de core_minero.txt (o el Core local si no hay)."""
+    f = Path(__file__).resolve().parent.parent / "core_minero.txt"
+    try:
+        for linea in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            linea = linea.strip()
+            if linea and not linea.startswith("#"):
+                return linea
+    except Exception:
+        pass
+    return "http://127.0.0.1:8300"
+
+
+CORE_CRUDO = (os.environ.get("KUKIA_CORE", "") or "").strip() or _leer_core()
+
+
+def _resolver_core(valor: str, ttl: float = 0) -> str:
+    if _DESTINO is None:
+        return valor
+    try:
+        return _DESTINO.resolver(valor, ttl=ttl)
+    except Exception as e:
+        print(f"[worker] AVISO: no pude resolver la direccion del Core ({e}); "
+              f"uso '{valor}'", flush=True)
+        return valor
+
+
+CORE = _resolver_core(CORE_CRUDO)
 
 # AUDITORIA 2026-10-20: la entrega tenia timeout=3600. Si el Core se colgaba
 # (o tardaba en verificar una tarea enorme), el hilo de la GPU se quedaba
 # bloqueado una hora sin minar y sin liberar el trabajo. Ahora es acotado y,
 # al agotarse, se reintenta: la tarea vence sola en el Core y vuelve a la cola.
-TIMEOUT_ENTREGA = max(30.0, float(os.environ.get("KUKIA_TIMEOUT_ENTREGA", "900")))
+# 900 s era demasiado: una entrega colgada dejaba la GPU sin minar 15 minutos
+# (medido: cuda:1 a 0 tareas/min con dos tareas 'ejecutando' en el Core).
+TIMEOUT_ENTREGA = max(30.0, float(os.environ.get("KUKIA_TIMEOUT_ENTREGA", "90")))
 TIMEOUT_API = max(5.0, float(os.environ.get("KUKIA_TIMEOUT_API", "30")))
+
+# ARREGLO 2026-10-21 (el minero minaba a la mitad de su capacidad): el bucle
+# pedia trabajo, calculaba y entregaba EN SERIE. Medido en esta maquina, pedir
+# trabajo tarda ~260 ms de mediana (p90 455 ms) y calcular un checksum 0 ms, asi
+# que la GPU se pasaba el rato esperando al Core. Con un hilo que mantiene la
+# siguiente tarea ya pedida y otro que entrega, la GPU calcula sin huecos.
+# El Core permite 4 tareas en vuelo por nodo: 1 calculando + 1 en cola + hasta 2
+# entregando. Subirlo mas solo provoca "limite de tareas simultaneas".
+PROFUNDIDAD = max(1, min(2, int(os.environ.get("KUKIA_PROFUNDIDAD", "1"))))
+RESUMEN_SEG = max(10.0, float(os.environ.get("KUKIA_RESUMEN_SEG", "60")))
 
 # AUDITORIA 2026-10-20 (seguridad del minero): el worker NO confia en el Core.
 # Antes hacia int(params['n']) y range(pasos) con lo que le llegara: un Core
@@ -72,9 +143,25 @@ def _core_seguro(core: str) -> tuple:
     return True, ""
 
 def _proteger(ruta) -> None:
-    """Permisos solo para el dueno del fichero (en POSIX; Windows ya es por usuario)."""
+    """Permisos solo para el dueno del fichero.
+
+    POSIX: chmod 600. Windows: se corta la herencia con `icacls` para que otra
+    cuenta del mismo PC no pueda leer la recuperacion del minero (tiene la
+    contrasena y las 20 palabras: es la llave entera).
+    """
     try:
         os.chmod(ruta, 0o600)
+    except Exception:
+        pass
+    if os.name != "nt":
+        return
+    try:
+        usuario = os.environ.get("USERNAME") or ""
+        if usuario:
+            subprocess.run(["icacls", str(ruta), "/inheritance:r",
+                            "/grant:r", f"{usuario}:(R,W)"],
+                           capture_output=True, timeout=10,
+                           creationflags=0x08000000)
     except Exception:
         pass
 
@@ -95,11 +182,18 @@ def _gpu_stats(device):
     nvidia-smi y se cae a torch sin romper el minero.
     """
     idx = _indice_gpu(device)
+    # FALLO REAL (21-10-2026): esto se llama desde la telemetria cada 3 s y
+    # nvidia-smi es un programa de consola: sin esta bandera, Windows abria una
+    # ventana negra cada 3 s en la cara del usuario, todo el dia. Con
+    # CREATE_NO_WINDOW se ejecuta igual y no se ve nada.
+    extra = {}
+    if os.name == "nt":
+        extra["creationflags"] = 0x08000000   # CREATE_NO_WINDOW
     try:
         salida = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used",
              "--format=csv,noheader,nounits", "-i", str(idx)],
-            capture_output=True, text=True, timeout=4)
+            capture_output=True, text=True, timeout=4, **extra)
         if salida.returncode == 0 and salida.stdout.strip():
             partes = [x.strip() for x in salida.stdout.strip().splitlines()[0].split(",")]
             if len(partes) >= 2:
@@ -562,12 +656,313 @@ def _anunciar_billetera_nueva(w: dict, pwd: str) -> None:
     print("[KUKIA] Sin contrasena + palabras NO se recupera el saldo en otro PC.", flush=True)
     print("=" * 64, flush=True)
 
+# ============================================================
+#  Pipeline de minado (21-10-2026)
+# ============================================================
+_registro_lock = threading.Lock()
+
+
+def _re_registrar(ctx: dict, etiqueta: str, device: str, vram_gb: int, tops: float,
+                  pubkey: str, direccion: str, privkey: str) -> bool:
+    """Registra el nodo otra vez cuando el Core ya no lo conoce.
+
+    Antes, un 404 "nodo no registrado" dejaba al minero pidiendo trabajo cada
+    10 s PARA SIEMPRE (paso 233 veces en el log): la GPU seguia encendida y no
+    cobraba nada hasta reiniciar el proceso a mano. Ahora se vuelve a registrar
+    con la misma clave (la billetera no cambia) y sigue minando.
+    """
+    with _registro_lock:
+        try:
+            nuevo = _registrar_o_reusar(etiqueta, device, vram_gb, tops,
+                                        pubkey, direccion, privkey)
+        except Exception as e:
+            print(f"[KUKIA] {etiqueta} no pude volver a registrar el nodo: {e}", flush=True)
+            return False
+        if nuevo != ctx.get("nid"):
+            print(f"[KUKIA] {etiqueta} el Core no reconocia el nodo {ctx.get('nid')}; "
+                  f"registrado de nuevo como {nuevo}", flush=True)
+            ctx["nid"] = nuevo
+            _asegurar_cobro(nuevo, etiqueta, direccion, privkey)
+            _avisar_reinicio(nuevo, etiqueta, privkey)
+        return True
+
+
+def _hilo_pedir(ctx: dict, etiqueta: str, device: str, vram_gb: int, tops: float,
+                pubkey: str, direccion: str, privkey: str, cola, alto) -> None:
+    """Mantiene la cola de trabajo llena: la GPU nunca espera a que llegue."""
+    espera = 5.0
+    while not alto.is_set():
+        try:
+            if cola.full():
+                time.sleep(0.02)
+                continue
+            nid = ctx["nid"]
+            ts = int(time.time())
+            nonce = secrets.token_hex(16)
+            firma = WALLET.firmar(f"pendiente:{nid}:{ts}:{nonce}", privkey) if privkey else ""
+            params = {"nodo_id": nid, "ts": ts, "nonce": nonce, "firma": firma}
+            if ctx.get("solo_primaria"):
+                params["solo_primaria"] = "1"
+            rp = _get(f"{CORE}/tareas/pendiente", params=params, timeout=TIMEOUT_API)
+            if rp.status_code == 200:
+                cuerpo = rp.json() or {}
+                espera = 5.0
+                if cuerpo.get("tarea"):
+                    cola.put(cuerpo)
+                else:
+                    # Cola vacia o cupo del nodo lleno: se reintenta en seguida,
+                    # no en 3 s como antes (eso era tiempo perdido por tarea).
+                    time.sleep(0.2)
+                continue
+            detalle = (rp.text or "")[:160]
+            if rp.status_code in (401, 404) and "nodo no registrado" in detalle:
+                print(f"[KUKIA] {etiqueta} el Core ya no tiene el nodo; lo registro otra vez",
+                      flush=True)
+                if _re_registrar(ctx, etiqueta, device, vram_gb, tops,
+                                 pubkey, direccion, privkey):
+                    continue
+                time.sleep(15)
+                continue
+            if rp.status_code == 429:
+                print(f"[KUKIA] {etiqueta} limitado por el Core (429): {detalle}", flush=True)
+                time.sleep(20)
+                continue
+            print(f"[KUKIA] {etiqueta} el Core rechaza la peticion de trabajo: "
+                  f"{rp.status_code} {detalle}", flush=True)
+            if rp.status_code == 401 and not ctx.get("avisado_firma"):
+                print("[KUKIA] si el Core es anterior al 20-10-2026, actualizalo: "
+                      "el worker nuevo firma el trabajo con nonce.", flush=True)
+                ctx["avisado_firma"] = True
+            time.sleep(espera)
+            espera = min(60.0, espera * 1.6)
+        except Exception as e:
+            print(f"[KUKIA] {etiqueta} pidiendo trabajo: {e} (reintento en {espera:.0f} s)",
+                  flush=True)
+            time.sleep(espera)
+            espera = min(60.0, espera * 1.6)
+
+
+def _hilo_entregar(ctx: dict, etiqueta: str, device: str, privkey: str, cola,
+                   cuenta: dict, cuenta_lock, alto) -> None:
+    """Entrega los resultados mientras la GPU ya calcula el siguiente."""
+    while not alto.is_set():
+        try:
+            trabajo = cola.get(timeout=5)
+        except queue.Empty:
+            continue
+        pid, tipo, metrica, duracion_ms, es_replica, telemetria = trabajo
+        hecho = False
+        for intento in (1, 2):
+            nid = ctx["nid"]
+            firma = WALLET.firmar(f"{pid}:{metrica}", privkey) if privkey else ""
+            try:
+                if es_replica:
+                    r = _post(f"{CORE}/tareas/replica",
+                              json={"tid": pid, "nodo_id": nid, "metrica": metrica,
+                                    "firma": firma, "device": str(device),
+                                    "duracion_ms": duracion_ms},
+                              timeout=TIMEOUT_ENTREGA)
+                else:
+                    entrega = {"tid": pid, "nodo_id": nid, "metrica": metrica,
+                               "firma": firma, "device": str(device),
+                               "duracion_ms": duracion_ms, "telemetria": telemetria}
+                    r = _post(f"{CORE}/tareas/resultado_json", json=entrega,
+                              timeout=TIMEOUT_ENTREGA)
+                    if r.status_code == 404 and "Not Found" in (r.text or ""):
+                        r = _post(f"{CORE}/tareas/resultado", params=entrega,
+                                  timeout=TIMEOUT_ENTREGA)
+            except requests.exceptions.RequestException as e:
+                # Un timeout NO significa que el Core no lo haya cobrado. Se
+                # reintenta UNA vez: si ya estaba pagada, el segundo intento
+                # devuelve 409 y no hay doble pago.
+                if intento == 1:
+                    print(f"[KUKIA] {etiqueta} entrega de {pid[:8]} sin respuesta "
+                          f"({type(e).__name__}); reintento", flush=True)
+                    continue
+                print(f"[KUKIA] {etiqueta} entrega de {pid[:8]} perdida: {e}", flush=True)
+                with cuenta_lock:
+                    cuenta["err"] += 1
+                hecho = True
+                break
+            if es_replica:
+                if r.status_code == 200:
+                    print(f"[KUKIA] {etiqueta} replica {pid[:8]} {tipo} verificada "
+                          f"({duracion_ms:.0f} ms)", flush=True)
+                elif r.status_code == 404:
+                    # El Core no tiene la ruta de replicas. Se deja de pedirlas
+                    # (solo_primaria): si no, cada oferta ocupa un turno del
+                    # nodo hasta que caduca y el minero se queda sin trabajo.
+                    ctx["solo_primaria"] = True
+                    print(f"[KUKIA] {etiqueta} el Core no admite replicas: pido solo "
+                          f"trabajo propio", flush=True)
+                elif r.status_code == 409:
+                    print(f"[KUKIA] {etiqueta} replica {pid[:8]} llego tarde "
+                          f"(la tarea ya estaba pagada)", flush=True)
+                else:
+                    print(f"[KUKIA] {etiqueta} replica {pid[:8]} rechazada: "
+                          f"{r.status_code} {(r.text or '')[:120]}", flush=True)
+                    with cuenta_lock:
+                        cuenta["err"] += 1
+                hecho = True
+                break
+            if r.status_code == 200:
+                res = r.json() or {}
+                if res.get("ok"):
+                    kuki = float(res.get("kuki") or 0.0)
+                    with cuenta_lock:
+                        cuenta["ok"] += 1
+                        cuenta["kuki"] += kuki
+                    print(f"[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -> OK +{res.get('kuki')} KIA "
+                          f"({duracion_ms:.0f} ms)", flush=True)
+                else:
+                    print(f"[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -> RECHAZADO "
+                          f"(esperado {res.get('esperado')}, enviado {metrica[:40]})", flush=True)
+                    with cuenta_lock:
+                        cuenta["err"] += 1
+            elif r.status_code == 409:
+                print(f"[KUKIA] {etiqueta} tarea {pid[:8]} ya cerrada (409): "
+                      f"{(r.text or '')[:100]}", flush=True)
+            elif r.status_code == 503:
+                # El Core no tenia hueco para verificar: la tarea vuelve a la cola.
+                print(f"[KUKIA] {etiqueta} Core ocupado verificando; {pid[:8]} vuelve a la cola",
+                      flush=True)
+            elif r.status_code == 429:
+                print(f"[KUKIA] {etiqueta} Core saturado (429) al entregar {pid[:8]}", flush=True)
+                with cuenta_lock:
+                    cuenta["err"] += 1
+            else:
+                print(f"[KUKIA] {etiqueta} entrega rechazada: {r.status_code} "
+                      f"{(r.text or '')[:140]}", flush=True)
+                with cuenta_lock:
+                    cuenta["err"] += 1
+            hecho = True
+            break
+        if not hecho:
+            with cuenta_lock:
+                cuenta["err"] += 1
+
+
+def _hilo_resumen(etiqueta: str, cuenta: dict, cuenta_lock) -> None:
+    """Una linea por minuto: asi se ve si el minero rinde o se ha atascado."""
+    ultimo = time.time()
+    ult_ok, ult_kuki, ult_err = 0, 0.0, 0
+    while True:
+        time.sleep(RESUMEN_SEG)
+        with cuenta_lock:
+            ok, kuki, err = cuenta["ok"], cuenta["kuki"], cuenta["err"]
+        dt = max(0.001, time.time() - ultimo)
+        print(f"[KUKIA] {etiqueta} resumen: {(ok - ult_ok) / dt * 60:.0f} tareas/min, "
+              f"{(kuki - ult_kuki) / dt * 60:.3f} KIA/min, {err - ult_err} fallos, "
+              f"total {ok} tareas / {kuki:.3f} KIA", flush=True)
+        ultimo = time.time()
+        ult_ok, ult_kuki, ult_err = ok, kuki, err
+
+
+# ============================================================
+#  Vigilancia y resumen (21-10-2026)
+# ============================================================
+_registro_lock = threading.Lock()
+RESUMEN_SEG = max(10.0, float(os.environ.get("KUKIA_RESUMEN_SEG", "60")))
+
+
+def _re_registrar(nid: str, etiqueta: str, device: str, vram_gb: int, tops: float,
+                  pubkey: str, direccion: str, privkey: str):
+    """Devuelve un id de nodo que el Core conozca (el mismo si sigue vivo).
+
+    El 404 del Core es casi siempre transitorio: medio segundo despues el mismo
+    id vuelve a existir. Se comprueba varias veces antes de registrar otro,
+    porque un nodo nuevo arranca con cupo 1 y sin historial, y cada re-registro
+    dejaba tareas colgadas a nombre del viejo.
+    """
+    with _registro_lock:
+        for espera in (0.0, 0.3, 0.8, 1.5):
+            if espera:
+                time.sleep(espera)
+            try:
+                r = _get(f"{CORE}/nodos/{nid}", timeout=TIMEOUT_API) if nid else None
+                if r is not None and r.status_code == 200 and (r.json() or {}).get("id") == nid:
+                    return nid
+            except Exception:
+                pass
+        try:
+            nuevo = _registrar_o_reusar(etiqueta, device, vram_gb, tops,
+                                        pubkey, direccion, privkey)
+        except Exception as e:
+            print(f"[KUKIA] {etiqueta} no pude registrar el nodo: {e}", flush=True)
+            return nid
+        if nuevo != nid:
+            print(f"[KUKIA] {etiqueta} el Core no conocia el nodo {nid}: ahora es {nuevo}",
+                  flush=True)
+            _asegurar_cobro(nuevo, etiqueta, direccion, privkey)
+            _avisar_reinicio(nuevo, etiqueta, privkey)
+            if nid:
+                _avisar_reinicio(nid, etiqueta, privkey)
+        return nuevo
+
+
+def _hilo_resumen(etiqueta: str, cuenta: dict, cuenta_lock) -> None:
+    """Una linea por minuto: asi se ve si el minero rinde o se ha atascado."""
+    ultimo = time.time()
+    ult_ok, ult_kuki, ult_err = 0, 0.0, 0
+    while True:
+        time.sleep(RESUMEN_SEG)
+        with cuenta_lock:
+            ok, kuki, err = cuenta["ok"], cuenta["kuki"], cuenta["err"]
+        dt = max(0.001, time.time() - ultimo)
+        print(f"[KUKIA] {etiqueta} resumen: {(ok - ult_ok) / dt * 60:.0f} tareas/min, "
+              f"{(kuki - ult_kuki) / dt * 60:.3f} KIA/min, {err - ult_err} fallos, "
+              f"total {ok} tareas / {kuki:.3f} KIA", flush=True)
+        ultimo = time.time()
+        ult_ok, ult_kuki, ult_err = ok, kuki, err
+
+
+def _hilo_vigia(etiqueta: str, ctx: dict, privkey: str, cuenta: dict, cuenta_lock) -> None:
+    """Suelta las tareas colgadas si el nodo se queda a tope y sin cobrar.
+
+    FALLO REAL (21-10-2026, el mismo que documenta el Core en
+    /nodos/{id}/reinicio): las tareas que quedan 'ejecutando' a nombre del nodo
+    le ocupan el cupo (4) y el Core contesta "limite de tareas simultaneas"
+    durante ABANDONO_SEG (30 min) aunque la GPU este lista. Medido: 8 tareas
+    colgadas y cero pagos. Si a los 2 min sigue igual, se pide el reinicio
+    (firmado) del propio nodo y las tareas vuelven a la cola en segundos.
+    """
+    ultimo_release = 0.0
+    while True:
+        time.sleep(30)
+        with cuenta_lock:
+            sin_cobrar = time.time() - float(cuenta["ultimo_ok"] or 0.0)
+        if sin_cobrar <= 120:
+            ultimo_release = 0.0
+            continue
+        tope_reciente = time.time() - float(cuenta.get("ultimo_limite") or 0.0) < 40
+        if tope_reciente and time.time() - ultimo_release > 60:
+            print(f"[KUKIA] {etiqueta} {sin_cobrar:.0f} s sin cobrar con el cupo lleno: "
+                  f"suelto las tareas colgadas de {ctx['nid']}", flush=True)
+            _avisar_reinicio(ctx["nid"], etiqueta, privkey)
+            ultimo_release = time.time()
+        if sin_cobrar > 300 and time.time() - float(cuenta.get("ultimo_core_ok") or 0.0) < 60:
+            print(f"[KUKIA] {etiqueta} {sin_cobrar:.0f} s sin cobrar con el Core en pie: "
+                  f"reinicio el minero para que arranque limpio", flush=True)
+            os._exit(3)
+
+
 def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
     """Un hilo por GPU: registra su nodo y mina en bucle (resultados FIRMADOS)."""
     etiqueta = f"{nombre}[{device}]"
     # Billetera propia para firmar envios (nadie puede suplantar este nodo)
-    with _wallet_lock:
-        res = WALLET.crear_billetera("worker_" + nombre.replace("[", "_").replace("]", "_").replace(":", ""))
+    try:
+        with _wallet_lock:
+            res = WALLET.crear_billetera("worker_" + nombre.replace("[", "_")
+                                         .replace("]", "_").replace(":", ""))
+    except Exception as e:
+        # Billetera cifrada que no se puede descifrar en esta cuenta de Windows
+        # (por ejemplo, copiada de otro PC). Sin clave no se puede firmar: se
+        # avisa en claro y se espera; no se martillea el Core con un nodo mudo.
+        while True:
+            print(f"[KUKIA] {etiqueta} la billetera no se puede abrir: {e}", flush=True)
+            print("[KUKIA] recuperala con la contrasena y las 20 palabras "
+                  "(RECUPERACION_*.txt) antes de minar en este PC.", flush=True)
+            time.sleep(300)
     if isinstance(res, tuple):
         # Billetera recien creada. La contrasena se genera al azar y no se
         # guardaba en ningun sitio: quien minaba desde fuera se quedaba sin
@@ -598,11 +993,22 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
         threading.Thread(target=_bucle_telemetria,
                          args=(nid, device, vram_gb, tops, privkey, estado_tarea),
                          daemon=True).start()
+    # El id puede cambiar si el Core olvida el nodo; todo lo que va por detras
+    # (vigia) lee la misma caja, no una copia.
+    ctx = {"nid": nid}
+    cuenta = {"ok": 0, "kuki": 0.0, "err": 0, "ultimo_ok": time.time(),
+              "ultimo_limite": 0.0, "ultimo_core_ok": time.time()}
+    cuenta_lock = threading.Lock()
+    threading.Thread(target=_hilo_resumen,
+                     args=(etiqueta, cuenta, cuenta_lock), daemon=True).start()
+    threading.Thread(target=_hilo_vigia,
+                     args=(etiqueta, ctx, privkey, cuenta, cuenta_lock), daemon=True).start()
     bloqueado_hasta = 0.0
     espera_error = 5.0   # backoff exponencial (5 s -> 60 s)
     while True:
         try:
             ahora = time.time()
+            nid = ctx["nid"]
             # Barrido periodico (throttled a BARRIDO_SEG): si el Core paga
             # directo a la direccion no hace nada; si quedo saldo viejo en
             # algun nodo, lo mueve a la billetera.
@@ -626,14 +1032,23 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 bloqueado_hasta = time.time() + 20
                 continue
             if rp.status_code != 200:
+                detalle = (rp.text or "")[:160]
+                if rp.status_code in (401, 404) and "nodo no registrado" in detalle:
+                    print(f"[KUKIA] {etiqueta} el Core no ve el nodo {nid}: lo compruebo "
+                          f"antes de seguir", flush=True)
+                    ctx["nid"] = nid = _re_registrar(nid, etiqueta, device, vram_gb, tops,
+                                                      pubkey, direccion, privkey)
+                    cuenta["ultimo_core_ok"] = time.time()
+                    continue
                 print(f"[KUKIA] {etiqueta} el Core rechaza la peticion de trabajo: "
-                      f"{rp.status_code} {rp.text[:120]}", flush=True)
+                      f"{rp.status_code} {detalle}", flush=True)
                 if rp.status_code == 401:
                     print("[KUKIA] si el Core es anterior al 20-10-2026, actualizalo: "
                           "el worker nuevo firma el trabajo con nonce.", flush=True)
                 time.sleep(10)
                 continue
             _cuerpo = rp.json()
+            cuenta["ultimo_core_ok"] = time.time()
             pend = _cuerpo.get("tarea")
             # EJECUCION REDUNDANTE (21-10-2026): el Core puede dar una tarea
             # que otro nodo ya esta resolviendo. Verificar tambien se cobra
@@ -641,8 +1056,14 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
             # en el Core, que era el cuello de botella de la red.
             es_replica = bool(_cuerpo.get("replica"))
             if not pend:
-                barrer_saldos(etiqueta, w, privkey)
-                time.sleep(3)
+                motivo = str(_cuerpo.get("motivo") or "")
+                if "limite" in motivo:
+                    # El cupo del nodo esta lleno (tareas colgadas de antes): el
+                    # vigia lo suelta, aqui solo se espera sin martillear.
+                    cuenta["ultimo_limite"] = time.time()
+                    time.sleep(1.0)
+                else:
+                    time.sleep(0.5)
                 continue
             pid = str(pend.get("id") or "")
             tipo = pend.get("tipo")
@@ -696,8 +1117,15 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                         print(f"[KUKIA] {etiqueta} replica {pid[:8]} {tipo} verificada "
                               f"({duracion_ms:.0f} ms)", flush=True)
                     elif rv.status_code == 404:
-                        print(f"[KUKIA] {etiqueta} el Core no admite replicas "
-                              f"(actualiza el Core); sigo", flush=True)
+                        det = (rv.text or "")[:100]
+                        if "Not Found" in det:
+                            print(f"[KUKIA] {etiqueta} el Core no admite replicas "
+                                  f"(actualiza el Core); sigo", flush=True)
+                        else:
+                            # Normal: la tarea se cerro o la replica ya no estaba
+                            # reclamada. No es un fallo del minero.
+                            print(f"[KUKIA] {etiqueta} replica {pid[:8]} sin reclamar: {det}",
+                                  flush=True)
                     elif rv.status_code == 409:
                         # La tarea se pago antes de que llegara la verificacion:
                         # el Core ya la cerro y esta replica no se cobra. Es
@@ -711,22 +1139,45 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
             entrega = {"tid": pid, "nodo_id": nid, "metrica": metrica,
                        "firma": firma, "device": str(device),
                        "duracion_ms": duracion_ms, "telemetria": telemetria}
-            try:
-                # AUDITORIA 2026-10-20: cuerpo JSON (sin limite de URL). Si el
-                # Core es antiguo y la ruta no existe, se usa la query string.
-                rr = _post(f"{CORE}/tareas/resultado_json", json=entrega,
-                           timeout=TIMEOUT_ENTREGA)
-                if rr.status_code == 404 and "Not Found" in (rr.text or ""):
-                    rr = _post(f"{CORE}/tareas/resultado", params=entrega,
+            rr = None
+            for _intento in (1, 2):
+                try:
+                    # AUDITORIA 2026-10-20: cuerpo JSON (sin limite de URL). Si el
+                    # Core es antiguo y la ruta no existe, se usa la query string.
+                    rr = _post(f"{CORE}/tareas/resultado_json", json=entrega,
                                timeout=TIMEOUT_ENTREGA)
-            except requests.exceptions.Timeout:
-                # La entrega no llego a tiempo: NO se reintenta a ciegas (el
-                # resultado lleva nonce/firma de la tarea). Se espera a que el
-                # Core libere la tarea vencida y se sigue con otra.
-                print(f"[KUKIA] {etiqueta} el Core tardo mas de {TIMEOUT_ENTREGA:.0f} s en "
-                      f"verificar; sigo (la tarea volvera a la cola)", flush=True)
+                    if rr.status_code == 404 and "Not Found" in (rr.text or ""):
+                        rr = _post(f"{CORE}/tareas/resultado", params=entrega,
+                                   timeout=TIMEOUT_ENTREGA)
+                except requests.exceptions.RequestException as e:
+                    # Un timeout no significa que no se haya cobrado: se
+                    # reintenta UNA vez. Si ya estaba pagada, el segundo intento
+                    # devuelve 409 y no hay doble pago.
+                    if _intento == 1:
+                        print(f"[KUKIA] {etiqueta} entrega de {pid[:8]} sin respuesta "
+                              f"({type(e).__name__}); reintento", flush=True)
+                        continue
+                    print(f"[KUKIA] {etiqueta} entrega de {pid[:8]} perdida: {e}; "
+                          f"la tarea volvera a la cola", flush=True)
+                    rr = None
+                    break
+                # El Core ha perdido la fila del nodo un instante (404/401
+                # "nodo"): se comprueba/registra otra vez y se reintenta. Es la
+                # unica forma de no perder un trabajo ya calculado.
+                if (_intento == 1 and rr.status_code in (401, 404)
+                        and "nodo" in (rr.text or "")):
+                    print(f"[KUKIA] {etiqueta} el Core no ve el nodo {nid} al entregar "
+                          f"{pid[:8]}; lo compruebo y reintento", flush=True)
+                    nuevo = _re_registrar(nid, etiqueta, device, vram_gb, tops,
+                                          pubkey, direccion, privkey)
+                    if nuevo and nuevo != nid:
+                        ctx["nid"] = nid = nuevo
+                        entrega["nodo_id"] = nid
+                        entrega["firma"] = WALLET.firmar(f"{pid}:{metrica}", privkey)
+                    continue
+                break
+            if rr is None:
                 espera_error = 5.0
-                time.sleep(3)
                 continue
             if rr.status_code == 429:
                 print(f"[KUKIA] {etiqueta} Core saturado (429) al entregar, espero 20 s", flush=True)
@@ -739,10 +1190,16 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 continue
             res = rr.json()
             if res.get("ok"):
+                with cuenta_lock:
+                    cuenta["ok"] += 1
+                    cuenta["kuki"] += float(res.get("kuki") or 0.0)
+                    cuenta["ultimo_ok"] = time.time()
                 print(f"[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -> OK +{res.get('kuki')} KIA "
                       f"({duracion_ms:.0f} ms)", flush=True)
                 espera_error = 5.0
             else:
+                with cuenta_lock:
+                    cuenta["err"] += 1
                 print(f"[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -> RECHAZADO "
                       f"(esperado {res.get('esperado')}, enviado {metrica[:40]})", flush=True)
                 espera_error = 5.0
@@ -752,6 +1209,32 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
             print(f"[KUKIA] {etiqueta} err: {e} (reintento en {espera_error:.0f} s)", flush=True)
             time.sleep(espera_error)
             espera_error = min(60.0, espera_error * 1.6)
+
+def _vigilar_direccion(seg: float = 300.0) -> None:
+    """Si el Core se muda (tunel nuevo), el minero se entera sin reiniciar.
+
+    Solo hace falta con la indireccion ("auto ..."): con una URL fija no hay
+    nada que vigilar. Se reescribe el global CORE, que es lo que leen los
+    f-strings de todos los hilos, asi que el cambio es inmediato y no corta
+    el trabajo que se esta calculando.
+    """
+    if _DESTINO is None or not _DESTINO.es_indirecta(CORE_CRUDO):
+        return
+
+    def bucle():
+        global CORE
+        while True:
+            time.sleep(seg)
+            try:
+                nuevo = _DESTINO.resolver(CORE_CRUDO, ttl=0)
+            except Exception:
+                continue
+            if nuevo and nuevo != CORE:
+                print(f"[KUKIA] el Core se movio: {CORE} -> {nuevo}", flush=True)
+                CORE = nuevo
+
+    threading.Thread(target=bucle, daemon=True, name="direccion-core").start()
+
 
 def main():
     # AUDITORIA 2026-10-19: la lista de palabras es la BIP39 en espanol y lleva
@@ -763,6 +1246,7 @@ def main():
             flujo.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
+    _vigilar_direccion()
     ok_core, motivo_core = _core_seguro(CORE)
     if not ok_core:
         print(f"[KUKIA] ERROR: {motivo_core}", flush=True)

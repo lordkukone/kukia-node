@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<link rel="canonical" href="https://kukia-network.surge.sh/wallet.html">
+<link rel="canonical" href="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/wallet">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#081a3a">
 <!-- AUDITORIA 2026-10-20: la billetera tiene la clave privada en memoria.
@@ -41,6 +41,62 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
 .small { font-size:.78rem; color:var(--text); text-align:center; margin-top:.5rem; }
 .ok { color:#5ee08a; } .err { color:#ff7b7b; }
 </style>
+<!-- kukia-seo -->
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="google-site-verification" content="9d6cb22812b81092">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="KUKIA Network">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/wallet">
+<meta property="og:title" content="KUKIA Wallet - Tu billetera KIA">
+<meta property="og:description" content="">
+<meta property="og:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="KUKIA Wallet - Tu billetera KIA">
+<meta name="twitter:description" content="">
+<meta name="twitter:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "name": "KUKIA Network",
+   "alternateName": "KUKIA",
+   "inLanguage": "es",
+   "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
+   "publisher": {
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion",
+   "name": "KUKIA Network",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg",
+    "width": 512,
+    "height": 512
+   }
+  },
+  {
+   "@type": "WebPage",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/wallet#pagina",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/wallet",
+   "name": "KUKIA Wallet - Tu billetera KIA",
+   "inLanguage": "es",
+   "isPartOf": {
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio"
+   }
+  }
+ ]
+}
+</script>
+<!-- /kukia-seo -->
 </head>
 <body>
 <div class="hero">
@@ -81,7 +137,7 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
   <div class="card">
     <h3>Mi saldo</h3>
     <input id="v-addr" placeholder="Tu dirección KUK...">
-    <input id="v-core" placeholder="Dirección del Core (por defecto http://127.0.0.1:8300)">
+    <input id="v-core" placeholder="Dirección del Core (se detecta sola; 127.0.0.1 si abres el fichero del disco)">
     <button class="btn" onclick="saldo()">Ver saldo</button>
     <div id="v-out"></div>
     <div id="qrcode"></div>
@@ -120,9 +176,30 @@ fetch('wordlist.txt').then(function(r){ return r.text(); }).then(function(t){
   WORDS = t.split('\n').map(function(w){ return w.trim(); }).filter(Boolean);
 });
 
+// EL CORE PUBLICO, SOLO (22-10-2026). Hasta hoy la billetera apuntaba a
+// http://127.0.0.1:8300, que en el navegador de un visitante es SU ordenador:
+// no habia saldo, no habia red y no se podia gastar nada. Ahora, al abrir la
+// pagina desde la web del proyecto, se toma la misma direccion que usa el
+// minero (core_actual.json, que el tunel renueva solo). Si el usuario ya tenia
+// una guardada, manda la suya; y el campo de arriba siempre manda.
+function detectarCore(){
+  var c = document.getElementById('v-core');
+  if(c && c.value.trim()){ return; }
+  if(localStorage.getItem('kukia_core')){ return; }
+  fetch('core_actual.json', {cache: 'no-store'})
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(j){
+      if(!j || !j.core){ return; }
+      if(c){ c.value = j.core; }
+      localStorage.setItem('kukia_core', j.core);
+    })
+    .catch(function(){ /* desde el disco no hay core_actual.json: 127.0.0.1 */ });
+}
+
 window.addEventListener('load', function(){
   var c = document.getElementById('v-core');
-  if(c){ c.value = localStorage.getItem('kukia_core') || 'http://127.0.0.1:8300'; }
+  if(c){ c.value = localStorage.getItem('kukia_core') || ''; }
+  detectarCore();
   var a = document.getElementById('v-addr');
   if(a){ a.value = localStorage.getItem('kukia_addr') || ''; }
 });

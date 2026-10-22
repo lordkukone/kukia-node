@@ -190,10 +190,15 @@ Guia completa: [GUIA_VALIDADORES.md](GUIA_VALIDADORES.md).
 
 ## Minar desde otro PC (lo normal si no eres el creador)
 
-No hace falta clonar nada: descarga `kukia-node.zip`, descomprime, pon la URL
-del Core en `core_minero.txt` y doble clic en `ARRANCAR_MINERO.cmd`.
+No hace falta clonar nada: descarga `kukia-node.zip`, descomprime y doble clic
+en `ARRANCAR_MINERO.cmd`. La direccion del Core ya viene puesta: el paquete
+sigue la direccion estable publicada en `https://kukia-network.surge.sh/core_actual.json`,
+así que no hay que editarla aunque el tunel cambie de nombre.
 Paso a paso, con lo que se gana y como no perder la billetera, en
 [GUIA_MINERO.md](GUIA_MINERO.md).
+
+Como se publica el Core al exterior (tunel, direccion estable, limite de eso y
+paso a dominio propio) en [TUNEL_ESTABLE.md](TUNEL_ESTABLE.md).
 
 ## Arranque rapido (en el PC del Core)
 
@@ -240,9 +245,15 @@ cd ledger && python kukia_wallet.py nodo_fundador
 ## Verificar que no esta roto
 
 ```bash
-python tools/pruebas_seguridad.py       # 93 pruebas sobre una COPIA del ledger
+python tools/pruebas_seguridad.py       # 101 pruebas sobre una COPIA del ledger
+python tools/pruebas_caos.py            # 57 de caos: doble gasto, kill -9, disco lleno, basura
 python tools/backup_ledger.py           # copia verificada en backups/
 python tools/probar_restauracion.py     # arranca un Core sobre la ultima copia
+python tools/prueba_failover_negativas.py  # la replica se NIEGA: ausente, vieja, rota, otra clave, bifurcada
+python tools/replica_ledger.py          # replica verificada en OTRO disco (D:)
+python tools/replica_ledger.py --comparar   # replica vs Core: misma red?
+python tools/volver_al_original.py --ver    # vuelta del failover (sin escribir)
+python tools/prueba_vigilante_indexado.py   # el aviso de "ya salimos en Google/Bing" (una vez, ni una mentira)
 python publico/verificar_sellos.py --publicado https://<rele>/api/metricas
 python tools/anclar_ots.py --verificar     # sello atado a un bloque de Bitcoin
 python tools/benchmark_gpu.py              # lo que tu GPU da de verdad
