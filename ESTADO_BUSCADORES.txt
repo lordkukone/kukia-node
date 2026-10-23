@@ -1,9 +1,9 @@
 KUKIA - estado para buscadores
-Actualizado: 2026-10-22 18:27:06
+Actualizado: 2026-10-23 20:04:33
 
 El sitio responde 200 y con el SEO nuevo. IndexNow: enviado el 2026-10-21 18:17
 
-Buscadores (2026-10-22): Google sin comprobar | Bing sin comprobar
+Buscadores (2026-10-23): Google sin comprobar | Bing todavia no
 
 Comprobar a mano:  python tools\indexar.py --estado
 Empujar a IndexNow: python tools\indexar.py --enviar
