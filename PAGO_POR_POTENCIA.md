@@ -244,3 +244,19 @@ x8,0000, minuto completo 2,621122 KIA en 2.172 tareas con tope 2,621121.
 - El minero **no cambia**: ya reporta lo que hace y quien mide es el Core.
 - La web publica sigue diciendo el pago por tarea de `/stats`, que en modo
   potencia es lo que cobra una tarea minima (servicios), no una difusion.
+
+## Revisiones redundantes: quién puede verificar a quién (23-10-2026)
+
+La réplica ahorra el recálculo del Core, pero no puede ser una segunda opinión
+comprada. Reglas desde el arreglo H1 (ver `AUDITORIA_AGENTE_2026-10-23.md`):
+
+- **Mismo dueño no se verifica**: ni tu propia tarea (ya no se podía) ni la de
+  otra identidad con tu misma cuenta de cobro o tu misma IP de registro (24 h).
+- **Nodo sin historial no ahorra recálculo**: mientras el primario o el
+  verificador tengan menos de 20 tareas verificadas, la tarea se recalcula
+  siempre (1 de cada 1). Después vuelve el muestreo normal de 1 de cada 10.
+- El reparto 70/30 no cambia, ni el total por tarea, ni la emisión.
+
+Mandos: `KUKIA_AUDITORIA_1_DE` (10), `KUKIA_AUDITORIA_1_DE_JOVEN` (1),
+`KUKIA_AUDITORIA_TAREAS_CONFIANZA` (20). Se comprueba con
+`python tools/auditoria_replica.py`.

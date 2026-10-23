@@ -165,6 +165,16 @@ PARTE_REPLICA = min(0.5, max(0.0, float(os.environ.get("KUKIA_PARTE_REPLICA", "0
 # 1 de cada N tareas con replica se recalcula igualmente, para que una
 # colusion entre dos nodos tenga probabilidad medible de caer.
 AUDITORIA_1_DE = max(0, int(os.environ.get("KUKIA_AUDITORIA_1_DE", "10")))
+# MUESTREO REFORZADO PARA NODOS SIN HISTORIAL (23-10-2026). Medido: dos
+# identidades nuevas decian las dos la misma mentira y el Core pagaba 0,918328
+# KIA por una matriz falsa (AUDITORIA_AGENTE_2026-10-23.md, H1). Un nodo sin
+# historial no puede ser "segunda opinion" barata: mientras alguno de los dos
+# tenga menos de AUDITORIA_TAREAS_CONFIANZA tareas verificadas, la tarea SE
+# RECALCULA SIEMPRE (AUDITORIA_1_DE_JOVEN = 1). Solo cuesta CPU al arrancar
+# nodos nuevos; a partir de ahi se vuelve al muestreo normal (1 de cada 10).
+# Se puede suavizar sin tocar codigo: KUKIA_AUDITORIA_1_DE_JOVEN=3 (1 de cada 3).
+AUDITORIA_1_DE_JOVEN = max(1, int(os.environ.get("KUKIA_AUDITORIA_1_DE_JOVEN", "1")))
+AUDITORIA_TAREAS_CONFIANZA = max(0, int(os.environ.get("KUKIA_AUDITORIA_TAREAS_CONFIANZA", "20")))
 # Techo de nodos verificando A LA VEZ (fraccion de los activos). Sin techo,
 # todos los nodos libres cogian replicas, nadie empezaba tareas nuevas y la
 # cola se paraba por turnos: se ejecutaba todo, luego se verificaba todo.
@@ -2279,10 +2289,20 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
     _rep_ok = False
     esperado = None
     verificado_por = "recalculo"
+    # Muestreo de esta entrega: 1 de cada 10 en regimen, 1 de cada 3 si alguno
+    # de los dos nodos aun no tiene historial (23-10-2026).
+    replica_node = None
+    if replica is not None:
+        try:
+            replica_node = con.execute("SELECT * FROM nodos WHERE id=?",
+                                       (replica["nodo_id"],)).fetchone()
+        except Exception:
+            replica_node = None
+    frec_auditoria = _frecuencia_auditoria(node, replica_node)
     if _es_replicable(tipo, params) and replica is not None \
             and (replica["metrica"] or "").strip() \
             and _coinciden(tipo, params, metrica, replica["metrica"]) \
-            and not _toca_auditoria(tid):
+            and not _toca_auditoria(tid, frec_auditoria):
         ok = True
         _rep_ok = True
         verificado_por = "replica"
@@ -2374,6 +2394,9 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
                 info_pago["tier_pagado"] = round(float(tier_pago), 3)
                 info_pago["tier_declarado"] = round(float(node["tier"] or 1.0), 3)
                 info_pago["verificado_por"] = verificado_por
+                # Trazabilidad del muestreo: 1 de cada N, para poder auditar
+                # despues cuantas tareas con replica se recalcularon de verdad.
+                info_pago["auditoria_1_de"] = frec_auditoria
                 # REPARTO DE LA EJECUCION REDUNDANTE: el total NO cambia. El
                 # ejecutor cobra el 70 % y el que verifico el 30 %. Pagar el
                 # 100 % a cada uno dispararia la emision y la fecha final
@@ -3843,6 +3866,75 @@ def transferir(t: TransferIn):
 #  Se calcula en el Core para que el dashboard NO abra una segunda conexion
 #  a la base (lector + escritor a la vez = bloqueos). Cache de 5 s.
 # ============================================================
+# ============================================================
+#  QUIEN ES QUIEN: DOS NODOS DEL MISMO DUENO NO SE VERIFICAN ENTRE SI
+#  (23-10-2026)
+#
+#  El Core paga sin recalcular cuando la replica coincide con el primario y la
+#  tarea no cae en la muestra. Eso esta bien contra un nodo suelto, pero el
+#  registro permite varias claves desde la misma IP: dos identidades del mismo
+#  dueno se dan la razon y cobran un resultado que nadie comprobo. Lo medido:
+#  0,918328 KIA por una matriz falsa en `tools/auditoria_replica.py`.
+#
+#  Aqui se corta por el ladron mas barato: la MISMA CUENTA DE COBRO o la MISMA
+#  IP de registro (24 h) son el mismo dueno, y no se le da replica de su propia
+#  tarea. La colusion entre dos maquinas distintas sigue siendo posible: para
+#  eso esta el muestreo (1/3 en nodos sin historial) y esta apuntado como
+#  hueco conocido en el informe de auditoria.
+# ============================================================
+def _ip_de_nodo(node) -> set:
+    """IPs de registro del nodo en las ultimas 24 h (puede ser vacio)."""
+    try:
+        pub = (node["clave_publica"] or "").strip().lower()
+    except Exception:
+        return set()
+    if not pub:
+        return set()
+    try:
+        filas = con.execute("SELECT ip FROM registros_nodo WHERE clave_publica=? "
+                            "AND ts>=?", (pub, time.time() - 86400.0)).fetchall()
+    except Exception:
+        return set()
+    return {str(r["ip"] or "").strip() for r in filas if str(r["ip"] or "").strip()}
+
+
+def _mismo_dueno(a, b) -> bool:
+    """¿Los dos nodos son del mismo dueno? Misma cuenta de cobro o misma IP.
+
+    Por defecto, si no se puede saber, NO se consideran del mismo dueno: la
+    replica sigue siendo valida y decide el muestreo. Preferimos no romper la
+    red por un dato que falta.
+    """
+    if a is None or b is None:
+        return False
+    try:
+        if _cuenta_de(a["id"]) == _cuenta_de(b["id"]):
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(_ip_de_nodo(a) & _ip_de_nodo(b))
+    except Exception:
+        return False
+
+
+def _frecuencia_auditoria(*nodos) -> int:
+    """1 de cada cuantas tareas con replica se recalculan.
+
+    Normal: AUDITORIA_1_DE (10). Si alguno de los dos nodos tiene menos de
+    AUDITORIA_TAREAS_CONFIANZA tareas verificadas: AUDITORIA_1_DE_JOVEN (1 =
+    se recalcula siempre).
+    """
+    if AUDITORIA_1_DE <= 0:
+        return 0
+    try:
+        joven = any(int(n["tareas_ok"] or 0) < AUDITORIA_TAREAS_CONFIANZA
+                    for n in nodos if n is not None)
+    except Exception:
+        joven = True
+    return min(AUDITORIA_1_DE, AUDITORIA_1_DE_JOVEN) if joven else AUDITORIA_1_DE
+
+
 def _es_replicable(tipo: str, params) -> bool:
     """Merece la pena que la resuelva un segundo nodo?
 
@@ -3891,7 +3983,7 @@ def _reclamar_replica(nodo_id: str, vram: int, sin_difusion: bool = False):
     if en_curso >= tope:
         return None
     filas = con.execute(
-        "SELECT t.id,t.tipo,t.params FROM tareas t "
+        "SELECT t.id,t.tipo,t.params,t.nodo_id FROM tareas t "
         "WHERE t.estado='ejecutando' AND t.nodo_id IS NOT NULL AND t.nodo_id!=? "
         "AND COALESCE(t.asignado,0) > ? AND COALESCE(t.vram_min,0) <= ? "
         "AND COALESCE(t.nodos_intento,'') NOT LIKE ? "
@@ -3900,12 +3992,21 @@ def _reclamar_replica(nodo_id: str, vram: int, sin_difusion: bool = False):
         "ORDER BY t.asignado DESC LIMIT 8",
         (nodo_id, ahora - ABANDONO_SEG, vram, f"%{nodo_id}%",
          1 if sin_difusion else 0)).fetchall()
+    yo = con.execute("SELECT * FROM nodos WHERE id=?", (nodo_id,)).fetchone()
     for f in filas:
         try:
             p = json.loads(f["params"])
         except Exception:
             continue
         if not _es_replicable(f["tipo"], p):
+            continue
+        # MISMO DUENO NO SE VERIFICA: ni su propia tarea (ya lo corta el SQL)
+        # ni la de otra identidad de la misma cuenta o de la misma IP.
+        try:
+            dueno = con.execute("SELECT * FROM nodos WHERE id=?", (f["nodo_id"],)).fetchone()
+        except Exception:
+            dueno = None
+        if _mismo_dueno(yo, dueno):
             continue
         cur = con.execute("INSERT OR IGNORE INTO tareas_replica"
                           "(tarea_id,nodo_id,estado,asignado) VALUES(?,?,'reclamando',?)",
@@ -3915,19 +4016,22 @@ def _reclamar_replica(nodo_id: str, vram: int, sin_difusion: bool = False):
     return None
 
 
-def _toca_auditoria(tid: str) -> bool:
-    """1 de cada AUDITORIA_1_DE, decidido por el ID (determinista, auditable).
+def _toca_auditoria(tid: str, frecuencia: int = None) -> bool:
+    """¿Esta tarea se recalcula aunque haya replica? Determinista por el ID.
 
     Determinista y no aleatorio: el mismo id cae siempre en el mismo lado, asi
     que un nodo no puede "probar suerte" repitiendo la entrega, y una prueba
-    puede saber de antemano si esa tarea sera auditada.
+    puede saber de antemano si esa tarea sera auditada. `frecuencia` permite
+    reforzar el muestreo (1 de cada 3) cuando alguno de los dos nodos es nuevo
+    (ver `_frecuencia_auditoria`).
     """
-    if AUDITORIA_1_DE <= 0:
+    n = AUDITORIA_1_DE if frecuencia is None else int(frecuencia)
+    if n <= 0:
         return False
-    if AUDITORIA_1_DE == 1:
+    if n == 1:
         return True
-    n = int(hashlib.sha256(str(tid).encode()).hexdigest()[:8], 16)
-    return n % AUDITORIA_1_DE == 0
+    h = int(hashlib.sha256(str(tid).encode()).hexdigest()[:8], 16)
+    return h % n == 0
 
 
 def _coinciden(tipo: str, params, a: str, b: str) -> bool:
