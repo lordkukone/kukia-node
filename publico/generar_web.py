@@ -82,6 +82,13 @@ EN_ZIP = [
     "publico/ARRANCAR_METRICAS.cmd",
     "ARRANCAR_MINERO.cmd",
     "VER_SALDO_MINERO.cmd",
+    # 23-10-2026: GUIA_MINERO.md (que si va en el paquete) manda abrir
+    # VER_MINERO.cmd para ver el minero y nombra el visor y el ayudante que se
+    # queda con el minero oculto. Misma norma que ARRANCAR_TUNEL.cmd: si un
+    # documento del paquete nombra un fichero, el fichero va dentro.
+    "VER_MINERO.cmd",
+    "tools/mina_en_vivo.py",
+    "tools/minero_en_ventana.py",
     "COPIAR_LEDGER.cmd",
     "ARRANCAR_VALIDADOR.cmd",
     "ARRANCAR_PANEL.cmd",
@@ -196,6 +203,8 @@ def generar_codigo(destino: Path, fecha: str, hash_zip: str = "",
 # (no basta con revisar EN_ZIP a mano: un despiste publica una llave).
 PROHIBIDO = ("ledger/wallet/", "/wallet/", "admin_token", "sello_key",
              "recuperacion", ".db", ".sqlite", ".log", ".jsonl", "identidad",
+             # Token del bot de avisos: es una credencial, no sale de aqui.
+             "telegram",
              # Config y credenciales del tunel con nombre: llevan la ruta del
              # usuario y, sobre todo, no tienen por que salir de este PC.
              "tools/cloudflared/", ".cloudflared", "dominio_core.txt")
@@ -229,12 +238,29 @@ CORE_MINERO_PUBLICO = (
 )
 
 
+# Fecha FIJA para todas las entradas del zip. Sin esto cada build metia la
+# hora de disco de cada fichero y la huella cambiaba aunque el codigo fuera el
+# mismo: en la web se vieron dos SHA-256 distintos del "mismo" paquete (22-10-
+# 2026) y el vigilante daba por "otra version" un despliegue que solo se habia
+# regenerado. Con fecha fija, mismos ficheros = misma huella, y cualquiera
+# puede comprobar que el paquete que descarga es el que se publico.
+FECHA_ZIP = (2026, 1, 1, 0, 0, 0)
+
+
+def _meter(z: zipfile.ZipFile, rel: str, datos: bytes) -> None:
+    """Mete un fichero con fecha fija (zip reproducible)."""
+    zi = zipfile.ZipInfo(rel.replace("\\", "/"), date_time=FECHA_ZIP)
+    zi.compress_type = zipfile.ZIP_DEFLATED
+    zi.external_attr = (0o644 & 0xFFFF) << 16
+    z.writestr(zi, datos)
+
+
 def generar_zip(destino: Path) -> Path:
     salida = destino / "kukia-node.zip"
     with zipfile.ZipFile(salida, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for rel in EN_ZIP:
             if rel == "core_minero.txt":
-                z.writestr(rel, CORE_MINERO_PUBLICO.encode("utf-8"))
+                _meter(z, rel, CORE_MINERO_PUBLICO.encode("utf-8"))
                 continue
             ruta = RAIZ / rel
             if not ruta.exists():
@@ -242,12 +268,12 @@ def generar_zip(destino: Path) -> Path:
             if _prohibido(rel):
                 raise SystemExit(f"[generar_web] ABORTADO: {rel} no puede publicarse "
                                  f"(clave, base de datos o registro)")
-            z.write(ruta, rel)
+            _meter(z, rel, ruta.read_bytes())
         # Anclas en Bitcoin: se incluyen para que cualquiera pueda verificar el
         # historial sin pedirnos nada (son 2 KB y no llevan ningun secreto).
         for ruta in sorted((RAIZ / "anclas").glob("kukia_sello_*")):
             if ruta.is_file():
-                z.write(ruta, str(ruta.relative_to(RAIZ)))
+                _meter(z, str(ruta.relative_to(RAIZ)), ruta.read_bytes())
     return salida
 
 
