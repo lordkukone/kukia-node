@@ -129,6 +129,40 @@ Si un validador encuentra una discrepancia, súbelo: el `id` de la tarea y los
 valores esperado/recibido quedan registrados y firmados. Eso es exactamente lo
 que hay que investigar.
 
+## La clave del validador, guardada cifrada
+
+`validator/identidad_validador.json` y `identidad_validador_2.json` guardan la
+clave privada **cifrada con DPAPI de tu usuario de Windows**
+(`dpapi-usuario-windows`), no en claro: el fichero no se puede leer con un
+editor ni sirve copiado a otro equipo. El validador la descifra en memoria al
+arrancar y, si no puede, **se para** en vez de generarse otra clave encima (eso
+invalidaría las atestaciones de un validador que el panel ya conoce).
+
+Para cifrar una identidad que estuviera en claro:
+
+```bat
+python tools\cifrar_validadores.py
+```
+
+Hace copia verificada en `backups/validadores/`, cifra, vuelve a leer con el
+código del validador y firma y verifica una atestación de prueba antes de dar
+nada por bueno.
+
+Para comprobar el circuito completo sin dejar el bucle corriendo (esto escribe
+una fila en `validador_atestaciones`, no mueve saldos):
+
+```bat
+python validator\kukia_validator.py --una-pasada --lote 10
+```
+
+Ojo con el nombre: sin `--nombre`, el programa usa `VALIDADOR_<PC>` y **pisa** el
+nombre que trae la identidad, así que la misma clave aparece dos veces en
+`/validador/estado`. Si quieres que salga con su nombre de siempre:
+
+```bat
+python validator\kukia_validator.py --una-pasada --nombre VALIDADOR_KUKI
+```
+
 ## Límites honestos
 
 - **En el mismo PC no hay independencia real.** Es la base técnica para

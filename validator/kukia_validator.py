@@ -57,28 +57,85 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "ledger"))
 import sellos as SELLOS  # noqa: E402  (JSON canonico, misma regla que el Core)
+import kukia_wallet as BILLETERA  # noqa: E402  (DPAPI: mismo cifrado que el minero)
 
 IDENTIDAD_POR_DEFECTO = Path(__file__).parent / "identidad_validador.json"
 TIPOS_SOPORTADOS = {"checksum", "matriz", "inferencia", "difusion_calor"}
 
 
 # ------------------------------------------------------------------ identidad
+def _privada_de(d: dict) -> str:
+    """Clave privada de la identidad: en claro (antigua) o cifrada con DPAPI.
+
+    Devuelve "" si no hay ninguna legible. No imprime nada: la clave no sale
+    nunca de este proceso.
+    """
+    priv = (d.get("clave_privada") or "").strip()
+    if priv:
+        return priv
+    cifrada = (d.get("clave_privada_cifrada") or "").strip()
+    if cifrada:
+        try:
+            return (BILLETERA._descifrar_texto(cifrada) or "").strip()
+        except Exception:
+            return ""
+    return ""
+
+
+def _escribir_identidad(d: dict, ruta: Path) -> None:
+    """Guarda la identidad SIN la clave privada en claro (DPAPI si se puede).
+
+    En memoria `d` sigue llevando `clave_privada`; en disco queda
+    `clave_privada_cifrada`, atada al usuario de Windows, igual que las
+    billeteras del minero. En Linux/macOS no hay DPAPI y se guarda en claro,
+    dejando constancia en el campo `cifrado` (antes era siempre asi).
+    """
+    salida = dict(d)
+    priv = salida.pop("clave_privada", "") or ""
+    cifrada = BILLETERA._cifrar_texto(priv) if priv else None
+    if cifrada:
+        salida["clave_privada_cifrada"] = cifrada
+        salida["cifrado"] = "dpapi-usuario-windows"
+    else:
+        salida["clave_privada"] = priv
+        salida["cifrado"] = "ninguno"
+    ruta.write_text(json.dumps(salida, indent=2, ensure_ascii=False), encoding="utf-8")
+    BILLETERA._proteger(ruta)
+
+
 def cargar_identidad(ruta: Path, nombre: str) -> dict:
     if ruta.exists():
         try:
             d = json.loads(ruta.read_text(encoding="utf-8"))
-            if len(bytes.fromhex(d.get("clave_privada") or "")) == 32:
-                d["nombre"] = nombre or d.get("nombre") or "validador"
-                return d
+        except Exception as e:
+            raise RuntimeError(f"no puedo leer {ruta.name}: {e}")
+        priv = _privada_de(d) if isinstance(d, dict) else ""
+        try:
+            vale = len(bytes.fromhex(priv)) == 32
         except Exception:
-            pass
+            vale = False
+        if not vale:
+            # NUNCA se crea otra identidad encima de una que no se puede leer:
+            # cambiaria la clave de un validador ya registrado y sus firmas
+            # dejarian de cuadrar. Se para y se dice por que.
+            raise RuntimeError(
+                f"no puedo descifrar la clave privada de {ruta.name}: esta atada al "
+                f"usuario de Windows que la cifro. Recupera ese perfil o el fichero "
+                f"antes de arrancar el validador; no se genera una identidad nueva.")
+        # La clave vive en memoria mientras corre el validador; en disco, cifrada.
+        d["clave_privada"] = priv
+        d["nombre"] = nombre or d.get("nombre") or "validador"
+        return d
     priv = secrets.token_bytes(32).hex()
     d = {"nombre": nombre or "validador", "clave_privada": priv,
          "clave_publica": SELLOS.publica_de(priv), "creado": time.ctime()}
     ruta.parent.mkdir(parents=True, exist_ok=True)
-    ruta.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding="utf-8")
+    _escribir_identidad(d, ruta)
     print(f"[VALIDADOR] identidad nueva en {ruta}", flush=True)
     print(f"[VALIDADOR] clave publica: {d['clave_publica']}", flush=True)
+    print("[VALIDADOR] clave privada cifrada con DPAPI: si se pierde este perfil "
+          "de Windows se puede crear una identidad nueva (la vieja deja de firmar)",
+          flush=True)
     return d
 
 
@@ -320,7 +377,11 @@ def main() -> int:
         except Exception as e:
             print(f"[validador] AVISO: no pude resolver la direccion del Core ({e})",
                   flush=True)
-    ident = cargar_identidad(Path(args.identidad), args.nombre)
+    try:
+        ident = cargar_identidad(Path(args.identidad), args.nombre)
+    except RuntimeError as e:
+        print(f"[VALIDADOR] ERROR: {e}", flush=True)
+        return 2
     ident["nombre"] = (args.nombre or ident["nombre"]).strip()[:64]
     lote = max(1, min(50, args.lote))
     intervalo = max(5.0, args.intervalo)
