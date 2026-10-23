@@ -194,6 +194,39 @@ Motivo: el 20-10-2026 el minero se callo a las 12:28 y nadie lo noto hasta las
 15:00, con 121 tareas en cola. La guardia lo detecta en menos de un minuto
 (probado matando el minero: relanzado en 17 s).
 
+### La ventana del minero al iniciar sesion (22-10-2026)
+
+Al entrar en Windows se abre tambien **la ventana del minero** (donde se ve
+cada tarea y el resumen por minuto). Es un acceso de la carpeta de Inicio:
+
+```
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\KUKIA Minero.cmd
+    -> call "C:\Users\kuki\Desktop\KUKIA\VER_MINERO.cmd" minero_pc
+```
+
+Para quitarlo, borra ese fichero de Inicio (no hay que tocar nada mas).
+
+Tres cosas que lo hacen seguro, porque al encender arrancan a la vez la guardia
+y la ventana:
+
+1. **La guardia espera 60 s** antes de arrancar un minero propio
+   (`KUKIA_GUARDIA_ESPERA_MINERO`). Asi le da tiempo a la ventana a ocupar el
+   sitio; si a los 60 s no hay nadie minando, arranca el suyo (oculto, como
+   siempre). Su log lo dice: `[minero] ya esta corriendo (abierto aparte)`.
+2. **Cerradura de instancia unica** (`worker/minero.lock`, con el PID dentro).
+   Si se abre una segunda ventana, en vez de minar dice
+   `ya hay un minero vivo (PID N)` y **enseña cómo va el que ya está**: abre
+   `tools/mina_en_vivo.py` (ritmo en tareas/min y KIA/min, estado de cada
+   nodo y último pago; no mina ni escribe nada). Antes esa ventana intentaba
+   minar y el worker la rechazaba, que parecía un fallo. Un PID muerto no
+   bloquea: la cerradura se sobrescribe sola.
+3. Si cierras la ventana, la guardia relanza el minero a los pocos minutos,
+   pero **sin ventana** (oculto). La ventana vuelve en el siguiente inicio de
+   sesion o abriendo `VER_MINERO.cmd` a mano.
+
+Dos mineros a la vez no es un fallo visible: se reparten el cupo de 4 tareas
+del nodo y rinden la mitad sin dar ningun error. Por eso existe la cerradura.
+
 ## Parar
 
 Para la guardia primero (cierra su ventana) y luego los procesos que quieras;
@@ -267,10 +300,14 @@ curl "http://127.0.0.1:8300/stats"
 ## Por que el premio por tarea baja
 
 El pago no es fijo: el Core calcula `objetivo = restante / tareas_restantes`
-para agotar los 100M justo el **13-04-2150**. Cuando la red mina mas tareas por
-segundo, el pago por tarea baja y el total sigue acotado: hoy el presupuesto es
-**1,31 KIA/minuto** (686.000 KIA/año), o sea **0,0037 KIA por tarea** a unas
-500.000 tareas/dia.
+para agotar los 100M justo en la fecha final, el **01-01-2150** (124 años desde
+el inicio, 6 eras de 20,67). El 22-10-2026 se habia movido al 01-01-2152 y el
+23-10-2026 Kuki lo devolvio a 2150; el calendario manda la fecha del dueno, no
+el numero de años. Cuando la red mina mas tareas por segundo, el pago por tarea
+baja y el total sigue acotado: el presupuesto es **~1,31 KIA/minuto** (unos
+690.000 KIA/año), o sea centesimas de KIA por tarea a cientos de miles de
+tareas/dia.
+Los numeros exactos de hoy: `python tools\calculo_moneda.py`.
 
 Ojo con un detalle que ya costo un susto: hasta el 19-10-2026 habia un **suelo**
 de `techo*0,1` = 1 KIA por tarea. Con ~300 tareas/min son 432.000 KIA/dia y los
@@ -280,7 +317,8 @@ media historica, que se quedaba corta al acelerar la red.
 
 Es el diseno, no un fallo: si quieres premios altos por tarea, deja la red
 minando menos tareas por minuto (baja `KUKIA_AUTO_LOTE` o sube `KUKIA_AUTO_SEG`);
-lo que se emite por minuto no cambia.
+lo que se emite por minuto no cambia. Y al reves: mas potencia no adelanta la
+fecha, solo reparte los mismos KIA/min entre mas tareas.
 
 ## Reglas de cobro y castigo (19-10-2026)
 
@@ -296,8 +334,8 @@ lo que se emite por minuto no cambia.
 - **Tamano de tarea por tiempo**: el Core persigue ~2 s por tarea
   (`KUKIA_TAREA_MS`). Si las tareas salen cortas, las agranda; si se pasan, las
   encoge. Asi el ritmo se queda estable (~50 tareas/min con 2 GPUs) y el premio
-  por tarea sube a ~0,025 KIA, sin mover el presupuesto de 1,31 KIA/min ni la
-  fecha de 2150. Techo: `difusion_pasos` 20.000 y matriz `n` 3x.
+  por tarea sube, sin mover el presupuesto de KIA/min ni la fecha final.
+  Techo: `difusion_pasos` 20.000 y matriz `n` 3x.
 - **TOPS solo de nodos activos**: la dificultad cuenta unicamente nodos vistos
   en las ultimas 24 h. Antes sumaba todos los registros (11.192 TOPS fantasma
   frente a 200 reales) y agrandaba las tareas 2,5x.
@@ -359,6 +397,52 @@ python tools/salud.py --backups D:/KUKIA_backups --json
 # copia consistente aunque el Core este escribiendo + verificacion contra sellos
 python tools/backup_ledger.py --destino D:/KUKIA_backups --con-claves --mantener 14
 ```
+
+### Claves fuera del disco del Core (22-10-2026)
+
+El punto 2 del informe de auditoria era que la clave del sello, el token de
+admin y las billeteras viven en el **mismo disco** que la base: si ese disco
+muere, se pierde el historial y la llave a la vez. Ahora hay copia aparte en
+`N:\CLAVES_KUKIA\<fecha>\` (disco externo WD Elements, no es el SSD del PC):
+`sello_key.txt`, `admin_token.txt` y `wallet/` completas, con `LEEME.txt`
+(como se restaura) y `MANIFIESTO.json` (bytes y sha256 de cada fichero).
+
+```bash
+python tools/copia_claves.py                            # copia a N:\CLAVES_KUKIA\<hoy>
+python tools/copia_claves.py --destino E:\               # a un USB
+python tools/copia_claves.py --verificar N:\CLAVES_KUKIA\2026-10-22   # recomprobar
+python tools/copia_claves.py --instalar                  # tarea: domingos 04:20
+python tools/copia_claves.py --quitar                    # quitar la tarea
+```
+
+Comprueba que la copia sirve de verdad: relee cada fichero y compara el
+sha256, y ademas recalcula con la clave copiada la publica del sello y la
+compara con la del PC. **No mueve ni borra el original**: el Core necesita
+`sello_key.txt` donde esta.
+
+La tarea de Windows `KUKIA copia de claves` la repite sola **los domingos a las
+04:20** (despues de `KUKIA Copia Seguridad`, a las 04:00), con `pythonw` y sin
+ventana. Si el disco N: no esta conectado, escribe en
+`logs/copia_claves.out.log` que no pudo, en vez de morir en silencio.
+
+### Las 20 palabras, en papel
+
+El otro agujero era este: las palabras solo existian cifradas dentro del JSON.
+En este PC se abren solas (DPAPI), pero en otro PC o tras reinstalar Windows
+solo valen **contrasena + 20 palabras**.
+
+```bash
+python tools/palabras_papel.py                         # hoja para imprimir
+python tools/palabras_papel.py --comprobar kuki_fundador_nueva   # prueba real
+```
+
+La hoja sale en `N:\CLAVES_KUKIA\<hoy>\PALABRAS_PARA_PAPEL.txt`, con una linea
+de puntos para escribir la contrasena a mano. **Imprimir, apuntar, y borrar el
+fichero.** `--comprobar` pide la contrasena (no se guarda), deriva la clave y
+compara la direccion: si dice OK, ese papel recupera la billetera de verdad.
+
+Sigue sin `RECUPERACION_*.txt` la mayoria (solo la del minero lo tiene); cada
+copia avisa de cuales faltan.
 
 `salud.py` comprueba Core, cadena, sellos, pagos bloqueados, si el ledger se
 esta escribiendo, disco, antiguedad del sello, emision y ultima copia.
@@ -494,6 +578,51 @@ Modelo de seguridad completo y limites: [SEGURIDAD.md](SEGURIDAD.md).
 - El respaldo de lo que habia antes de la auditoria esta en
   `_backup_seguridad_20261018-2040\`.
 
+## Cortafuegos: puertos abiertos cerrados (22-10-2026)
+
+El 21/10 se cerraron al exterior 5432 (PostgreSQL) y 8069 (Odoo) y las reglas
+"Python" de Pinokio. Faltaba lo que quedaba permitiendo **cualquier puerto
+desde cualquier IP** a otros programas. Cerrado el 22/10 a las 19:52:
+
+| programa | reglas cerradas |
+|---|---|
+| `C:\tmp_btq\btq-core\btqd.exe` (nodo JSON-RPC) | 1 (UDP) |
+| `C:\tmp_btq\bzminer\...\bzminer.exe` | 1 (UDP) |
+| `C:\tmp_keryx\keryxd.exe` | 1 (UDP) |
+| `C:\program files\nodejs\node.exe` | 1 (UDP) |
+| `I:\pinokio\api\uncensored-local-studio...\node-win\node.exe` | 1 (UDP) |
+| `...\@opencode-aidesktop\opencode.exe` | 1 (UDP) |
+| `...\programs\pinokio\pinokio.exe` | 1 (UDP) |
+| `...\uv\python\cpython-3.11...\python.exe` | 1 (UDP) |
+| `...\programs\python312\python.exe` | 1 (UDP) |
+
+Las de **TCP** de esos mismos programas ya estaban desactivadas; por eso lo que
+se cerró ahora son UDP (descubrimiento en LAN). Se **deshabilitan, no se
+borran**: no se pierde ninguna regla y se pueden volver a encender.
+
+**Loopback no se ve afectado**: Core (8300), panel (8301), ComfyUI, Maestro y el
+TTS siguen en `127.0.0.1` igual que antes. Solo deja de escucharse desde la LAN.
+
+Todo apuntado en `cortafuegos\`:
+
+```text
+respaldo_firewall_20261022_1952.wfw    todo el cortafuegos de antes (520.192 B, sha256 055C0DEE...)
+reglas_cerradas_20261022_1952.json     nombre, programa, puerto y perfil de cada una
+reglas_cerradas_20261022_1952.txt      solo los nombres, para volver a encenderlas
+cerrar_puertos_abiertos.ps1            lo que se hizo (-SoloListar mira sin tocar)
+marcha_atras.ps1                       la vuelta atras
+```
+
+```cmd
+:: volver a encender EXACTAMENTE las 9 que se cerraron (lo normal)
+powershell -ExecutionPolicy Bypass -File cortafuegos\marcha_atras.ps1
+
+:: o restaurar TODO el cortafuegos tal y como estaba antes
+powershell -ExecutionPolicy Bypass -File cortafuegos\marcha_atras.ps1 -RespaldoCompleto 20261022_1952
+```
+
+Las dos piden administrador. La segunda pide escribir `SI` antes de importar.
+
 ## Sin ventanas (21-10-2026)
 
 Si el PC empieza a abrir ventanas negras de CMD o PowerShell él solo, no es el
@@ -510,17 +639,148 @@ ventana aunque el padre no tenga consola. Quedaron tres focos, ya tapados:
 | Copia semanal de seguridad | no existia | `TAREA_COPIA_SEGURIDAD_OCULTA.vbs` (oculta) |
 | Vigilante de la web | no existia | `pythonw` + tarea cada 10 min |
 
-Las dos tareas programadas y como se quitan:
+Las tareas programadas y como se quitan:
 
 ```cmd
 schtasks /Query /TN "KUKIA Vigilante Web"       :: vigila la web y avisa/empuja
+schtasks /Query /TN "KUKIA_vigilante_webs"      :: vigila las 3 webs y el Core (cada 5 min)
 schtasks /Query /TN "KUKIA Backup Ledger"       :: copia diaria a las 03:00
 schtasks /Query /TN "KUKIA Copia Seguridad"     :: copia semanal a N: (domingos)
 
 python tools\vigilante_web.py --quitar          :: quitar el vigilante
+python tools\vigilante_servicios.py --quitar    :: quitar el vigilante de webs/Core
 schtasks /Delete /TN "KUKIA Backup Ledger" /F   :: quitar la copia diaria
 schtasks /Delete /TN "KUKIA Copia Seguridad" /F :: quitar la copia semanal
 ```
+
+## Vigilante de las webs y del Core (22-10-2026)
+
+`tools/vigilante_servicios.py` mira cada 5 minutos, desde la tarea de Windows
+`KUKIA_vigilante_webs` (con `pythonw`, sin ventana; solo con sesion iniciada):
+
+| que mira | como se da por bueno |
+|---|---|
+| web de Surge | 200 y HTML con KUKIA |
+| web de Freebuff | 200 y HTML con KUKIA |
+| web de GitHub Pages | 200 y HTML con KUKIA |
+| que las tres sirvan el mismo paquete | el `kukia-node.zip.sha256` de la web es el del `docs/` |
+| Core local | `127.0.0.1:8300/stats` con `supply_emitido` |
+| Core publico | el de `core_actual.json` responde `/stats` |
+| copia de claves | la ultima de `N:\CLAVES_KUKIA` tiene **7 dias o menos** |
+| copia integra | esa copia **revalidada**: sha256 de cada fichero + la clave del sello (una vez al dia) |
+
+Avisa **solo al cambiar**: cuando algo se cae (a la segunda pasada mala
+seguida, para no dar la lata por un fallo de un segundo) y cuando vuelve.
+
+### Aviso al movil por Telegram (22-10-2026)
+
+Dos canales independientes: la notificacion de Windows y **Telegram**. Si el PC
+esta apagado o sin sesion, el toast no se ve, pero el movil suena igual.
+
+```cmd
+python tools\avisos.py --configurar   :: alta: token del bot + tu chat + prueba
+python tools\avisos.py --probar       :: mandar un mensaje de prueba
+python tools\avisos.py --estado       :: si esta configurado y con que bot
+```
+
+Alta, una sola vez:
+
+1. En Telegram, habla con **@BotFather**, manda `/newbot`, apunta el token.
+2. Manda `/start` (o cualquier cosa) a tu bot nuevo.
+3. `python tools\avisos.py --configurar`, pega el token: el script busca solo
+   tu chat, manda la prueba y guarda todo en
+   `coordinator/telegram_aviso.json` (fuera de git, solo tu usuario lo lee).
+
+Prueba de punta a punta: provoca una caida REAL del Core local (lo apunta a
+un puerto vacio), espera el aviso de caida, lo levanta y espera el de vuelta.
+Usa estado temporal, asi que el vigilante de verdad no se entera.
+
+```cmd
+python tools\prueba_avisos_reales.py                 :: escritorio + Telegram
+python tools\prueba_avisos_reales.py --sin-telegram  :: solo escritorio
+```
+
+Por que Telegram y no WhatsApp: Telegram es gratis y se configura en dos
+minutos; WhatsApp por API exige cuenta de empresa (Meta) o pagar a un
+intermediario tipo Twilio, con numero verificado y plantillas aprobadas.
+Si algun dia hace falta, en `tools/avisos.py` solo se cambia `enviar()`.
+
+```cmd
+python tools\vigilante_servicios.py                 :: bucle en primer plano (cada 5 min)
+python tools\vigilante_servicios.py --una-vez       :: una pasada, como la tarea
+python tools\vigilante_servicios.py --estado        :: ultimo estado guardado, en JSON
+python tools\vigilante_servicios.py --probar-aviso  :: ver como suena el aviso
+python tools\vigilante_servicios.py --instalar      :: crear/rehacer la tarea de Windows
+python tools\vigilante_servicios.py --quitar        :: quitar la tarea
+```
+
+El aviso de la copia de claves llega como `KUKIA: copia-claves ATRASADA` cuando
+la ultima copia de `N:\CLAVES_KUKIA` pasa de una semana (tipico: el disco
+externo estaba desconectado el domingo). Se puede apuntar a otra carpeta con
+`--copias`, util para probarlo sin tocar la de verdad.
+
+Ademas, la copia se **revalida entera una vez al dia**: no basta con que el
+`MANIFIESTO.json` este ahi, se relee cada fichero, se compara su sha256 y se
+comprueba que la clave copiada es la que firma los sellos vivos. Si un fichero
+se corrompe o alguien lo cambia en el disco externo, avisa como
+`KUKIA: copia-integra CORRUPTA` diciendo cual. Un veredicto bueno se cachea 24 h
+(`logs/copia_integra.json`); uno malo **no** se cachea y se reintenta en cada
+pasada hasta que se arregle.
+
+```cmd
+python tools\vigilante_servicios.py --verificar-copia   :: revalidar ya, sin esperar al dia
+```
+
+Salidas: `logs/vigilante_servicios.log` (historial con hora),
+`logs/vigilante_servicios.json` (estado por servicio) y `ESTADO_WEBS.txt`
+(resumen legible de la ultima pasada).
+
+### Aviso por disponibilidad del dia (por debajo del 99 %)
+
+Cada pasada mira tambien **como va el dia**: si un servicio lleva el dia por
+debajo del **99 %**, avisa (toast + Telegram + log) con el peor primero y
+cuanto tiempo estuvo caido. Se calcula con los mismos logs, asi que un hueco
+sin pasadas (PC apagado) no ensucia el porcentaje.
+
+- **Una vez por servicio y dia** (`logs/disponibilidad_avisada.json`): un 98 % a
+  las 14:00 no repite aviso a las 14:05. Si por la tarde cae otro servicio, ese
+  otro si avisa. Al dia siguiente vuelve a estar disponible el aviso.
+- **Minimo 30 minutos medidos** (`KUKIA_DISPONIBLE_OBSERVADO_MIN=1800`): a las
+  00:10 un fallo de un minuto daria 0 % y no significa nada.
+- **Umbral configurable**: `KUKIA_DISPONIBLE_MIN=99` (por ejemplo 99.5).
+- `paquete-igual` **no** cuenta aqui: compara versiones entre webs, no dice si
+  algo esta arriba (para eso ya tiene su propio aviso).
+- Se ve sin esperar al aviso en `ESTADO_WEBS.txt` (bloque «Disponibilidad de
+  hoy») y en `python tools\incidencias.py`.
+
+### Historico de incidencias (que se cayo, cuanto y que % de disponibilidad)
+
+Lo que antes solo se veia de la ultima pasada ahora se ve por dia:
+
+```cmd
+python tools\incidencias.py                   :: ultimos 7 dias
+python tools\incidencias.py --dias 30         :: un mes
+python tools\incidencias.py --dias 0          :: todo lo que haya en los logs
+python tools\incidencias.py --detalle         :: cada caida con hora y motivo
+python tools\incidencias.py --servicio surge  :: solo uno (core-local, github, web ...)
+python tools\incidencias.py --json            :: para scripts
+VER_INCIDENCIAS.cmd                           :: lo mismo, con doble clic
+```
+
+Sale una linea por dia y servicio con **caidas**, **tiempo caido** y
+**disponibilidad %**, y al final el total del periodo. Reglas, para que las
+cifras no enganen:
+
+- Dos pasadas malas seguidas son **una** caida, no dos; dura hasta la primera
+  pasada buena.
+- Un hueco sin pasadas (PC apagado, tarea parada) **no cuenta**: ni como caida
+  ni como tiempo disponible. Es la diferencia entre "no estaba mirando" y
+  "estaba caido".
+- Una caida que sigue abierta ahora mismo se muestra como `sigue`.
+- Se lee de los logs de los dos vigilantes (`vigilante_servicios.log` cada
+  5 min y `vigilante_web.log` cada 10 min), no del Core.
+
+Prueba de la logica (fechas fijas, sin red): `python tools/prueba_incidencias.py`.
 
 Si alguna vez vuelve a aparecer una ventana, el sospechoso es un
 `subprocess.run([...])` nuevo sin `creationflags`: se busca con

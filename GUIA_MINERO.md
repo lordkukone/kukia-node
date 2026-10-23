@@ -67,6 +67,14 @@ como esta:
 [KUKIA] minero_pc[cuda:0] 42.2 GFLOPS | 49 tareas/min | 1.020 KIA/min = 61.2 KIA/h = 1469 KIA/dia (1.45 KIA/h por GFLOPS) | 0 fallos, total 143 tareas / 3.780 KIA
 ```
 
+Si **ya hay un minero minando** (lo normal: la guardia lo arranca oculto al
+iniciar sesión), esa ventana no lanza un segundo minero: abre
+`tools/mina_en_vivo.py` y enseña cómo va el que ya está. Cada 5 s pinta el
+ritmo real (tareas/min y KIA/min medidos sobre una ventana de 20 s, no el
+salto de un segundo), el estado de cada nodo (device, GFLOPS, tareas, KIA/min,
+último latido) y el último pago. Ese visor no mina ni escribe nada; Ctrl+C lo
+cierra y el minero sigue.
+
 Al arrancar dice también la emisión (KIA por tarea, KIA/min de la red) y la
 fecha de la última moneda. Todo queda copiado en `logs/minero_visible.log`.
 Los dos cambios que hay que entender: **KIA/h según potencia** = tareas/min
