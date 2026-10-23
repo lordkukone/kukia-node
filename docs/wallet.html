@@ -188,16 +188,33 @@ fetch('wordlist.txt').then(function(r){ return r.text(); }).then(function(t){
 var ESPEJO_CORE = 'https://kukia-network.surge.sh/core_actual.json';
 var FRESCO_SEG = 6 * 3600;   // medio dia: un tunel de prueba no dura mas
 
+// 23-10-2026: el Core que ya es del usuario, sea el del campo o el guardado.
+// Sirve para no pisarlo nunca: ni al cargar, ni cuando la deteccion publica
+// termina de descargar (tarda, y hasta ahora borraba lo que hubiera).
+function coreElegido(){
+  var c = document.getElementById('v-core');
+  return ((c && c.value.trim()) || localStorage.getItem('kukia_core') || '');
+}
+
+// La pagina abierta en el propio PC (127.0.0.1 / localhost) va al Core de ese
+// PC. Antes se ponia sola el Core publico y los envios acababan en la red
+// publica aunque abrieras la billetera desde tu disco.
+function esLocal(){
+  var h = (location.hostname || '').toLowerCase();
+  return h === '127.0.0.1' || h === 'localhost' || h === '::1' || h === '[::1]';
+}
+
 function usaCore(url, c){
   if(!url){ return; }
+  if(coreElegido()){ return; }   // ya hay un Core elegido: no se toca
   if(c){ c.value = url; }
   localStorage.setItem('kukia_core', url);
 }
 
 function detectarCore(){
   var c = document.getElementById('v-core');
-  if(c && c.value.trim()){ return; }
-  if(localStorage.getItem('kukia_core')){ return; }
+  if(coreElegido()){ return; }
+  if(esLocal()){ return; }        // en local manda el Core de este PC
   var candidatos = ['core_actual.json', ESPEJO_CORE];
   var ultimo = '';
   (function siguiente(i){
@@ -208,6 +225,9 @@ function detectarCore(){
     fetch(candidatos[i], {cache: 'no-store'})
       .then(function(r){ return r.ok ? r.json() : null; })
       .then(function(j){
+        // La descarga tarda: si mientras tanto el usuario ya ha puesto el suyo,
+        // se queda con el suyo.
+        if(coreElegido()){ return; }
         if(!j || !j.core){ return siguiente(i + 1); }
         ultimo = j.core;
         var t = Date.parse(j.actualizado || '');
