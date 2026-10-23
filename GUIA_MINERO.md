@@ -50,8 +50,28 @@ copiar el fichero `ledger\wallet\worker_<tu_nodo>.json`.
 
 - El Core paga **por tarea verificada**. El importe exacto de ahora mismo lo da
   el Core en `/stats` (`recompensa_base_actual`); cambia con el ritmo de la red.
-- La red emite **1,3075 KIA por minuto** en total, repartidos entre las tareas
-  que se entregan en ese minuto. Más mineros conectados = menos por tarea.
+- La red emite **~1,31 KIA por minuto** en total, repartidos entre las tareas
+  que se entregan en ese minuto. Más mineros conectados = menos por tarea (más
+  potencia NO adelanta la fecha de la última moneda).
+- La última KIA sale el **01-01-2150**: 124 años desde el inicio, en 6 eras de
+  20,67 años a la mitad cada una. Los cálculos, a la vista, con
+  `python tools\calculo_moneda.py`.
+
+### Ver el minero en una ventana de cmd
+
+Doble clic en **`VER_MINERO.cmd`** (o `VER_MINERO.cmd minero_pc` para reusar la
+identidad de siempre). La ventana enseña cada tarea, y **cada minuto** una línea
+como esta:
+
+```
+[KUKIA] minero_pc[cuda:0] 42.2 GFLOPS | 49 tareas/min | 1.020 KIA/min = 61.2 KIA/h = 1469 KIA/dia (1.45 KIA/h por GFLOPS) | 0 fallos, total 143 tareas / 3.780 KIA
+```
+
+Al arrancar dice también la emisión (KIA por tarea, KIA/min de la red) y la
+fecha de la última moneda. Todo queda copiado en `logs/minero_visible.log`.
+Los dos cambios que hay que entender: **KIA/h según potencia** = tareas/min
+multiplicado por el pago de cada tarea, y **cerrar la ventana para el minero**
+(la guardia lo vuelve a arrancar sola, pero sin ventana).
 - Una GPU de 12 GB hace tareas de milisegundos a ~7 segundos según el tipo.
 - **KIA todavía no tiene precio ni mercado.** Minar hoy no da dinero: da
   posición en la red para cuando la haya. Si vienes a ganar euros, esto no es
@@ -123,3 +143,9 @@ en la misma dirección.
 - Con el minero arrancado, el panel muestra **utilización real de GPU** (%)
   cada 3 s, además de la VRAM usada y los ms de la última tarea. Si no hay
   `nvidia-smi`, la tarjeta dice "sin dato de GPU" pero el minero sigue igual.
+- **El minero dice con qué trabaja en cada conexión** (23-10-2026): manda su
+  `device` al registrarse, al volver a registrarse y en el latido firmado (ahora
+  también cuando mina en CPU). El Core lo guarda en el nodo y deja de adivinar
+  por VRAM/TOPS. Un nodo dado de alta con un minero viejo, sin `device`, sale
+  del plan B —y vuelve a recibir difusiones— en cuanto manda el primer latido.
+  Un minero viejo sigue minando: no hace falta actualizarlo para eso.
