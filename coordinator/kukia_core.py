@@ -3458,6 +3458,14 @@ def stats():
                           "credito_kia": precio_unico_minuto()["credito_kia"],
                           "objetivo_kia_min": precio_unico_minuto()["objetivo_kia_min"],
                           "fusible_x": FUSIBLE_MINUTO_X},
+        # Verificacion redundante (23-10-2026): desde fuera se puede comprobar
+        # que reglas estan aplicando de verdad los nodos que se verifican.
+        "replicas": {"activa": REPLICA_ACTIVA,
+                     "parte_verificador": PARTE_REPLICA,
+                     "auditoria_1_de": AUDITORIA_1_DE,
+                     "auditoria_1_de_joven": AUDITORIA_1_DE_JOVEN,
+                     "tareas_confianza": AUDITORIA_TAREAS_CONFIANZA,
+                     "mismo_dueno_bloqueado": True},
         "auto_tareas": {"activo": AUTO_ACTIVO, "objetivo_cola": AUTO_COLA_OBJETIVO,
                         "intervalo_seg": AUTO_INTERVALO},
         "archivado": {"activo": ARCHIVAR_ACTIVO, "retencion": RETENCION_TAREAS,
