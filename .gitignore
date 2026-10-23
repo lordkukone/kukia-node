@@ -1,6 +1,8 @@
 # Claves privadas y billeteras: NUNCA a un repositorio.
 ledger/wallet/
 worker/identidad_minero.json
+# Cerradura de instancia unica del minero (PID de esta maquina, no se versiona)
+worker/minero.lock
 validator/identidad*.json
 coordinator/sello_key.txt
 coordinator/admin_token.txt
@@ -42,3 +44,7 @@ sitio_publicado/
 # Respaldos generados del cortafuegos (llevan rutas y nombres del PC)
 cortafuegos/respaldo_firewall_*.wfw
 cortafuegos/reglas_cerradas_*
+
+# Copias del ledger de los ensayos (6,9 GB el 23-10-2026): se regeneran con
+# tools/ensayo_estabilidad.py y no pintan nada en un repositorio.
+medidas/ensayos/

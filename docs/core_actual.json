@@ -1,9 +1,9 @@
 {
-  "core": "https://dimension-jet-salmon-extra.trycloudflare.com",
-  "actualizado": "2026-10-22T15:11:28Z",
+  "core": "https://catch-rabbit-requested-seattle.trycloudflare.com",
+  "actualizado": "2026-10-23T18:38:51Z",
   "version": "0.4.2",
-  "nodos": 20,
-  "tareas_ok": 271212,
+  "nodos": 18,
+  "tareas_ok": 395223,
   "core_local": "http://127.0.0.1:8300",
   "nota": "Direccion viva del Core KUKIA. El minero la lee al arrancar; si cambia, el paquete sigue valiendo."
 }

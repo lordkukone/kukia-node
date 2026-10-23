@@ -11,6 +11,9 @@ QUE MIRA (cada pasada)
      si una se queda con una version vieja, tambien avisa.
   7. que la copia de claves de N:/CLAVES_KUKIA no tenga mas de una semana:
      si la tarea del domingo no corrio (disco desconectado), avisa de eso.
+  8. la disponibilidad de HOY: si algun servicio lleva el dia por debajo del
+     99 % (con al menos media hora medida), avisa UNA vez por servicio y dia.
+     Se calcula con los logs de los dos vigilantes (tools/incidencias.py).
 
 CUANDO AVISA
   Solo al CAMBIAR de estado: cuando algo se cae y cuando vuelve. Nada de avisar
@@ -61,6 +64,20 @@ ZIP_LOCAL = RAIZ / "docs" / "kukia-node.zip"
 TAREA = "KUKIA_vigilante_webs"
 MINUTOS = 5
 FALLOS_PARA_CAIDO = 2
+
+# --- Disponibilidad del dia (22-10-2026) -----------------------------------
+# Que avise cuando un servicio lleve el dia por debajo del 99 %. Dos frenos:
+#  - OBSERVADO_MIN: por la mañana hay pocos minutos medidos y un fallo suelto
+#    daria 80 %; no se avisa hasta tener media hora de datos.
+#  - Una vez por servicio y dia (logs/disponibilidad_avisada.json): si no, el
+#    mismo 98 % avisaria cada 5 minutos hasta la medianoche.
+DISPONIBLE_MIN = float(os.environ.get("KUKIA_DISPONIBLE_MIN", "99"))
+DISPONIBLE_OBSERVADO_MIN = float(os.environ.get("KUKIA_DISPONIBLE_OBSERVADO_MIN", "1800"))
+AVISADAS = LOGS / "disponibilidad_avisada.json"
+# Lo que NO es disponibilidad: `paquete-igual` compara versiones entre webs, no
+# dice si un servicio esta arriba. Si entraba aqui, un desajuste de despliegue
+# daba "0,0 % de disponibilidad" y el aviso decia una cosa que no era.
+NO_SON_DISPONIBILIDAD = {"paquete-igual"}
 
 SITIOS = {
     "surge": "https://kukia-network.surge.sh",
@@ -381,12 +398,139 @@ def comprueba(core_local: str = CORE_LOCAL,
     return salida
 
 
-def resumen_texto(estado: dict) -> str:
+def resumen_texto(estado: dict, disponibilidad: dict | None = None) -> str:
     lineas = [f"KUKIA - estado de webs y Core ({datetime.now().strftime('%d-%m-%Y %H:%M')})"]
     for nombre, d in estado.get("servicios", {}).items():
         marca = "OK  " if d.get("ok") else "CAIDO"
         lineas.append(f"  [{marca}] {nombre:13} {d.get('detalle', '')}")
+    if disponibilidad:
+        lineas.append("")
+        lineas.append(f"Disponibilidad de hoy (avisa por debajo del "
+                      f"{DISPONIBLE_MIN:g} %):")
+        for nombre, s in sorted(disponibilidad.items()):
+            if not s.get("observado") or nombre in NO_SON_DISPONIBILIDAD:
+                continue
+            disp = s.get("disponibilidad")
+            valor = "sin datos" if disp is None else _pct(disp)
+            if disp is not None and disp < DISPONIBLE_MIN:
+                valor += "  << por debajo del minimo"
+            lineas.append(f"  {nombre:14} {valor:>10}   {s.get('caidas', 0)} caida(s), "
+                          f"{_minutos(s.get('caido'))} caido")
     return "\n".join(lineas) + "\n"
+
+
+def _minutos(seg) -> str:
+    seg = int(seg or 0)
+    if seg < 60:
+        return f"{seg} s"
+    return f"{seg // 60} min"
+
+
+def disponibilidad_hoy(ahora: datetime | None = None, eventos: list | None = None) -> dict:
+    """{servicio: {disponibilidad, caido, observado, caidas}} de HOY, lo medido.
+
+    La cuenta la hace tools/incidencias.py, que es quien sabe leer los dos logs
+    y descontar los huecos (PC apagado). Si algo falla se devuelve {}: la
+    disponibilidad es un extra, no puede tumbar la pasada del vigilante.
+    """
+    ahora = ahora or datetime.now()
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import incidencias as inc
+        if eventos is None:
+            eventos = inc.lee(inc.LOG_SERVICIOS) + inc.lee(inc.LOG_WEB)
+        desde = datetime.combine(ahora.date(), datetime.min.time())
+        dias = inc.resumen(eventos, desde, ahora)
+    except Exception:
+        return {}
+    return dias.get(ahora.strftime("%Y-%m-%d"), {})
+
+
+def _avisadas() -> dict:
+    """{dia: [servicios ya avisados]} del fichero de marcas."""
+    try:
+        return json.loads(AVISADAS.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _marca_avisado(dia: str, servicios: list) -> None:
+    """Apunta los servicios avisados hoy (y tira los dias viejos)."""
+    d = _avisadas()
+    lista = d.setdefault(dia, [])
+    for s in servicios:
+        if s not in lista:
+            lista.append(s)
+    for viejo in sorted(d)[:-14]:
+        d.pop(viejo, None)
+    try:
+        LOGS.mkdir(parents=True, exist_ok=True)
+        AVISADAS.write_text(json.dumps(d, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _pct(x: float) -> str:
+    return f"{x:.1f}".replace(".", ",") + " %"
+
+
+def linea_disponibilidad(datos: dict) -> str:
+    """'surge 89,6 % · core-local 99,8 %' con lo que tenga datos hoy."""
+    trozos = []
+    for nombre, s in sorted(datos.items()):
+        if not s.get("observado"):
+            continue
+        disp = s.get("disponibilidad")
+        trozos.append(f"{nombre} {'-' if disp is None else _pct(disp)}")
+    return " · ".join(trozos)
+
+
+def revisa_disponibilidad(ahora: datetime | None = None, eventos: list | None = None,
+                          avisar: bool = True) -> list:
+    """Avisos [(titulo, texto)] de lo que hoy esta por debajo del minimo.
+
+    Un aviso por servicio y dia como mucho: si `surge` se queda en 98 % a las
+    14:00, no se repite a las 14:05, pero si por la tarde cae `github`, ese
+    servicio si avisa (se lleva la cuenta por separado).
+    """
+    ahora = ahora or datetime.now()
+    dia = ahora.strftime("%Y-%m-%d")
+    datos = disponibilidad_hoy(ahora, eventos)
+    ya = _avisadas().get(dia, [])
+    bajos = []
+    for servicio, s in sorted(datos.items()):
+        if servicio in ya or servicio in NO_SON_DISPONIBILIDAD:
+            continue
+        if float(s.get("observado") or 0) < DISPONIBLE_OBSERVADO_MIN:
+            continue          # muy pocos minutos medidos: aun no dice nada
+        disp = s.get("disponibilidad")
+        if disp is None or disp >= DISPONIBLE_MIN:
+            continue
+        bajos.append((servicio, s, float(disp)))
+    if not bajos:
+        return []
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import incidencias as inc
+        hhmm = inc.hhmm
+    except Exception:
+        def hhmm(seg):
+            seg = int(seg or 0)
+            return f"{seg // 60} min"
+    bajos.sort(key=lambda x: x[2])
+    nombre, s, disp = bajos[0]
+    piezas = [f"{n} {_pct(d)} ({hhmm(s2.get('caido'))} caido de "
+              f"{hhmm(s2.get('observado'))} mirados)" for n, s2, d in bajos[:4]]
+    titulo = f"KUKIA: {nombre} al {_pct(disp)} hoy"
+    texto = ("; ".join(piezas)
+             + f". Minimo: {DISPONIBLE_MIN:g} %. Detalle: VER_INCIDENCIAS.cmd")
+    # La marca va SOLO si se va a avisar de verdad: una pasada con --sin-aviso
+    # (o una prueba) no debe gastar el aviso del dia.
+    if avisar:
+        _marca_avisado(dia, [n for n, _, _ in bajos])
+        log(f"disponibilidad por debajo del {DISPONIBLE_MIN:g} %: {texto}")
+    return [(titulo, texto)]
 
 
 def una_vez(avisar: bool = True, core_local: str = CORE_LOCAL,
@@ -419,17 +563,27 @@ def una_vez(avisar: bool = True, core_local: str = CORE_LOCAL,
                 and int(previo.get("fallos", 0)) >= FALLOS_PARA_CAIDO):
             avisos.append((f"KUKIA: {r['nombre']} ha vuelto", r["detalle"]))
 
+    # Disponibilidad del dia: se mira DESPUES de la pasada (asi el propio log de
+    # esta pasada ya cuenta) y se avisa una sola vez por servicio y dia.
+    disp = disponibilidad_hoy()
+    try:
+        avisos.extend(revisa_disponibilidad(avisar=avisar))
+    except Exception as e:
+        log(f"no pude calcular la disponibilidad de hoy ({type(e).__name__}: {e})")
+
     estado = {"ultima": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-              "servicios": ahora}
+              "servicios": ahora, "disponibilidad_hoy": disp}
     guarda_estado(estado)
     try:
-        RESUMEN.write_text(resumen_texto(estado), encoding="utf-8")
+        RESUMEN.write_text(resumen_texto(estado, disp), encoding="utf-8")
     except Exception:
         pass
 
     caidos = [n for n, d in ahora.items() if not d["ok"] and d["fallos"] >= FALLOS_PARA_CAIDO]
     log("pasada: " + ", ".join(f"{n}={'ok' if d['ok'] else 'fallo(' + str(d['fallos']) + ')'}"
                                for n, d in ahora.items()))
+    if disp:
+        log("hoy: " + linea_disponibilidad(disp))
     for titulo, texto in avisos:
         if avisar:
             avisa(titulo, texto)

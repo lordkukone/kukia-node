@@ -710,7 +710,15 @@ print("OK")
                 cuerpo = rr.json() if rr.status_code == 200 else {}
                 check("resultado verificado y pagado", rr.status_code == 200 and cuerpo.get("ok") is True,
                       rr.text[:160])
-                check("el pago es mayor que 0", float(cuerpo.get("kuki") or 0) > 0,
+                # CONTRATO DEL 22-10-2026 (pago por potencia): una tarea de 0
+                # FLOP (checksum) cobra 0 KIA. Antes esta prueba exigia pago>0
+                # porque la tarifa era plana; con potencia demostrada el
+                # checksum queda fuera de la mezcla y cobra cero a proposito
+                # (ver PAGO_POR_POTENCIA.md y tools/prueba_pago_potencia.py).
+                # El pago positivo de una tarea de calculo se comprueba mas
+                # abajo, con las matrices y sus replicas.
+                check("checksum (0 FLOP) cobra 0 KIA, como manda el pago por potencia",
+                      float(cuerpo.get("kuki") or 0) == 0,
                       f"{cuerpo.get('kuki')} KIA")
                 tops_con_trabajo = float(s.get(f"{base}/stats", timeout=30).json()["dificultad"]["tops_red"])
                 check("un nodo con trabajo pagado SI cuenta para la dificultad",

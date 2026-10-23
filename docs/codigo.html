@@ -87,10 +87,10 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>3ff42f0dda6ec89549119c3064789d7d435509e400f7a98d7c9f113f41a252b1</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>972f7e70a4ba7cd02d0376f5ad12693aca4b87dd996888788dc06c06621584a3</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
-<br><br>Generado desde los ficheros reales el 22-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
+<br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
 
 <h2>Coordinador (Core) - coordinator/kukia_core.py</h2>
 
@@ -191,6 +191,22 @@ REWARD_BASE = 10.0                # KIA por tarea base
 GENESIS_DIR = &quot;KUK77D72508BD940C9BA969B0402A3CF1F9679BE3&quot;   # wallet fundador (Kuki)
 GENESIS_MONTO = 15_000_000.0      # 15M reservados al fundador dentro del techo de 100M
 TIER_MULT = {12: 1.0, 16: 1.3, 24: 1.6}   # Rent-Tier por VRAM (mejora 1)
+# --- Pago por potencia demostrada (22-10-2026) - APAGADO por defecto --------
+# Con KUKIA_PAGO_POR_FLOP=1 se paga el trabajo (FLOPs verificados x precio) en
+# vez de una tarifa plana por tarea. Ver pago_por_trabajo() mas abajo.
+# ACTIVO por defecto desde el 22-10-2026: el pago sigue a los FLOPs verificados.
+# Para volver a la tarifa plana: KUKIA_PAGO_POR_FLOP=0 (y reiniciar el Core).
+PAGO_POR_FLOP = os.environ.get(&quot;KUKIA_PAGO_POR_FLOP&quot;, &quot;1&quot;).strip().lower() not in (&quot;0&quot;, &quot;&quot;, &quot;no&quot;, &quot;false&quot;, &quot;off&quot;)
+# Suelo facturable por tarea, en GFLOP. A 0 (defecto desde el 22-10-2026) el
+# pago es ESTRICTAMENTE proporcional al trabajo: una tarea de 0,4 GFLOP cobra
+# 0,4 y un checksum (0 FLOPs) cobra 0. La decision es de Kuki: el que no tiene
+# potencia cobra menos, sea GPU o CPU. Si algun dia se quiere un fijo minimo
+# por tarea (para que los nodos pequenos no se queden a cero), se pone &gt;0.
+GFLOP_MIN_FACTURABLE = max(0.0, float(os.environ.get(&quot;KUKIA_GFLOP_MIN&quot;, &quot;0&quot;)))
+# Ventana para medir lo que entrega la red: corta, para que el precio siga a la
+# realidad, pero no tanto como para oscilar con cada tarea.
+GFLOPS_VENTANA_MIN = max(2, int(os.environ.get(&quot;KUKIA_VENTANA_MIN&quot;, &quot;10&quot;)))
+PRECIO_TTL = 20.0
 REF_BONUS = 50.0                  # bonus referido al completar 10 tareas (mejora 2)
 BOUNTY = 1000.0                   # bounty anti-trampa (mejora 3)
 # --- Politica de firmas (migracion) ---
@@ -205,6 +221,10 @@ ABANDONO_SEG = 1800.0
 # AUDITORIA 2026-10-20: un solo nodo podia pedir trabajo en bucle y quedarse
 # con toda la cola (30 min cada tarea). El worker de serie hace UNA tarea por
 # GPU/nodo, asi que 4 es holgado y corta el acaparamiento de raiz.
+# Tareas simultaneas por nodo. 4 es el valor de siempre; con dos ranuras de
+# calculo por tarjeta hay que subirlo a 8 (KUKIA_MAX_TAREAS_NODO=8), porque si
+# no el nodo se queda sin cola y la GPU espera. Medido el 23-10-2026: la
+# ocupacion sube, pero el KIA/kWh baja porque la emision va por presupuesto.
 MAX_TAREAS_NODO = max(1, int(os.environ.get(&quot;KUKIA_MAX_TAREAS_NODO&quot;, &quot;4&quot;)))
 # Un nodo sin ninguna tarea pagada no puede acumular trabajo: 1 a la vez y
 # vence a los 2 minutos. Asi un sybil recien creado no puede inmovilizar la
@@ -235,12 +255,22 @@ NODO_SIN_TRABAJO_H = max(0.5, float(os.environ.get(&quot;KUKIA_NODO_SIN_TRABAJO_
 REPLICA_ACTIVA = (os.environ.get(&quot;KUKIA_REPLICA&quot;, &quot;1&quot;) != &quot;0&quot;)
 # Parte del premio que se lleva el nodo que verifica. El total NO cambia:
 # 70 % ejecutor + 30 % verificador = lo mismo que antes por una tarea. Si se
-# pagara el 100 % a cada uno, la emision se dispararia y la fecha de 2150
+# pagara el 100 % a cada uno, la emision se dispararia y la fecha final
 # seria mentira.
 PARTE_REPLICA = min(0.5, max(0.0, float(os.environ.get(&quot;KUKIA_PARTE_REPLICA&quot;, &quot;0.3&quot;))))
 # 1 de cada N tareas con replica se recalcula igualmente, para que una
 # colusion entre dos nodos tenga probabilidad medible de caer.
 AUDITORIA_1_DE = max(0, int(os.environ.get(&quot;KUKIA_AUDITORIA_1_DE&quot;, &quot;10&quot;)))
+# MUESTREO REFORZADO PARA NODOS SIN HISTORIAL (23-10-2026). Medido: dos
+# identidades nuevas decian las dos la misma mentira y el Core pagaba 0,918328
+# KIA por una matriz falsa (AUDITORIA_AGENTE_2026-10-23.md, H1). Un nodo sin
+# historial no puede ser &quot;segunda opinion&quot; barata: mientras alguno de los dos
+# tenga menos de AUDITORIA_TAREAS_CONFIANZA tareas verificadas, la tarea SE
+# RECALCULA SIEMPRE (AUDITORIA_1_DE_JOVEN = 1). Solo cuesta CPU al arrancar
+# nodos nuevos; a partir de ahi se vuelve al muestreo normal (1 de cada 10).
+# Se puede suavizar sin tocar codigo: KUKIA_AUDITORIA_1_DE_JOVEN=3 (1 de cada 3).
+AUDITORIA_1_DE_JOVEN = max(1, int(os.environ.get(&quot;KUKIA_AUDITORIA_1_DE_JOVEN&quot;, &quot;1&quot;)))
+AUDITORIA_TAREAS_CONFIANZA = max(0, int(os.environ.get(&quot;KUKIA_AUDITORIA_TAREAS_CONFIANZA&quot;, &quot;20&quot;)))
 # Techo de nodos verificando A LA VEZ (fraccion de los activos). Sin techo,
 # todos los nodos libres cogian replicas, nadie empezaba tareas nuevas y la
 # cola se paraba por turnos: se ejecutaba todo, luego se verificaba todo.
@@ -426,6 +456,16 @@ class _ConSegura:
     def executescript(self, sql):
         return self._con().executescript(sql)
 
+    def en_transaccion(self) -&gt; bool:
+        &quot;&quot;&quot;¿Esta conexion (la de este hilo) tiene una transaccion abierta?
+
+        Lo necesita la bolsa: si el pago ya abrio BEGIN IMMEDIATE, la
+        escritura se suma a esa transaccion (y su ROLLBACK la deshace); si
+        no hay ninguna, la abre y la cierra ella misma para no dejar la base
+        bloqueada al siguiente BEGIN.
+        &quot;&quot;&quot;
+        return bool(self._con().in_transaction)
+
     def commit(self):
         return self._con().commit()
 
@@ -570,6 +610,10 @@ def schema():
         # Los sobrantes se marcan retirado=1: NO se borran (sus tareas y sus
         # pagos siguen en el ledger), solo dejan de contar y de salir en listas.
         &quot;ALTER TABLE nodos ADD COLUMN retirado INT DEFAULT 0&quot;,
+        # DISPOSITIVO DECLARADO (23-10-2026): el worker dice si mina con
+        # &#x27;cuda:0&#x27; o con &#x27;cpu&#x27;. El planificador necesita saberlo para no
+        # mandarle difusiones a una CPU (0,8 s en GPU contra 17,3 s en CPU).
+        &quot;ALTER TABLE nodos ADD COLUMN device TEXT DEFAULT &#x27;&#x27;&quot;,
     ):
         try:
             con.execute(_sql)
@@ -799,6 +843,73 @@ def device_limpio(valor) -&gt; str:
     limpio = &quot;&quot;.join(c for c in str(valor or &quot;&quot;) if c in _DEVICE_OK).strip()
     limpio = &quot; &quot;.join(limpio.split())
     return (limpio or &quot;gpu&quot;)[:16]
+
+
+def _device_declarado(valor) -&gt; str:
+    &quot;&quot;&quot;Nombre del dispositivo tal cual lo declara el nodo (&#x27;cpu&#x27;, &#x27;cuda:0&#x27;...).
+
+    A diferencia de `device_limpio` (que es para PINTAR y cae a &#x27;gpu&#x27;), aqui
+    interesa distinguir &quot;no lo dijo&quot; de &quot;dijo GPU&quot;. Vacio = registro antiguo.
+    &quot;&quot;&quot;
+    limpio = &quot;&quot;.join(c for c in str(valor or &quot;&quot;) if c.isalnum() or c in &quot;:_-.&quot;)
+    return limpio.strip().lower()[:16]
+
+
+def _nodo_es_cpu(node) -&gt; bool:
+    &quot;&quot;&quot;True si el nodo trabaja solo con CPU.
+
+    POR QUE EXISTE (23-10-2026): una difusion medía 0,8 s en GPU y 17,3 s en
+    CPU (medido en `medidas/ensayos/cpu_gpu_30m_...`). Aun así el Core le daba
+    difusiones al nodo CPU, que se pasaba el turno calculando una tarea que la
+    GPU hace en un suspiro, y encima cobraba igual. Eso atasca el nodo y no
+    aporta nada a la red: la difusion va a quien la hace rápido.
+
+    Se mira lo declarado en el registro (`device`) y, para los nodos que ya
+    estaban dados de alta antes de existir esa columna, el patrón con el que
+    el propio worker se declara CPU: VRAM 0 y 0 TOPS.
+    &quot;&quot;&quot;
+    try:
+        dev = str(node[&quot;device&quot;] or &quot;&quot;).strip().lower()
+    except Exception:
+        dev = &quot;&quot;
+    if dev:
+        return dev.startswith(&quot;cpu&quot;)
+    # PLAN B, EN ORDEN DE FIABILIDAD: primero el ultimo latido firmado (una GPU
+    # que late con cuda:&lt;n&gt; es GPU aunque se registrara antes de existir la
+    # columna `device`); solo si no hay latido se usa VRAM 0 + TOPS 0. Asi un
+    # nodo antiguo deja de estar castigado en cuanto manda su telemetria.
+    try:
+        nid = node[&quot;id&quot;] if &quot;id&quot; in node.keys() else &quot;&quot;
+    except Exception:
+        nid = &quot;&quot;
+    if nid:
+        try:
+            fila = con.execute(&quot;SELECT device FROM gpu_estado WHERE nodo_id=? AND ts&gt;=? &quot;
+                               &quot;AND device LIKE &#x27;cuda:%&#x27; ORDER BY ts DESC LIMIT 1&quot;,
+                               (nid, time.time() - 900.0)).fetchone()
+            if fila is not None:
+                return False
+        except Exception:
+            pass
+    try:
+        return int(node[&quot;vram_gb&quot;] or 0) == 0 and float(node[&quot;tops&quot;] or 0.0) &lt;= 0.0
+    except Exception:
+        return False
+
+
+def _hay_gpu_activa(ventana: float = 300.0) -&gt; bool:
+    &quot;&quot;&quot;¿Hay algún nodo con GPU visto en los últimos 5 minutos?
+
+    Si no lo hay, el generador deja de fabricar difusiones: nadie podría
+    servírselas y se comerían la cola (las difusiones encoladas ya no cuentan
+    para el objetivo de cola cuando no hay GPU).
+    &quot;&quot;&quot;
+    try:
+        filas = con.execute(&quot;SELECT * FROM nodos WHERE COALESCE(visto,0) &gt; ?&quot;,
+                            (time.time() - ventana,)).fetchall()
+    except Exception:
+        return False
+    return any(not _nodo_es_cpu(n) for n in filas)
 
 
 def _firmar_texto(texto: str) -&gt; str:
@@ -1404,6 +1515,9 @@ class NodoIn(BaseModel):
     # Prueba de posesion de la clave privada (reto de un solo uso).
     reto: str = &quot;&quot;
     firma_reto: str = &quot;&quot;
+    # Dispositivo con el que mina (&#x27;cpu&#x27;, &#x27;cuda:0&#x27;...). Opcional: los workers
+    # anteriores no lo mandan y se deduce por VRAM/TOPS (ver _nodo_es_cpu).
+    device: str = &quot;&quot;
 
 class TareaIn(BaseModel):
     tipo: str      # &#x27;checksum&#x27; | &#x27;matriz&#x27; | &#x27;inferencia&#x27; | &#x27;embeddings&#x27; | &#x27;lote_embeddings&#x27; | &#x27;difusion_calor&#x27;
@@ -1488,14 +1602,20 @@ def gflops_de_tarea(tipo: str, params, seg_servidor: float) -&gt; float:
         return 0.0
     return flops / seg / 1e9
 
-# --- Calendario de emision: la ultima moneda sale el 13-04-2150 ---
-# 6 halvings en 124,28 anos -&gt; era de 20,71 anos. Tras esa fecha, emision = 0.
+# --- Calendario de emision: la ultima moneda sale el 01-01-2150 ---
+# 6 halvings en 124 anos -&gt; era de 20,67 anos. Tras esa fecha, emision = 0.
+#
+# POR QUE 2150 (23-10-2026): decision del dueno. El 22-10 se habia movido al
+# 01-01-2152 (126 anos, 6 eras de 21) porque un requisito propio pedia 125 anos
+# o mas desde hoy; Kuki lo corrigio: el calendario acaba en 2150, no en 2152.
+# Se mantienen las 6 eras, ahora de 20,67 anos cada una (124 anos desde el
+# 01-01-2026). Lo comprueba `python tools/calculo_moneda.py`.
 from datetime import date, datetime, timedelta
 EMISSION_START = date(2026, 1, 1)
-EMISSION_END = date(2150, 4, 13)
-HALVING_YEARS = (EMISSION_END - EMISSION_START).days / 365.25 / 6  # ~20,71
+EMISSION_END = date(2150, 1, 1)
+HALVING_YEARS = (EMISSION_END - EMISSION_START).days / 365.25 / 6  # 20,67
 def emission_mult() -&gt; float:
-    &quot;&quot;&quot;Multiplicador de recompensa por era: 1.0, 0.5, 0.25... 0 tras el 13-04-2150.&quot;&quot;&quot;
+    &quot;&quot;&quot;Multiplicador de recompensa por era: 1.0, 0.5, 0.25... 0 tras la fecha final.&quot;&quot;&quot;
     hoy = date.today()
     if hoy &gt;= EMISSION_END:
         return 0.0
@@ -1507,7 +1627,7 @@ def emission_info() -&gt; dict:
     hoy = date.today()
     if hoy &gt;= EMISSION_END:
         return {&quot;era_actual&quot;: 6, &quot;multiplicador&quot;: 0.0,
-                &quot;proximo_halving&quot;: None, &quot;fin_emision&quot;: &quot;2150-04-13&quot;,
+                &quot;proximo_halving&quot;: None, &quot;fin_emision&quot;: EMISSION_END.isoformat(),
                 &quot;halving_years&quot;: round(HALVING_YEARS, 2)}
     elapsed = (hoy - EMISSION_START).days / 365.25
     era = max(0, int(elapsed // HALVING_YEARS))
@@ -1516,7 +1636,7 @@ def emission_info() -&gt; dict:
         &quot;era_actual&quot;: era,
         &quot;multiplicador&quot;: 0.5 ** era,
         &quot;proximo_halving&quot;: prox.isoformat(),
-        &quot;fin_emision&quot;: &quot;2150-04-13&quot;,
+        &quot;fin_emision&quot;: EMISSION_END.isoformat(),
         &quot;halving_years&quot;: round(HALVING_YEARS, 2),
     }
 
@@ -1712,17 +1832,18 @@ def registrar(n: NodoIn, req: Request):
         # registrarse marcaba al nodo como activo 24 h, asi que un script podia
         # inflar los TOPS de la red (y la dificultad) sin minar ni una tarea.
         # Ahora solo cuenta cuando pide trabajo, y para eso hace falta firmar.
+        dispositivo = _device_declarado(n.device)
         if previo:
             # Datos de la GPU se actualizan; tareas, reputacion, visto y
             # castigos NO se tocan (eso es historial del nodo).
             con.execute(&quot;UPDATE nodos SET vram_gb=?, tier=?, tops=?, tops_estimado=?, &quot;
-                        &quot;ref=?, direccion_cobro=? WHERE id=?&quot;,
+                        &quot;ref=?, direccion_cobro=?, device=? WHERE id=?&quot;,
                         (vram, tier(vram), tops, 1 if n.tops_estimado else 0,
-                         n.ref[:64], dir_cobro, nid))
+                         n.ref[:64], dir_cobro, dispositivo, nid))
         else:
-            con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)&quot;,
+            con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto,device) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)&quot;,
                         (nid, nombre_nodo, vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
-                         pub, 1 if n.tops_estimado else 0, dir_cobro, 0.0))
+                         pub, 1 if n.tops_estimado else 0, dir_cobro, 0.0, dispositivo))
     return {&quot;id&quot;: nid, &quot;tier&quot;: tier(vram), &quot;max_supply&quot;: MAX_SUPPLY, &quot;tops_registrados&quot;: tops,
             &quot;autenticado&quot;: bool(pub), &quot;direccion_cobro&quot;: dir_cobro}
 
@@ -1873,6 +1994,15 @@ def nodos_telemetria(t: TelemetriaIn):
                     &quot;ON CONFLICT(nodo_id,device) DO UPDATE SET &quot;
                     &quot;metricas=excluded.metricas, ts=excluded.ts, origen=&#x27;live&#x27;&quot;,
                     (t.nodo_id, dev, t.metricas, float(t.ts)))
+        # NODO ANTIGUO SIN `device` (23-10-2026): los que se dieron de alta
+        # antes de existir la columna se quedaban con device=&#x27;&#x27; y el Core los
+        # tomaba por CPU por el plan B (VRAM 0 / TOPS 0), sin mandarles
+        # difusiones. El latido trae el dispositivo de verdad: se guarda aqui,
+        # sin tocar tareas, reputacion ni pagos.
+        if dev:
+            fila = con.execute(&quot;SELECT device FROM nodos WHERE id=?&quot;, (t.nodo_id,)).fetchone()
+            if fila is not None and (fila[&quot;device&quot;] or &quot;&quot;) != dev:
+                con.execute(&quot;UPDATE nodos SET device=? WHERE id=?&quot;, (dev, t.nodo_id))
     return {&quot;ok&quot;: True, &quot;nodo_id&quot;: t.nodo_id, &quot;device&quot;: dev}
 
 @app.get(&quot;/nodos&quot;)
@@ -2041,6 +2171,9 @@ def pendiente(nodo_id: str, excluir: str = &quot;&quot;, colas: str = &quot;&quo
     if castigo &gt; time.time():
         raise HTTPException(429, f&quot;nodo castigado por resultados incorrectos durante &quot;
                                  f&quot;{int(castigo - time.time())} s&quot;)
+    # 23-10-2026: una CPU no recibe difusiones. Medido: 17,3 s por difusion en
+    # CPU contra 0,8 s en GPU. Matriz e inferencia siguen abiertas para ella.
+    es_cpu = _nodo_es_cpu(node)
     # Marca de actividad: solo los nodos vistos en 24 h cuentan para TOPS.
     try:
         with _escritura():
@@ -2081,6 +2214,8 @@ def pendiente(nodo_id: str, excluir: str = &quot;&quot;, colas: str = &quot;&quo
                   &quot;AND COALESCE(vram_min,0) &lt;= ? &quot;
                   &quot;AND COALESCE(nodos_intento,&#x27;&#x27;) NOT LIKE ? &quot;)
             _args = [vram, f&quot;%{nodo_id}%&quot;]
+            if es_cpu:
+                _q += &quot;AND COALESCE(tipo,&#x27;&#x27;) &lt;&gt; &#x27;difusion_calor&#x27; &quot;
             if excl:
                 _q += &quot;AND COALESCE(campana,&#x27;&#x27;) NOT IN (%s) &quot; % &quot;,&quot;.join(&quot;?&quot; * len(excl))
                 _args += excl
@@ -2092,7 +2227,7 @@ def pendiente(nodo_id: str, excluir: str = &quot;&quot;, colas: str = &quot;&quo
             _q += (&quot;ORDER BY CASE COALESCE(cola,&#x27;B&#x27;) WHEN &#x27;A&#x27; THEN 0 WHEN &#x27;B&#x27; THEN 1 ELSE 2 END, &quot;
                    &quot;COALESCE(prioridad,0) DESC, creado LIMIT 1&quot;)
             if REPLICA_ACTIVA and not solo_primaria:
-                rep = _reclamar_replica(nodo_id, vram)
+                rep = _reclamar_replica(nodo_id, vram, sin_difusion=es_cpu)
                 if rep is not None:
                     con.commit()
                     return {&quot;tarea&quot;: {&quot;id&quot;: rep[0], &quot;tipo&quot;: rep[1], &quot;params&quot;: rep[2]},
@@ -2250,10 +2385,20 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
     _rep_ok = False
     esperado = None
     verificado_por = &quot;recalculo&quot;
+    # Muestreo de esta entrega: 1 de cada 10 en regimen, 1 de cada 3 si alguno
+    # de los dos nodos aun no tiene historial (23-10-2026).
+    replica_node = None
+    if replica is not None:
+        try:
+            replica_node = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;,
+                                       (replica[&quot;nodo_id&quot;],)).fetchone()
+        except Exception:
+            replica_node = None
+    frec_auditoria = _frecuencia_auditoria(node, replica_node)
     if _es_replicable(tipo, params) and replica is not None \
             and (replica[&quot;metrica&quot;] or &quot;&quot;).strip() \
             and _coinciden(tipo, params, metrica, replica[&quot;metrica&quot;]) \
-            and not _toca_auditoria(tid):
+            and not _toca_auditoria(tid, frec_auditoria):
         ok = True
         _rep_ok = True
         verificado_por = &quot;replica&quot;
@@ -2340,14 +2485,17 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
             # ha respaldado con trabajo verificado (ver tier_verificado).
             tier_pago = tier_verificado(node)
             if ok:
-                kuki, info_pago = recompensa_pago(tier_pago)
+                kuki, info_pago = pago_de_tarea(task2, tier_pago)
                 info_pago = dict(info_pago or {})
                 info_pago[&quot;tier_pagado&quot;] = round(float(tier_pago), 3)
                 info_pago[&quot;tier_declarado&quot;] = round(float(node[&quot;tier&quot;] or 1.0), 3)
                 info_pago[&quot;verificado_por&quot;] = verificado_por
+                # Trazabilidad del muestreo: 1 de cada N, para poder auditar
+                # despues cuantas tareas con replica se recalcularon de verdad.
+                info_pago[&quot;auditoria_1_de&quot;] = frec_auditoria
                 # REPARTO DE LA EJECUCION REDUNDANTE: el total NO cambia. El
                 # ejecutor cobra el 70 % y el que verifico el 30 %. Pagar el
-                # 100 % a cada uno dispararia la emision y la fecha de 2150
+                # 100 % a cada uno dispararia la emision y la fecha final
                 # dejaria de ser cierta.
                 kuki_rep = 0.0
                 if replica is not None and _rep_ok:
@@ -2408,7 +2556,7 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                 # tarea se cierra (no vuelve a la cola).
                 rep_node = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;,
                                        (replica[&quot;nodo_id&quot;],)).fetchone()
-                kuki_r, info_pago = recompensa_pago(
+                kuki_r, info_pago = pago_de_tarea(task2, 
                     tier_verificado(rep_node) if rep_node else 1.0)
                 info_pago = dict(info_pago or {})
                 info_pago[&quot;verificado_por&quot;] = &quot;replica&quot;
@@ -2625,11 +2773,11 @@ def ledger_integridad():
 
 # ============================================================
 #  DIFICULTAD ADAPTATIVA (potencia de LA RED KUKIA, no mundial)
-#  + RECOMPENSA DINAMICA (garantiza agotar justo el 13-04-2150)
+#  + RECOMPENSA DINAMICA (garantiza agotar justo en la fecha final)
 # ============================================================
 # Tiempo objetivo por tarea (media, sin checksum). Con tareas de milisegundos
 # el premio por tarea quedaba en 0,004 KIA; con tareas de ~2 s el ritmo baja y
-# cada tarea paga mas, sin tocar el presupuesto de 1,31 KIA/min ni la fecha 2150.
+# cada tarea paga mas, sin tocar el presupuesto de KIA/min ni la fecha final.
 OBJETIVO_TAREA_MS = float(os.environ.get(&quot;KUKIA_TAREA_MS&quot;, &quot;2000&quot;))
 ESCALA_MIN, ESCALA_MAX = 0.5, 8.0
 _dur_reciente = collections.deque(maxlen=800)   # ms de tareas con FLOPs
@@ -2872,7 +3020,7 @@ def tasa_reciente(ventana: float = 180.0) -&gt; float:
     return tasa_tareas_seg()
 
 def recompensa_pago(tier: float) -&gt; tuple:
-    &quot;&quot;&quot;Pago que garantiza: (1) nunca pasar de 100M, (2) agotar justo el 13-04-2150.
+    &quot;&quot;&quot;Pago que garantiza: (1) nunca pasar de 100M, (2) agotar justo la fecha final.
 
     - objetivo = restante / tareas_restantes_estimadas (persigue la fecha)
     - techo/suelo = bandas del halving x10 / x0.1 (predecible, anti-spikes)
@@ -2892,12 +3040,445 @@ def recompensa_pago(tier: float) -&gt; tuple:
     # el caso raro de red parada; NO hay suelo. El antiguo suelo de
     # techo*0.1 (=1 KIA/tarea) era lo que agotaba los 100M en meses: con
     # ~300 tareas/min son 430.000 KIA/dia, o sea 197 dias para los 85M que
-    # quedan, en vez de llegar al 13-04-2150.
+    # quedan, en vez de llegar a la fecha final.
     base = min(objetivo, techo) if techo &gt; 0 else 0.0
     pago = round(min(base * tier, restante), 6)
     return pago, {&quot;objetivo&quot;: round(objetivo, 6), &quot;techo_halving&quot;: round(techo, 4),
                   &quot;tasa_dia&quot;: round(tasa * 86400, 2), &quot;restante&quot;: round(restante, 2),
                   &quot;emision_por_min&quot;: round(restante / (seg_rest / 60.0), 4)}
+
+
+# ============================================================
+#  PAGO POR POTENCIA DEMOSTRADA (22-10-2026)
+#  ENCENDIDO POR DEFECTO: se apaga con KUKIA_PAGO_POR_FLOP=0.
+#
+#  POR QUE EXISTE: la tarifa plana paga lo mismo por un checksum (0 FLOPs) que
+#  por una difusion de 20 GFLOP, y el tier de VRAM paga por tener memoria, no
+#  por calcular. Medido el 22-10-2026: un 32% de las tareas eran checksums, y
+#  una misma potencia cobraba un 60% mas solo por declarar 24 GB.
+#
+#  COMO: pago = FLOPs verificados de la tarea x precio. El precio NO se inventa:
+#  sale del presupuesto de emision del minuto (lo que queda / minutos hasta
+#  2150) dividido por los GFLOP/min que la red entrega de verdad. Si los nodos
+#  calculan el doble, el precio por GFLOP baja a la mitad: la emision total y
+#  la fecha final siguen siendo ciertas (techo de 100M intacto).
+#
+#  SUELO: por defecto NO hay (GFLOP_MIN_FACTURABLE = 0): una tarea cobra sus
+#  FLOPs y punto, asi que un checksum cobra 0. Se puede poner un minimo por
+#  tarea con KUKIA_GFLOP_MIN (&gt;0) para que los nodos pequenos no se queden a
+#  cero, pero hoy no esta puesto: manda el trabajo medido.
+#
+#  EL TIER NO MULTIPLICA en este modo: pagar dos veces por lo mismo (mas VRAM y
+#  mas FLOPs) es justo lo que se quiere quitar de en medio.
+# ============================================================
+def _gflop_por_minuto(minutos: int = None) -&gt; float:
+    &quot;&quot;&quot;GFLOP FACTURABLES por minuto que ha entregado la red.
+
+    Facturables, no reales: cuenta cada tarea como max(FLOPs, suelo). Asi el
+    precio que sale de aqui paga exactamente el presupuesto de emision, sin
+    que el suelo de servicios (checksums, inferencia pequena) se lo coma por
+    la puerta de atras. Con los FLOPs &quot;reales&quot; la red emitiria de mas y la
+    ultima moneda caeria antes de 2150.
+    &quot;&quot;&quot;
+    try:
+        minutos = int(minutos or GFLOPS_VENTANA_MIN)
+    except Exception:
+        minutos = 10
+    desde = time.time() - minutos * 60.0
+    try:
+        filas = con.execute(&quot;SELECT tipo, params, fin FROM tareas &quot;
+                            &quot;WHERE estado=&#x27;ok&#x27; AND fin IS NOT NULL &quot;
+                            &quot;ORDER BY rowid DESC LIMIT 20000&quot;).fetchall()
+    except Exception:
+        return 0.0
+    gflop = 0.0
+    for r in filas:
+        try:
+            if _epoch(r[&quot;fin&quot;]) &lt; desde:
+                continue
+            gflop += max(_flops_tarea(r[&quot;tipo&quot;], r[&quot;params&quot;]) / 1e9,
+                         GFLOP_MIN_FACTURABLE)
+        except Exception:
+            continue
+    return gflop / minutos
+
+
+_precio_cache = {&quot;ts&quot;: 0.0, &quot;datos&quot;: None}
+
+
+def precio_gflop() -&gt; dict:
+    &quot;&quot;&quot;Precio de 1 GFLOP verificado en KIA (ventana corta, cacheado 20 s).&quot;&quot;&quot;
+    ahora = time.time()
+    if _precio_cache[&quot;datos&quot;] is not None and ahora - _precio_cache[&quot;ts&quot;] &lt; PRECIO_TTL:
+        return _precio_cache[&quot;datos&quot;]
+    try:
+        restante = MAX_SUPPLY - supply_emitido()
+        fin_dt = datetime(EMISSION_END.year, EMISSION_END.month, EMISSION_END.day)
+        seg_rest = max(1.0, (fin_dt - datetime.now()).total_seconds())
+        objetivo_min = max(0.0, restante) / (seg_rest / 60.0)   # KIA/min
+    except Exception as e:
+        objetivo_min = 0.0
+        print(f&quot;[KUKIA Core] precio_gflop: {type(e).__name__}: {e}&quot;, flush=True)
+    gpm = _gflop_por_minuto()
+    if objetivo_min &lt;= 0 or gpm &lt;= 0:
+        datos = {&quot;modo&quot;: &quot;plano&quot;, &quot;motivo&quot;: &quot;sin GFLOP medidos en la ventana&quot;}
+    else:
+        datos = {&quot;modo&quot;: &quot;potencia&quot;,
+                 &quot;precio_gflop&quot;: round(objetivo_min / gpm, 12),
+                 &quot;gflop_por_min&quot;: round(gpm, 3),
+                 &quot;objetivo_kia_min&quot;: round(objetivo_min, 6),
+                 &quot;ventana_min&quot;: GFLOPS_VENTANA_MIN}
+    _precio_cache[&quot;ts&quot;] = ahora
+    _precio_cache[&quot;datos&quot;] = datos
+    return datos
+
+
+# ============================================================
+#  PRECIO UNICO POR MINUTO (23-10-2026)
+#  REPARTO PROPORCIONAL AL TRABAJO, NO POR ORDEN DE LLEGADA.
+#
+#  Antes, en la misma manana, habia una bolsa de KIA que se iba vaciando tarea
+#  a tarea, por orden de llegada. Arreglaba el arranque en frio (un Core nuevo
+#  pagaba 47 KIA el primer minuto contra 1,31 de presupuesto), pero repartia
+#  mal: si el trabajo del minuto valia mas que el presupuesto, las tareas que
+#  llegaban tarde cobraban menos o nada, y la misma tarea cobraba distinto
+#  segun la hora a la que se entregara.
+#
+#  Ahora se fija UN precio por GFLOP para el minuto entero, calculado con el
+#  trabajo del minuto anterior:
+#
+#      precio_minuto = presupuesto_por_minuto() / GFLOP del minuto anterior
+#
+#  Todas las tareas de ese minuto cobran lo mismo por GFLOP, asi que cada nodo
+#  cobra en proporcion EXACTA al trabajo que ha entregado, sin importar cuando
+#  lo entregue. El total del minuto queda en el presupuesto con UN MINUTO de
+#  retraso: si el trabajo se dobla, ese minuto cobra el doble y el siguiente se
+#  corrige a la mitad.
+#
+#  Si el minuto anterior no tuvo trabajo (arranque en frio, red parada) se mira
+#  hacia atras: primero la ventana de 10 min y despues lo que haya en las
+#  ultimas horas (hasta 6), para que una red que estuvo parada vuelva con un
+#  precio sensato en vez de con pago plano. Si no hay NINGUN dato (red nueva,
+#  sin historial), modo plano: el pago de calendario, con el minuto cortado en
+#  un presupuesto. Ese unico caso, el primero de una red nueva, si reparte por
+#  orden de llegada; sin precio no hay otra forma, y se dice aqui.
+#
+#  AJUSTE FINO: el precio se calcula con el trabajo del minuto anterior, asi que
+#  si la red esta cambiando de tamano el minuto puede quedar un poco por encima
+#  o por debajo. Se lleva un credito (lo que sobro/falto en el minuto que
+#  acaba de cerrar, limitado a un presupuesto) y se aplica al precio del
+#  siguiente. Asi el total se queda en el presupuesto, no un 5 % arriba.
+#
+#  FUSIBLE: si un minuto se desmadra de golpe (10 veces mas trabajo), se corta
+#  en 2 presupuestos. Es una red de seguridad, no el mecanismo: en regimen
+#  normal el precio ya deja el minuto en el presupuesto.
+# ============================================================
+FUSIBLE_MINUTO_X = max(1.0, float(os.environ.get(&quot;KUKIA_FUSIBLE_MINUTO_X&quot;, &quot;2&quot;)))
+
+
+def presupuesto_por_minuto() -&gt; float:
+    &quot;&quot;&quot;KIA/min que toca emitir segun el calendario (lo mismo que /stats).&quot;&quot;&quot;
+    try:
+        restante = MAX_SUPPLY - supply_emitido()
+        if restante &lt;= 0:
+            return 0.0
+        fin_dt = datetime(EMISSION_END.year, EMISSION_END.month, EMISSION_END.day)
+        seg_rest = max(1.0, (fin_dt - datetime.now()).total_seconds())
+        return restante / (seg_rest / 60.0)
+    except Exception:
+        return 0.0
+
+
+def _gflop_ventana_larga(horas: float = 6.0) -&gt; float:
+    &quot;&quot;&quot;GFLOP facturables por minuto en lo ultimo que haya cerrado (hasta 6 h).
+
+    Solo se usa cuando el minuto anterior y la ventana de 10 min estan vacios
+    (red parada o recien arrancada). Se divide por el tramo que de verdad
+    cubren las tareas leidas, no por las 6 h, para no salir con un precio
+    inflado si el historial es corto.
+    &quot;&quot;&quot;
+    try:
+        filas = con.execute(&quot;SELECT tipo, params, fin FROM tareas &quot;
+                            &quot;WHERE estado=&#x27;ok&#x27; AND fin IS NOT NULL &quot;
+                            &quot;ORDER BY rowid DESC LIMIT 20000&quot;).fetchall()
+    except Exception:
+        return 0.0
+    ahora = time.time()
+    desde = ahora - horas * 3600.0
+    gflop, primera = 0.0, None
+    for r in filas:
+        try:
+            t = _epoch(r[&quot;fin&quot;])
+            if t is None or t &lt; desde:
+                continue
+            gflop += max(_flops_tarea(r[&quot;tipo&quot;], r[&quot;params&quot;]) / 1e9,
+                         GFLOP_MIN_FACTURABLE)
+            if primera is None or t &lt; primera:
+                primera = t
+        except Exception:
+            continue
+    if gflop &lt;= 0 or primera is None:
+        return 0.0
+    minutos = max(1.0, (ahora - primera) / 60.0)
+    return gflop / minutos
+
+
+def _gflop_entre(desde: float, hasta: float) -&gt; float:
+    &quot;&quot;&quot;GFLOP facturables entregados entre dos instantes (segun `fin`).
+
+    Se cuenta igual que se paga: max(FLOPs, suelo). Asi el precio del minuto
+    reparte exactamente el presupuesto entre el trabajo que la red factura.
+    &quot;&quot;&quot;
+    try:
+        filas = con.execute(&quot;SELECT tipo, params, fin FROM tareas &quot;
+                            &quot;WHERE estado=&#x27;ok&#x27; AND fin IS NOT NULL &quot;
+                            &quot;ORDER BY rowid DESC LIMIT 20000&quot;).fetchall()
+    except Exception:
+        return 0.0
+    total = 0.0
+    for r in filas:
+        try:
+            t = _epoch(r[&quot;fin&quot;])
+            if t is None or t &lt; desde or t &gt;= hasta:
+                continue
+            total += max(_flops_tarea(r[&quot;tipo&quot;], r[&quot;params&quot;]) / 1e9,
+                         GFLOP_MIN_FACTURABLE)
+        except Exception:
+            continue
+    return total
+
+
+_precio_minuto = {&quot;minuto&quot;: -1, &quot;datos&quot;: None}
+
+# Contador del minuto en curso + credito (lo que sobro o falto al cerrar el
+# anterior). Se GUARDA en `meta` dentro de la transaccion del pago (23-10-2026):
+# antes solo vivia en memoria, asi que reiniciar el Core a mitad de minuto
+# volvia a poner la bolsa a cero y se podia pagar dos veces el presupuesto del
+# mismo minuto. Y si la escritura falla, el pago se aborta: mejor no pagar una
+# tarea que emitir por fuera del presupuesto.
+_minuto_actual = {&quot;minuto&quot;: -1, &quot;pagado&quot;: 0.0, &quot;credito&quot;: 0.0}
+
+
+def _guardar_bolsa() -&gt; None:
+    &quot;&quot;&quot;Escribe la bolsa del minuto en `meta`. NO se come los errores.
+
+    Se llama desde `_anotar_pagado`, es decir, DENTRO de la transaccion del
+    pago (BEGIN IMMEDIATE). Si el disco falla o `meta` no deja escribir, la
+    excepcion sube, el endpoint hace ROLLBACK y no se paga nada: la tarea, el
+    asiento y el saldo se quedan como estaban. Silenciar este fallo (el
+    `except Exception: pass` de antes) era justo la puerta por la que se
+    emitia sin control.
+    &quot;&quot;&quot;
+    propio = not con.en_transaccion()
+    try:
+        for clave, valor in ((&quot;bolsa_minuto&quot;, float(_minuto_actual[&quot;minuto&quot;])),
+                             (&quot;bolsa_pagado&quot;, float(_minuto_actual[&quot;pagado&quot;])),
+                             (&quot;bolsa_credito&quot;, float(_minuto_actual[&quot;credito&quot;]))):
+            con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(?,?) &quot;
+                        &quot;ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor&quot;,
+                        (clave, valor))
+        if propio:
+            # Fuera de un pago (pruebas, arranque): la transaccion es de aqui.
+            con.commit()
+    except Exception as e:
+        if propio:
+            try:
+                con.rollback()
+            except Exception:
+                pass
+        raise _error_escritura(e, &quot;no se pudo anotar la bolsa del minuto; &quot;
+                                  &quot;pago abortado&quot;)
+
+
+def _cargar_bolsa() -&gt; None:
+    &quot;&quot;&quot;Recupera la bolsa del minuto tras un reinicio.
+
+    Si el minuto guardado es el de ahora, se sigue con lo ya pagado (no se
+    regala otro presupuesto). Si la lectura falla, la bolsa arranca como
+    GASTADA: el minuto se cierra sin pagar y a la vuelta del minuto se
+    recupera. Es el lado seguro: un minuto sin pagar, no un minuto al doble.
+    &quot;&quot;&quot;
+    actual = int(time.time() // 60)
+    try:
+        fila = con.execute(&quot;SELECT clave, valor FROM meta WHERE clave IN &quot;
+                           &quot;(&#x27;bolsa_minuto&#x27;,&#x27;bolsa_pagado&#x27;,&#x27;bolsa_credito&#x27;)&quot;).fetchall()
+        datos = {r[&quot;clave&quot;]: float(r[&quot;valor&quot;] or 0.0) for r in fila}
+        minuto = int(datos.get(&quot;bolsa_minuto&quot;, -1.0))
+        pagado = float(datos.get(&quot;bolsa_pagado&quot;, 0.0))
+        credito = float(datos.get(&quot;bolsa_credito&quot;, 0.0))
+    except Exception as e:
+        _minuto_actual[&quot;minuto&quot;] = actual
+        _minuto_actual[&quot;pagado&quot;] = presupuesto_por_minuto()
+        _minuto_actual[&quot;credito&quot;] = 0.0
+        print(f&quot;[KUKIA Core] AVISO: la bolsa guardada no se pudo leer &quot;
+              f&quot;({type(e).__name__}); este minuto no paga&quot;, flush=True)
+        return
+    if minuto == actual:
+        _minuto_actual[&quot;minuto&quot;] = minuto
+        _minuto_actual[&quot;pagado&quot;] = max(0.0, pagado)
+        _minuto_actual[&quot;credito&quot;] = credito
+        if pagado &gt; 0:
+            print(f&quot;[KUKIA Core] bolsa del minuto recuperada: &quot;
+                  f&quot;{pagado:.6f} KIA ya pagados&quot;, flush=True)
+
+
+def _cerrar_minuto_si_toca(minuto: int) -&gt; None:
+    &quot;&quot;&quot;Si ha cambiado el minuto, apunta el error del anterior en el credito.&quot;&quot;&quot;
+    c = _minuto_actual
+    if c[&quot;minuto&quot;] == minuto:
+        return
+    if c[&quot;minuto&quot;] &gt;= 0:
+        presu = presupuesto_por_minuto()
+        c[&quot;credito&quot;] += presu - c[&quot;pagado&quot;]
+        # Nunca mas de un presupuesto de credito: asi una red parada un mes no
+        # se pone a pagar el doble durante dias al volver.
+        c[&quot;credito&quot;] = max(-presu, min(presu, c[&quot;credito&quot;]))
+    c[&quot;minuto&quot;], c[&quot;pagado&quot;] = minuto, 0.0
+
+
+def precio_unico_minuto() -&gt; dict:
+    &quot;&quot;&quot;Precio por GFLOP fijo para el minuto en curso (se fija al empezar).&quot;&quot;&quot;
+    minuto = int(time.time() // 60)
+    if _precio_minuto[&quot;datos&quot;] is not None and _precio_minuto[&quot;minuto&quot;] == minuto:
+        return _precio_minuto[&quot;datos&quot;]
+    _cerrar_minuto_si_toca(minuto)
+    presu = presupuesto_por_minuto()
+    ajuste = max(-presu, min(presu, _minuto_actual[&quot;credito&quot;]))
+    objetivo = max(0.0, presu + ajuste)
+    gflop = _gflop_entre((minuto - 1) * 60.0, minuto * 60.0)
+    fuente = &quot;minuto anterior&quot;
+    if gflop &lt;= 0:
+        # Red parada: se mira la ventana de 10 min y, si tampoco, lo ultimo que
+        # haya (hasta 6 h). Asi el primer minuto tras una parada no sale a
+        # precio de oro ni a pago plano.
+        gflop = _gflop_entre(minuto * 60.0 - 600.0, minuto * 60.0) / 10.0
+        fuente = &quot;ventana 10 min&quot;
+    if gflop &lt;= 0:
+        gflop = _gflop_ventana_larga()
+        fuente = &quot;media de lo ultimo que hay (hasta 6 h)&quot;
+    if presu &gt; 0 and gflop &gt; 0:
+        datos = {&quot;minuto&quot;: minuto, &quot;precio&quot;: objetivo / gflop, &quot;fuente&quot;: fuente}
+    else:
+        datos = {&quot;minuto&quot;: minuto, &quot;precio&quot;: None, &quot;fuente&quot;: &quot;plano&quot;}
+    datos.update({&quot;gflop_anterior&quot;: round(gflop, 3),
+                  &quot;presupuesto_kia_min&quot;: round(presu, 6),
+                  &quot;credito_kia&quot;: round(_minuto_actual[&quot;credito&quot;], 6),
+                  &quot;objetivo_kia_min&quot;: round(objetivo, 6)})
+    _precio_minuto[&quot;minuto&quot;], _precio_minuto[&quot;datos&quot;] = minuto, datos
+    return datos
+
+
+def pagado_en_minuto() -&gt; float:
+    &quot;&quot;&quot;KIA pagados en el minuto en curso (se reinicia al cambiar de minuto).&quot;&quot;&quot;
+    _cerrar_minuto_si_toca(int(time.time() // 60))
+    return float(_minuto_actual[&quot;pagado&quot;])
+
+
+def _anotar_pagado(kia: float) -&gt; None:
+    pagado_en_minuto()                       # refresca el minuto
+    anterior = _minuto_actual[&quot;pagado&quot;]
+    _minuto_actual[&quot;pagado&quot;] = anterior + float(kia or 0.0)
+    try:
+        _guardar_bolsa()
+    except Exception:
+        # La transaccion se va a revertir: la memoria tiene que volver a lo
+        # que dice el disco, o la bolsa quedaria gastada por un pago que no
+        # existio.
+        _minuto_actual[&quot;pagado&quot;] = anterior
+        raise
+
+
+_cargar_bolsa()          # el minuto en curso sigue donde lo dejo el reinicio
+
+
+def bolsa_disponible(ahora: float = None) -&gt; float:
+    &quot;&quot;&quot;KIA del presupuesto de este minuto que aun no se han pagado.&quot;&quot;&quot;
+    presu = presupuesto_por_minuto()
+    if presu &lt;= 0:
+        return 0.0
+    minuto = int((time.time() if ahora is None else ahora) // 60)
+    if minuto != int(time.time() // 60):
+        return presu                         # otro minuto: se enseña el tope
+    return max(0.0, presu - pagado_en_minuto())
+
+
+def pago_plano(tier: float = 1.0) -&gt; tuple:
+    &quot;&quot;&quot;Pago de calendario (modo plano) DENTRO de la bolsa del minuto.
+
+    POR QUE EXISTE (23-10-2026): el modo plano era la fuga de la bolsa. Con
+    `KUKIA_PAGO_POR_FLOP=0` se pagaba `recompensa_pago(tier)` a pelo: sin tope
+    por minuto y sin anotarlo en la bolsa, asi que el Core podia emitir en un
+    minuto todo lo que le pidieran los nodos (a 10 KIA por tarea, 300 tareas
+    son 3.000 KIA/min contra un presupuesto de 1,31). Lo mismo pasaba en el
+    primer arranque de una red sin historial, que cae a este mismo pago.
+
+    Ahora todo pago, sea por potencia o plano, pasa por aqui o por
+    `pago_por_trabajo`: se corta en lo que le queda al minuto y se anota con
+    `_anotar_pagado`. La bolsa deja de tener puertas abiertas.
+    &quot;&quot;&quot;
+    presu = presupuesto_por_minuto()
+    pago, info = recompensa_pago(tier)
+    disp = max(0.0, presu - pagado_en_minuto())
+    pagado = round(min(pago, disp), 9)
+    _anotar_pagado(pagado)
+    return pagado, dict(info or {}, modo_pago=&quot;plano&quot;, fuente_precio=&quot;plano&quot;,
+                        bolsa_kia_min=round(presu, 6),
+                        pagado_por_bolsa=round(pagado, 9),
+                        recortado_por_bolsa=round(max(0.0, pago - pagado), 9))
+
+
+def pago_por_trabajo(tipo: str, params, tier: float = 1.0) -&gt; tuple:
+    &quot;&quot;&quot;KIA que vale una tarea ya verificada, por los FLOPs que ha costado.&quot;&quot;&quot;
+    restante = MAX_SUPPLY - supply_emitido()
+    if restante &lt;= 0:
+        return 0.0, {&quot;agotado&quot;: True, &quot;modo_pago&quot;: &quot;potencia&quot;}
+    gl = _flops_tarea(tipo, params) / 1e9
+    cobrable = max(gl, GFLOP_MIN_FACTURABLE)
+    # TECHO POR TAREA: una tarea suelta no puede llevarse mas que la tarifa
+    # plana. Con el precio del minuto hace falta muy poco, pero se queda.
+    techo = REWARD_BASE * emission_mult()
+    pm = precio_unico_minuto()
+    if pm[&quot;precio&quot;] is None:
+        # MODO PLANO: red sin ninguna medida todavia (primer arranque). Pago de
+        # calendario, con el minuto cortado en un presupuesto. Aqui si manda el
+        # orden de llegada: sin precio hay con que repartir por trabajo. Va por
+        # `pago_plano` para no tener dos puertas a la bolsa.
+        pagado, info = pago_plano(tier)
+        info[&quot;modo_pago&quot;] = &quot;plano (sin medida de red)&quot;
+        info[&quot;pagado_por_fusible&quot;] = round(pagado, 9)
+        return pagado, info
+    precio = float(pm[&quot;precio&quot;])
+    # 9 decimales y no 6: el pago por tarea puede ser mucho mas pequeno que con
+    # la tarifa plana, y redondear a 6 lo dejaria en cero si la red crece.
+    pago = round(min(precio * cobrable, techo, restante), 9)
+    # FUSIBLE del minuto: solo actua si algo va muy desmadrado (de golpe, diez
+    # veces el trabajo del minuto anterior). En regimen normal no toca nada.
+    disp = max(0.0, pm[&quot;presupuesto_kia_min&quot;] * FUSIBLE_MINUTO_X - pagado_en_minuto())
+    recortado = max(0.0, pago - disp)
+    if recortado &gt; 0:
+        pago = round(disp, 9)
+    _anotar_pagado(pago)
+    return pago, {&quot;modo_pago&quot;: &quot;potencia&quot;,
+                  &quot;gflop_tarea&quot;: round(gl, 6),
+                  &quot;gflop_cobrados&quot;: round(cobrable, 6),
+                  &quot;precio_gflop&quot;: round(precio, 12),
+                  &quot;fuente_precio&quot;: pm[&quot;fuente&quot;],
+                  &quot;gflop_minuto_anterior&quot;: pm[&quot;gflop_anterior&quot;],
+                  &quot;techo_por_tarea&quot;: round(techo, 4),
+                  &quot;pagado_por_fusible&quot;: round(pago, 9),
+                  &quot;recortado_por_fusible&quot;: round(recortado, 9),
+                  &quot;suelo_servicios&quot;: gl &lt; GFLOP_MIN_FACTURABLE}
+
+
+def pago_de_tarea(task, tier: float) -&gt; tuple:
+    &quot;&quot;&quot;Pago de una tarea, con el modo que este activo (plano o por potencia).
+
+    El modo plano TAMBIEN pasa por la bolsa (pago_plano): antes devolvia
+    `recompensa_pago` a pelo y era la fuga por la que se iba la emision.
+    &quot;&quot;&quot;
+    if PAGO_POR_FLOP:
+        return pago_por_trabajo(task[&quot;tipo&quot;], task[&quot;params&quot;], tier)
+    return pago_plano(tier)
 
 
 def castigo_por_fallo(tier: float) -&gt; float:
@@ -2916,6 +3497,15 @@ def stats():
     # ledger en cada peticion (el panel lo pide cada 2 s).
     sum = min(supply_emitido(), MAX_SUPPLY)
     pago1, info1 = recompensa_pago(1.0)
+    _pot = precio_gflop() if PAGO_POR_FLOP else {}
+    if PAGO_POR_FLOP and _pot.get(&quot;modo&quot;) == &quot;potencia&quot;:
+        # En modo potencia no hay &quot;pago base por tarea&quot;: el numero que se
+        # publica es lo que cobra una tarea minima (servicios), que es lo que
+        # de verdad cobra un checksum o una inferencia pequena.
+        pago1 = round(_pot[&quot;precio_gflop&quot;] * GFLOP_MIN_FACTURABLE, 6)
+        info1 = dict(info1 or {}, modo_pago=&quot;potencia&quot;,
+                     precio_gflop=_pot[&quot;precio_gflop&quot;],
+                     gflop_por_min=_pot.get(&quot;gflop_por_min&quot;))
     total_ok = int(_meta_float(&quot;tareas_ok_total&quot;, -1.0))
     if total_ok &lt; 0:
         total_ok = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;ok&#x27;&quot;).fetchone()[&quot;c&quot;]
@@ -2942,6 +3532,36 @@ def stats():
         &quot;pago_por_tarea&quot;: pago1,
         &quot;emision_por_min&quot;: info1.get(&quot;emision_por_min&quot;),
         &quot;detalle_pago&quot;: info1,
+        # Pago por potencia (22-10-2026): el interruptor y el precio que se
+        # esta aplicando de verdad, para poder auditarlo desde el panel.
+        &quot;modo_pago&quot;: &quot;potencia&quot; if PAGO_POR_FLOP else &quot;plano&quot;,
+        &quot;pago_por_potencia&quot;: {&quot;activo&quot;: PAGO_POR_FLOP,
+                              &quot;gflop_min_facturable&quot;: GFLOP_MIN_FACTURABLE,
+                              &quot;ventana_min&quot;: GFLOPS_VENTANA_MIN,
+                              &quot;precio_gflop&quot;: _pot.get(&quot;precio_gflop&quot;),
+                              &quot;gflop_red_por_min&quot;: _pot.get(&quot;gflop_por_min&quot;)},
+        # El precio unico del minuto (23-10-2026): con esto se reparte el
+        # presupuesto por trabajo, no por orden de llegada. Se publica el
+        # precio, de donde sale y lo que llevamos pagado en el minuto.
+        &quot;bolsa_emision&quot;: {&quot;kia_disponible&quot;: round(bolsa_disponible(), 6),
+                          &quot;presupuesto_kia_min&quot;: round(presupuesto_por_minuto(), 6),
+                          &quot;pagado_en_minuto&quot;: round(pagado_en_minuto(), 6),
+                          &quot;tope_min&quot;: 1,
+                          &quot;precio_minuto&quot;: (round(float(precio_unico_minuto()[&quot;precio&quot;]), 12)
+                                            if precio_unico_minuto()[&quot;precio&quot;] else None),
+                          &quot;fuente_precio&quot;: precio_unico_minuto()[&quot;fuente&quot;],
+                          &quot;gflop_minuto_anterior&quot;: precio_unico_minuto()[&quot;gflop_anterior&quot;],
+                          &quot;credito_kia&quot;: precio_unico_minuto()[&quot;credito_kia&quot;],
+                          &quot;objetivo_kia_min&quot;: precio_unico_minuto()[&quot;objetivo_kia_min&quot;],
+                          &quot;fusible_x&quot;: FUSIBLE_MINUTO_X},
+        # Verificacion redundante (23-10-2026): desde fuera se puede comprobar
+        # que reglas estan aplicando de verdad los nodos que se verifican.
+        &quot;replicas&quot;: {&quot;activa&quot;: REPLICA_ACTIVA,
+                     &quot;parte_verificador&quot;: PARTE_REPLICA,
+                     &quot;auditoria_1_de&quot;: AUDITORIA_1_DE,
+                     &quot;auditoria_1_de_joven&quot;: AUDITORIA_1_DE_JOVEN,
+                     &quot;tareas_confianza&quot;: AUDITORIA_TAREAS_CONFIANZA,
+                     &quot;mismo_dueno_bloqueado&quot;: True},
         &quot;auto_tareas&quot;: {&quot;activo&quot;: AUTO_ACTIVO, &quot;objetivo_cola&quot;: AUTO_COLA_OBJETIVO,
                         &quot;intervalo_seg&quot;: AUTO_INTERVALO},
         &quot;archivado&quot;: {&quot;activo&quot;: ARCHIVAR_ACTIVO, &quot;retencion&quot;: RETENCION_TAREAS,
@@ -2982,10 +3602,12 @@ AUTO_COLA_OBJETIVO = max(0, int(os.environ.get(&quot;KUKIA_AUTO_COLA&quot;, &quo
 AUTO_INTERVALO = max(3.0, float(os.environ.get(&quot;KUKIA_AUTO_SEG&quot;, &quot;5&quot;)))
 AUTO_POR_PASADA = max(1, int(os.environ.get(&quot;KUKIA_AUTO_LOTE&quot;, &quot;40&quot;)))
 
-# Trabajo variado (todas las tareas pagan lo mismo, el pago lo fija la emision):
-# matriz e inferencia (aritmetica determinista), checksum y difusion de calor.
-MEZCLA_AUTO = (&quot;matriz&quot;, &quot;matriz&quot;, &quot;matriz&quot;, &quot;checksum&quot;, &quot;checksum&quot;,
-               &quot;checksum&quot;, &quot;difusion_calor&quot;, &quot;difusion_calor&quot;, &quot;inferencia&quot;)
+# Trabajo variado: matriz e inferencia (aritmetica determinista) y difusion de
+# calor. Los checksums SALEN de la mezcla el 22-10-2026: son 0 FLOPs, con pago
+# por potencia cobran 0 y ocuparian cola sin pagar. El tipo sigue soportado
+# (una tarea manual se ejecuta y se paga lo que valga su trabajo: 0).
+MEZCLA_AUTO = (&quot;matriz&quot;, &quot;matriz&quot;, &quot;matriz&quot;, &quot;matriz&quot;,
+               &quot;difusion_calor&quot;, &quot;difusion_calor&quot;, &quot;inferencia&quot;)
 
 def params_auto(tipo: str) -&gt; dict:
     &quot;&quot;&quot;Parametros de una tarea automatica, con el tamano que toca a la red.&quot;&quot;&quot;
@@ -3006,10 +3628,19 @@ def params_auto(tipo: str) -&gt; dict:
                 &quot;seed&quot;: rnd(1_000_000), &quot;tolerancia_rel&quot;: 1e-9}
     raise HTTPException(400, &quot;tipo no soportado&quot;)
 
-def crear_tarea_auto(tipo: str = None, cola: str = &quot;C&quot;, prioridad: float = 0.0) -&gt; str:
-    &quot;&quot;&quot;Crea una tarea de trabajo (misma validacion que /tareas/crear).&quot;&quot;&quot;
+def crear_tarea_auto(tipo: str = None, cola: str = &quot;C&quot;, prioridad: float = 0.0,
+                     permitir_difusion: bool = True) -&gt; str:
+    &quot;&quot;&quot;Crea una tarea de trabajo (misma validacion que /tareas/crear).
+
+    `permitir_difusion=False` deja fuera las difusiones de la mezcla. Lo usa el
+    generador cuando no hay ninguna GPU activa: fabricar difusiones que nadie
+    puede servir llenaria la cola y dejaria al nodo CPU sin matriz/inferencia.
+    &quot;&quot;&quot;
     if tipo is None:
-        tipo = MEZCLA_AUTO[secrets.randbelow(len(MEZCLA_AUTO))]
+        mezcla = MEZCLA_AUTO
+        if not permitir_difusion:
+            mezcla = tuple(t for t in MEZCLA_AUTO if t != &quot;difusion_calor&quot;)
+        tipo = mezcla[secrets.randbelow(len(mezcla))]
     params = validar_params(tipo, params_auto(tipo))
     tid = uuid.uuid4().hex[:12]
     with _escritura():
@@ -3027,11 +3658,29 @@ def _bucle_auto_tareas():
                 # Historial alterado: no se crea trabajo (el minero cobraria 0).
                 pass
             elif AUTO_ACTIVO and AUTO_COLA_OBJETIVO &gt; 0:
-                en_cola = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;queued&#x27;&quot;).fetchone()[&quot;c&quot;]
+                # 23-10-2026: sin GPU activa no se fabrican difusiones (nadie
+                # las puede servir) y las que ya esten encoladas NO cuentan
+                # para el objetivo: si contaran, la cola se llenaria de
+                # difusiones muertas y el nodo CPU se quedaria sin trabajo.
+                hay_gpu = _hay_gpu_activa()
+                dif_cola = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;queued&#x27; &quot;
+                                       &quot;AND tipo=&#x27;difusion_calor&#x27;&quot;).fetchone()[&quot;c&quot;]
+                # Tope de difusiones encoladas: aunque haya GPU, no se acumulan
+                # mas de media cola. Antes, si las GPU se quedaban paradas un
+                # rato, la cola se llenaba de difusiones y la matriz (que si
+                # puede hacer una CPU) dejaba de fabricarse. El tope se mira
+                # una vez por pasada: se puede pasar de el lo que quepa en esa
+                # pasada (40), que es inocuo y evita 40 SELECT por pasada.
+                permitir_dif = bool(hay_gpu) and dif_cola &lt; max(10, AUTO_COLA_OBJETIVO // 2)
+                if hay_gpu:
+                    en_cola = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;queued&#x27;&quot;).fetchone()[&quot;c&quot;]
+                else:
+                    en_cola = con.execute(&quot;SELECT COUNT(*) c FROM tareas WHERE estado=&#x27;queued&#x27; &quot;
+                                          &quot;AND COALESCE(tipo,&#x27;&#x27;) &lt;&gt; &#x27;difusion_calor&#x27;&quot;).fetchone()[&quot;c&quot;]
                 faltan = AUTO_COLA_OBJETIVO - en_cola
                 if faltan &gt; 0:
                     for _ in range(min(faltan, AUTO_POR_PASADA)):
-                        crear_tarea_auto()
+                        crear_tarea_auto(permitir_difusion=permitir_dif)
                     print(f&quot;[KUKIA Core] auto-tareas: cola {en_cola} -&gt; {en_cola + min(faltan, AUTO_POR_PASADA)}&quot;, flush=True)
         except Exception as e:
             print(f&quot;[KUKIA Core] auto-tareas error: {e}&quot;, flush=True)
@@ -3321,6 +3970,75 @@ def transferir(t: TransferIn):
 #  Se calcula en el Core para que el dashboard NO abra una segunda conexion
 #  a la base (lector + escritor a la vez = bloqueos). Cache de 5 s.
 # ============================================================
+# ============================================================
+#  QUIEN ES QUIEN: DOS NODOS DEL MISMO DUENO NO SE VERIFICAN ENTRE SI
+#  (23-10-2026)
+#
+#  El Core paga sin recalcular cuando la replica coincide con el primario y la
+#  tarea no cae en la muestra. Eso esta bien contra un nodo suelto, pero el
+#  registro permite varias claves desde la misma IP: dos identidades del mismo
+#  dueno se dan la razon y cobran un resultado que nadie comprobo. Lo medido:
+#  0,918328 KIA por una matriz falsa en `tools/auditoria_replica.py`.
+#
+#  Aqui se corta por el ladron mas barato: la MISMA CUENTA DE COBRO o la MISMA
+#  IP de registro (24 h) son el mismo dueno, y no se le da replica de su propia
+#  tarea. La colusion entre dos maquinas distintas sigue siendo posible: para
+#  eso esta el muestreo (1/3 en nodos sin historial) y esta apuntado como
+#  hueco conocido en el informe de auditoria.
+# ============================================================
+def _ip_de_nodo(node) -&gt; set:
+    &quot;&quot;&quot;IPs de registro del nodo en las ultimas 24 h (puede ser vacio).&quot;&quot;&quot;
+    try:
+        pub = (node[&quot;clave_publica&quot;] or &quot;&quot;).strip().lower()
+    except Exception:
+        return set()
+    if not pub:
+        return set()
+    try:
+        filas = con.execute(&quot;SELECT ip FROM registros_nodo WHERE clave_publica=? &quot;
+                            &quot;AND ts&gt;=?&quot;, (pub, time.time() - 86400.0)).fetchall()
+    except Exception:
+        return set()
+    return {str(r[&quot;ip&quot;] or &quot;&quot;).strip() for r in filas if str(r[&quot;ip&quot;] or &quot;&quot;).strip()}
+
+
+def _mismo_dueno(a, b) -&gt; bool:
+    &quot;&quot;&quot;¿Los dos nodos son del mismo dueno? Misma cuenta de cobro o misma IP.
+
+    Por defecto, si no se puede saber, NO se consideran del mismo dueno: la
+    replica sigue siendo valida y decide el muestreo. Preferimos no romper la
+    red por un dato que falta.
+    &quot;&quot;&quot;
+    if a is None or b is None:
+        return False
+    try:
+        if _cuenta_de(a[&quot;id&quot;]) == _cuenta_de(b[&quot;id&quot;]):
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(_ip_de_nodo(a) &amp; _ip_de_nodo(b))
+    except Exception:
+        return False
+
+
+def _frecuencia_auditoria(*nodos) -&gt; int:
+    &quot;&quot;&quot;1 de cada cuantas tareas con replica se recalculan.
+
+    Normal: AUDITORIA_1_DE (10). Si alguno de los dos nodos tiene menos de
+    AUDITORIA_TAREAS_CONFIANZA tareas verificadas: AUDITORIA_1_DE_JOVEN (1 =
+    se recalcula siempre).
+    &quot;&quot;&quot;
+    if AUDITORIA_1_DE &lt;= 0:
+        return 0
+    try:
+        joven = any(int(n[&quot;tareas_ok&quot;] or 0) &lt; AUDITORIA_TAREAS_CONFIANZA
+                    for n in nodos if n is not None)
+    except Exception:
+        joven = True
+    return min(AUDITORIA_1_DE, AUDITORIA_1_DE_JOVEN) if joven else AUDITORIA_1_DE
+
+
 def _es_replicable(tipo: str, params) -&gt; bool:
     &quot;&quot;&quot;Merece la pena que la resuelva un segundo nodo?
 
@@ -3336,7 +4054,7 @@ def _es_replicable(tipo: str, params) -&gt; bool:
     return _flops_tarea(tipo, params) &gt;= REPLICA_FLOPS_MIN
 
 
-def _reclamar_replica(nodo_id: str, vram: int):
+def _reclamar_replica(nodo_id: str, vram: int, sin_difusion: bool = False):
     &quot;&quot;&quot;Se lleva una tarea CARA asignada a OTRO nodo para verificarla.
 
     Se llama dentro de la transaccion de /tareas/pendiente (BEGIN IMMEDIATE),
@@ -3369,19 +4087,30 @@ def _reclamar_replica(nodo_id: str, vram: int):
     if en_curso &gt;= tope:
         return None
     filas = con.execute(
-        &quot;SELECT t.id,t.tipo,t.params FROM tareas t &quot;
+        &quot;SELECT t.id,t.tipo,t.params,t.nodo_id FROM tareas t &quot;
         &quot;WHERE t.estado=&#x27;ejecutando&#x27; AND t.nodo_id IS NOT NULL AND t.nodo_id!=? &quot;
         &quot;AND COALESCE(t.asignado,0) &gt; ? AND COALESCE(t.vram_min,0) &lt;= ? &quot;
         &quot;AND COALESCE(t.nodos_intento,&#x27;&#x27;) NOT LIKE ? &quot;
+        &quot;AND (? = 0 OR t.tipo &lt;&gt; &#x27;difusion_calor&#x27;) &quot;
         &quot;AND NOT EXISTS (SELECT 1 FROM tareas_replica r WHERE r.tarea_id=t.id) &quot;
         &quot;ORDER BY t.asignado DESC LIMIT 8&quot;,
-        (nodo_id, ahora - ABANDONO_SEG, vram, f&quot;%{nodo_id}%&quot;)).fetchall()
+        (nodo_id, ahora - ABANDONO_SEG, vram, f&quot;%{nodo_id}%&quot;,
+         1 if sin_difusion else 0)).fetchall()
+    yo = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;, (nodo_id,)).fetchone()
     for f in filas:
         try:
             p = json.loads(f[&quot;params&quot;])
         except Exception:
             continue
         if not _es_replicable(f[&quot;tipo&quot;], p):
+            continue
+        # MISMO DUENO NO SE VERIFICA: ni su propia tarea (ya lo corta el SQL)
+        # ni la de otra identidad de la misma cuenta o de la misma IP.
+        try:
+            dueno = con.execute(&quot;SELECT * FROM nodos WHERE id=?&quot;, (f[&quot;nodo_id&quot;],)).fetchone()
+        except Exception:
+            dueno = None
+        if _mismo_dueno(yo, dueno):
             continue
         cur = con.execute(&quot;INSERT OR IGNORE INTO tareas_replica&quot;
                           &quot;(tarea_id,nodo_id,estado,asignado) VALUES(?,?,&#x27;reclamando&#x27;,?)&quot;,
@@ -3391,19 +4120,22 @@ def _reclamar_replica(nodo_id: str, vram: int):
     return None
 
 
-def _toca_auditoria(tid: str) -&gt; bool:
-    &quot;&quot;&quot;1 de cada AUDITORIA_1_DE, decidido por el ID (determinista, auditable).
+def _toca_auditoria(tid: str, frecuencia: int = None) -&gt; bool:
+    &quot;&quot;&quot;¿Esta tarea se recalcula aunque haya replica? Determinista por el ID.
 
     Determinista y no aleatorio: el mismo id cae siempre en el mismo lado, asi
     que un nodo no puede &quot;probar suerte&quot; repitiendo la entrega, y una prueba
-    puede saber de antemano si esa tarea sera auditada.
+    puede saber de antemano si esa tarea sera auditada. `frecuencia` permite
+    reforzar el muestreo (1 de cada 3) cuando alguno de los dos nodos es nuevo
+    (ver `_frecuencia_auditoria`).
     &quot;&quot;&quot;
-    if AUDITORIA_1_DE &lt;= 0:
+    n = AUDITORIA_1_DE if frecuencia is None else int(frecuencia)
+    if n &lt;= 0:
         return False
-    if AUDITORIA_1_DE == 1:
+    if n == 1:
         return True
-    n = int(hashlib.sha256(str(tid).encode()).hexdigest()[:8], 16)
-    return n % AUDITORIA_1_DE == 0
+    h = int(hashlib.sha256(str(tid).encode()).hexdigest()[:8], 16)
+    return h % n == 0
 
 
 def _coinciden(tipo: str, params, a: str, b: str) -&gt; bool:
@@ -3724,6 +4456,7 @@ AUDITORIA 2026-10-21 (por que el minero se quedaba sin minar):
 &quot;&quot;&quot;
 import hashlib, json, os, queue, secrets, subprocess, sys, time, threading, socket, urllib.parse
 import requests
+from datetime import date, datetime
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / &quot;ledger&quot;))
 import kukia_wallet as WALLET
@@ -3790,7 +4523,49 @@ TIMEOUT_API = max(5.0, float(os.environ.get(&quot;KUKIA_TIMEOUT_API&quot;, &quot
 # siguiente tarea ya pedida y otro que entrega, la GPU calcula sin huecos.
 # El Core permite 4 tareas en vuelo por nodo: 1 calculando + 1 en cola + hasta 2
 # entregando. Subirlo mas solo provoca &quot;limite de tareas simultaneas&quot;.
-PROFUNDIDAD = max(1, min(2, int(os.environ.get(&quot;KUKIA_PROFUNDIDAD&quot;, &quot;1&quot;))))
+# --- CPU como minero mas (23-10-2026) --------------------------------------
+# Hasta hoy, con GPU presente la CPU no minaba nunca: el worker abria un hilo
+# por GPU y punto. KUKIA_USAR_CPU anade la CPU como un nodo mas, A LA VEZ que
+# las GPU.
+#
+# Medido en este PC el 23-10-2026 (tools/medir_potencia.py, tareas de la red):
+#   i9-10900K  matriz 149 GFLOP/s (88 % de la 5060 Ti) | difusion 1,5 (44x menos)
+#   RTX 5070   matriz 234           | difusion 82,7
+# Por eso viene APAGADO: en un PC con GPU, la CPU coge difusiones que la GPU
+# haria en 0,24 s y las arrastra 13 s, y encima se come nucleos del Core si
+# vive en esta misma maquina. Donde si suma: maquinas sin GPU, o con la GPU
+# ya saturada y CPU libre.
+# Valores: 0/no (apagado, defecto) | 1/si/auto = mitad de los nucleos (entre 2
+# y 4 hilos) | un numero = esos hilos exactos.
+def _ajuste_cpu() -&gt; tuple:
+    crudo = (os.environ.get(&quot;KUKIA_USAR_CPU&quot;, &quot;0&quot;) or &quot;0&quot;).strip().lower()
+    if crudo in (&quot;0&quot;, &quot;no&quot;, &quot;false&quot;, &quot;off&quot;, &quot;&quot;):
+        return False, 0
+    nucleos = os.cpu_count() or 2
+    # &quot;1&quot; es el interruptor (como 1/si/auto), no &quot;un hilo&quot;: si no, el uso
+    # normal (KUKIA_USAR_CPU=1) dejaria la CPU a un solo hilo. Para pedir un
+    # numero concreto de hilos se pone 2 o mas.
+    if crudo.isdigit() and int(crudo) &gt; 1:
+        return True, max(1, min(nucleos, int(crudo)))
+    return True, max(2, min(4, nucleos // 2))
+
+# Cuantas ENTREGAS pueden estar en vuelo a la vez (23-10-2026): con 1 el
+# dispositivo se queda esperando la respuesta del Core antes de pedir la
+# siguiente tarea; con 2 calcula mientras la anterior se entrega. El Core
+# acepta 4 tareas en vuelo por nodo (1 calculando + hasta 2 entregando), asi
+# que 2 es el maximo seguro.
+# Tareas que el hilo pedidor deja preparadas por dispositivo.
+#
+# MEDIDO EL 23-10-2026 (medidas/ensayos/gpu_100pct_*): subirlo a 6 y poner dos
+# ranuras de calculo lleva la GPU del 28 % al 60 % de uso, pero NO da mas KIA
+# (la emision va por presupuesto por minuto) y sube los vatios un 36 %, asi que
+# KIA/kWh BAJA de 1.135 a 825. Por eso el defecto sigue siendo el de antes: la
+# mejora de ocupacion se enciende a mano (KUKIA_PROFUNDIDAD, KUKIA_HILOS_GPU,
+# KUKIA_EN_VUELO=8 y KUKIA_MAX_TAREAS_NODO=8 en el Core).
+PROFUNDIDAD = max(1, min(10, int(os.environ.get(&quot;KUKIA_PROFUNDIDAD&quot;, &quot;2&quot;))))
+# Aviso de parada (Ctrl+C). Lo pone main() y lo miran el hilo peticionero y el
+# bucle de calculo, para terminar las entregas en vuelo antes de salir.
+PARAR = threading.Event()
 RESUMEN_SEG = max(10.0, float(os.environ.get(&quot;KUKIA_RESUMEN_SEG&quot;, &quot;60&quot;)))
 
 # AUDITORIA 2026-10-20 (seguridad del minero): el worker NO confia en el Core.
@@ -3938,6 +4713,10 @@ def _bucle_telemetria(nid: str, device: str, vram_gb: int, tops: float,
 #  - al arrancar se barren a la billetera los saldos viejos de nodos que
 #    firmaban con la misma clave (recupera lo que quedo huerfano).
 IDENTIDAD = Path(__file__).parent / &quot;identidad_minero.json&quot;
+# Cerradura de instancia unica (22-10-2026): el 22-10 se llego a abrir una
+# segunda ventana del minero sin querer; dos mineros se reparten el cupo de
+# tareas del nodo (4) y rinden la mitad, sin que se vea ningun error.
+LOCK = Path(__file__).parent / &quot;minero.lock&quot;
 
 # BENCHMARK DE ARRANQUE (21-10-2026): antes de minar se mide la GPU con las
 # mismas cuentas que las tareas de la red. Sirve para detectar una GPU mal
@@ -4052,8 +4831,12 @@ def _registrar_o_reusar(etiqueta: str, device: str, vram_gb: int, tops: float,
                 return nid
         except Exception:
             pass
+    # &#x27;device&#x27; va en el registro (23-10-2026): el Core necesita saber si este
+    # nodo es CPU para no mandarle difusiones, que en CPU cuestan ~20x mas.
+    # Los Core antiguos ignoran el campo de mas (NodoIn lo acepta y lo tira).
     carga = {&quot;nombre&quot;: etiqueta, &quot;vram_gb&quot;: vram_gb, &quot;tops&quot;: tops,
-             &quot;clave_publica&quot;: pubkey, &quot;direccion_cobro&quot;: direccion}
+             &quot;device&quot;: str(device), &quot;clave_publica&quot;: pubkey,
+             &quot;direccion_cobro&quot;: direccion}
     prueba = _prueba_registro(pubkey, privkey)
     if prueba:
         carga.update(prueba)
@@ -4275,16 +5058,37 @@ def trabajo_local(tipo: str, params: dict, device: str = &quot;cuda:0&quot;) -&g
         # AUDITORIA: el tipo que faltaba. La rejilla inicial tiene que ser
         # IDENTICA a la del Core (numpy default_rng), asi que se genera con
         # numpy en CPU y se pasa a la GPU para iterar en float64.
+        #
+        # BUCLE RAPIDO (22-10-2026): antes cada paso eran ~7 operaciones de
+        # torch (siete lanzamientos de kernel); ahora es UNA convolucion 3x3
+        # (el laplaciano de 5 puntos) mas una suma en sitio. Medido: 1907 pasos
+        # 0,66 s -&gt; 0,30 s y 20.000 pasos 7,00 s -&gt; 3,37 s, con resultado
+        # BIT A BIT identico al bucle viejo (mismo orden de redondeo), asi que
+        # el Core sigue verificando igual sin tocar nada. Ver
+        # tools/prueba_difusion_rapida.py.
         import numpy as np
         import torch
+        import torch.nn.functional as F
         n = int(params.get(&quot;n&quot;, 256))
         pasos = int(params.get(&quot;pasos&quot;, 200))
         seed = int(params.get(&quot;seed&quot;, 42))
         rejilla = np.random.default_rng(seed).random((n, n))
         x = torch.from_numpy(rejilla).to(device=device, dtype=torch.float64)
-        for _ in range(pasos):
-            x[1:-1, 1:-1] = x[1:-1, 1:-1] + 0.2 * (
-                x[:-2, 1:-1] + x[2:, 1:-1] + x[1:-1, :-2] + x[1:-1, 2:] - 4 * x[1:-1, 1:-1])
+        if str(device).startswith(&quot;cuda&quot;):
+            # En GPU la convolucion gana (1,7x a 5x). En CPU es MAS LENTA que
+            # las operaciones sueltas (medido: 0,6x), asi que ahi se queda el
+            # bucle de siempre: el resultado es el mismo por los dos caminos.
+            lap_k = torch.tensor([[0.0, 1.0, 0.0],
+                                  [1.0, -4.0, 1.0],
+                                  [0.0, 1.0, 0.0]],
+                                 dtype=torch.float64, device=device).view(1, 1, 3, 3)
+            for _ in range(pasos):
+                lap = F.conv2d(x.view(1, 1, n, n), lap_k)
+                x[1:-1, 1:-1] += 0.2 * lap.view(n - 2, n - 2)
+        else:
+            for _ in range(pasos):
+                x[1:-1, 1:-1] = x[1:-1, 1:-1] + 0.2 * (
+                    x[:-2, 1:-1] + x[2:, 1:-1] + x[1:-1, :-2] + x[1:-1, 2:] - 4 * x[1:-1, 1:-1])
         return repr(float(x.sum().item()))
     return &quot;tarea_no_soportada&quot;
 
@@ -4591,19 +5395,64 @@ def _re_registrar(nid: str, etiqueta: str, device: str, vram_gb: int, tops: floa
 
 
 def _hilo_resumen(etiqueta: str, cuenta: dict, cuenta_lock) -&gt; None:
-    &quot;&quot;&quot;Una linea por minuto: asi se ve si el minero rinde o se ha atascado.&quot;&quot;&quot;
+    &quot;&quot;&quot;Una linea por minuto: asi se ve si el minero rinde o se ha atascado.
+
+    Se enseña en KIA/min, KIA/h y KIA/dia, y ademas cuanto de eso da cada
+    GFLOPS de potencia medida: es la forma de comparar dos GPUs sin discutir
+    sobre lo que declara el driver.
+    &quot;&quot;&quot;
     ultimo = time.time()
     ult_ok, ult_kuki, ult_err = 0, 0.0, 0
     while True:
         time.sleep(RESUMEN_SEG)
         with cuenta_lock:
             ok, kuki, err = cuenta[&quot;ok&quot;], cuenta[&quot;kuki&quot;], cuenta[&quot;err&quot;]
+            gflops = float(cuenta.get(&quot;gflops&quot;) or 0.0)
         dt = max(0.001, time.time() - ultimo)
-        print(f&quot;[KUKIA] {etiqueta} resumen: {(ok - ult_ok) / dt * 60:.0f} tareas/min, &quot;
-              f&quot;{(kuki - ult_kuki) / dt * 60:.3f} KIA/min, {err - ult_err} fallos, &quot;
-              f&quot;total {ok} tareas / {kuki:.3f} KIA&quot;, flush=True)
+        tareas_min = (ok - ult_ok) / dt * 60
+        kia_min = (kuki - ult_kuki) / dt * 60
+        potencia = f&quot; {gflops:.1f} GFLOPS |&quot; if gflops &gt; 0 else &quot;&quot;
+        por_gf = f&quot; ({kia_min * 60 / gflops:.2f} KIA/h por GFLOPS)&quot; if gflops &gt; 0 else &quot;&quot;
+        print(f&quot;[KUKIA] {etiqueta}{potencia} {tareas_min:.0f} tareas/min | &quot;
+              f&quot;{kia_min:.3f} KIA/min = {kia_min * 60:.1f} KIA/h = {kia_min * 1440:.0f} KIA/dia&quot;
+              f&quot;{por_gf} | {err - ult_err} fallos, total {ok} tareas / {kuki:.3f} KIA&quot;,
+              flush=True)
         ultimo = time.time()
         ult_ok, ult_kuki, ult_err = ok, kuki, err
+
+
+def _anunciar_emision() -&gt; None:
+    &quot;&quot;&quot;Al arrancar: cuanto paga cada tarea y cuando se acaba la moneda.
+
+    Solo lee /stats; si el Core no contesta, el minero arranca igual (esto es
+    informacion, no requisito para minar).
+    &quot;&quot;&quot;
+    try:
+        d = _get(f&quot;{CORE}/stats&quot;, timeout=TIMEOUT_API).json()
+    except Exception:
+        return
+    e = d.get(&quot;emision&quot;) or {}
+    pago = float(d.get(&quot;pago_por_tarea&quot;) or 0.0)
+    techo = int(d.get(&quot;max_supply&quot;) or 0)
+    print(f&quot;[KUKIA] emision: era {e.get(&#x27;era_actual&#x27;)} (x{e.get(&#x27;multiplicador&#x27;)}), &quot;
+          f&quot;{pago:.6f} KIA por tarea, {d.get(&#x27;emision_por_min&#x27;)} KIA/min en toda la red, &quot;
+          f&quot;techo {techo:,} KIA&quot;.replace(&quot;,&quot;, &quot;.&quot;), flush=True)
+    fin = str(e.get(&quot;fin_emision&quot;) or &quot;&quot;)
+    try:
+        anos = (datetime.strptime(fin, &quot;%Y-%m-%d&quot;).date() - date.today()).days / 365.25
+    except Exception:
+        return
+    # El calendario ya no se mide &quot;desde hoy&quot; (eso cambiaba solo con el paso
+    # del tiempo y empujo la fecha al 2152). Lo que se comprueba es el largo
+    # del calendario: 6 eras x halving_years, que con el fin en 2150 son 124.
+    try:
+        calendario = 6.0 * float(e.get(&quot;halving_years&quot;) or 0.0)
+    except Exception:
+        calendario = 0.0
+    veredicto = (f&quot;calendario de {calendario:.1f} anos&quot; if calendario &gt;= 124
+                 else f&quot;REVISAR: calendario corto ({calendario:.1f} anos)&quot;)
+    print(f&quot;[KUKIA] ultima moneda: {fin} -&gt; quedan {anos:.1f} anos ({veredicto})&quot;,
+          flush=True)
 
 
 def _hilo_vigia(etiqueta: str, ctx: dict, privkey: str, cuenta: dict, cuenta_lock) -&gt; None:
@@ -4679,7 +5528,12 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
     _avisar_reinicio(nid, etiqueta, privkey)
     barrer_saldos(etiqueta, w, privkey, forzar=True)
     estado_tarea = {&quot;ms&quot;: 0.0}
-    if privkey and str(device).startswith(&quot;cuda&quot;):
+    # LATIDO TAMBIEN EN CPU (23-10-2026): antes solo latia la GPU, asi que un
+    # nodo CPU no volvia a decir nunca con que dispositivo trabaja. Ahora late
+    # siempre: el Core aprende el dispositivo en cada conexion y deja de
+    # adivinarlo por VRAM/TOPS (que castigaba a los nodos antiguos sin
+    # difusiones).
+    if privkey:
         threading.Thread(target=_bucle_telemetria,
                          args=(nid, device, vram_gb, tops, privkey, estado_tarea),
                          daemon=True).start()
@@ -4687,119 +5541,68 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
     # (vigia) lee la misma caja, no una copia.
     ctx = {&quot;nid&quot;: nid}
     cuenta = {&quot;ok&quot;: 0, &quot;kuki&quot;: 0.0, &quot;err&quot;: 0, &quot;ultimo_ok&quot;: time.time(),
-              &quot;ultimo_limite&quot;: 0.0, &quot;ultimo_core_ok&quot;: time.time()}
+              &quot;ultimo_limite&quot;: 0.0, &quot;ultimo_core_ok&quot;: time.time(),
+              # Potencia medida en ESTA GPU (GFLOPS). El resumen la usa para
+              # enseñar los KIA por hora que rinde cada GFLOPS.
+              &quot;gflops&quot;: float(_GFLOPS_BASE.get(device) or 0.0)}
     cuenta_lock = threading.Lock()
     threading.Thread(target=_hilo_resumen,
                      args=(etiqueta, cuenta, cuenta_lock), daemon=True).start()
     threading.Thread(target=_hilo_vigia,
                      args=(etiqueta, ctx, privkey, cuenta, cuenta_lock), daemon=True).start()
-    bloqueado_hasta = 0.0
+    # `bloqueado` en dict y no en variable suelta: lo escribe tambien el hilo
+    # de entrega (un 429 o un 403 del Core al entregar frena las peticiones).
+    bloqueado = {&quot;hasta&quot;: 0.0}
     espera_error = 5.0   # backoff exponencial (5 s -&gt; 60 s)
-    while True:
+
+    # --- CALCULAR SIN ESPERAR A LA RED (23-10-2026) --------------------------
+    # Antes: pedir -&gt; calcular -&gt; entregar -&gt; pedir, todo en el mismo hilo. El
+    # dispositivo se quedaba mirando la respuesta del Core con la GPU parada, y
+    # esas respuestas no son rapidas: medido en este Core, /tareas/pendiente
+    # tarda 353 ms de mediana (p90 555 ms) y la entrega 152 ms (p90 500, hasta
+    # 2,8 s esperando a la verificacion redundante). Resultado: el Core le
+    # atribuia 18,9 GFLOP/s a una RTX 5070 que en el banco da 84,8
+    # (tools/medir_potencia.py). El tiempo no se perdia calculando.
+    # Ahora: un hilo pide (y deja la tarea en cola), este bucle calcula, y la
+    # entrega se manda desde un tercer hilo. El dispositivo solo hace lo suyo.
+    # Tareas EN VUELO por nodo. El Core corta a 4 (&quot;limite de tareas
+    # simultaneas&quot;), asi que 4 es el cupo maximo util: se coge antes de pedir
+    # y se suelta cuando la entrega termina o la tarea se descarta.
+    # Con dos ranuras de calculo por tarjeta hacen falta mas tareas en vuelo
+    # para tenerlas a las dos ocupadas (cada pedido tarda ~350 ms y cada tarea
+    # ~120 ms). El Core tiene que permitirlo: KUKIA_MAX_TAREAS_NODO=8.
+    # Defecto 4 = el de siempre; ver el comentario de PROFUNDIDAD arriba.
+    cupo_vuelo = threading.Semaphore(max(2, min(12, int(os.environ.get(&quot;KUKIA_EN_VUELO&quot;, &quot;4&quot;)))))
+    cola_tareas = queue.Queue(maxsize=PROFUNDIDAD)
+    en_vuelo = {&quot;n&quot;: 0}
+    en_vuelo_lock = threading.Lock()
+
+    def _soltar():
+        &quot;&quot;&quot;Suelta UNA tarea en vuelo. Unico camino de liberacion.
+
+        POR QUE UN SOLO SITIO (23-10-2026): el cupo se coge al pedir y se
+        suelta al entregar, pero hay seis salidas distintas (429, error HTTP,
+        cola vacia, tarea invalida, tipo no implementado, excepcion al
+        calcular). Si una se olvida, el cupo se pierde para siempre: al cuarto
+        fallo el nodo deja de minar y no lo dice. Aqui se suelta siempre por
+        el mismo sitio, y se lleva la cuenta para poder esperar al parar.
+        &quot;&quot;&quot;
         try:
-            ahora = time.time()
-            nid = ctx[&quot;nid&quot;]
-            # Barrido periodico (throttled a BARRIDO_SEG): si el Core paga
-            # directo a la direccion no hace nada; si quedo saldo viejo en
-            # algun nodo, lo mueve a la billetera.
-            barrer_saldos(etiqueta, w, privkey)
-            if ahora &lt; bloqueado_hasta:
-                time.sleep(min(5.0, bloqueado_hasta - ahora))
-                continue
-            # AUDITORIA 2026-10-20: peticion FIRMADA con nonce aleatorio.
-            # Sin nonce, una peticion capturada se podia repetir 5 minutos y
-            # robar la cola del nodo. El Core nuevo exige la firma con nonce;
-            # hay que actualizar Core y worker a la vez (los mineros viejos
-            # siguen funcionando porque mandan el mensaje antiguo sin nonce).
-            ts = int(time.time())
-            nonce = secrets.token_hex(16)
-            firma_p = WALLET.firmar(f&quot;pendiente:{nid}:{ts}:{nonce}&quot;, privkey) if privkey else &quot;&quot;
-            rp = _get(f&quot;{CORE}/tareas/pendiente&quot;,
-                      params={&quot;nodo_id&quot;: nid, &quot;ts&quot;: ts, &quot;nonce&quot;: nonce, &quot;firma&quot;: firma_p},
-                      timeout=TIMEOUT_API)
-            if rp.status_code == 429:
-                print(f&quot;[KUKIA] {etiqueta} limitado por el Core (429), espero 20 s&quot;, flush=True)
-                bloqueado_hasta = time.time() + 20
-                continue
-            if rp.status_code != 200:
-                detalle = (rp.text or &quot;&quot;)[:160]
-                if rp.status_code in (401, 404) and &quot;nodo no registrado&quot; in detalle:
-                    print(f&quot;[KUKIA] {etiqueta} el Core no ve el nodo {nid}: lo compruebo &quot;
-                          f&quot;antes de seguir&quot;, flush=True)
-                    ctx[&quot;nid&quot;] = nid = _re_registrar(nid, etiqueta, device, vram_gb, tops,
-                                                      pubkey, direccion, privkey)
-                    cuenta[&quot;ultimo_core_ok&quot;] = time.time()
-                    continue
-                print(f&quot;[KUKIA] {etiqueta} el Core rechaza la peticion de trabajo: &quot;
-                      f&quot;{rp.status_code} {detalle}&quot;, flush=True)
-                if rp.status_code == 401:
-                    print(&quot;[KUKIA] si el Core es anterior al 20-10-2026, actualizalo: &quot;
-                          &quot;el worker nuevo firma el trabajo con nonce.&quot;, flush=True)
-                time.sleep(10)
-                continue
-            _cuerpo = rp.json()
-            cuenta[&quot;ultimo_core_ok&quot;] = time.time()
-            pend = _cuerpo.get(&quot;tarea&quot;)
-            # EJECUCION REDUNDANTE (21-10-2026): el Core puede dar una tarea
-            # que otro nodo ya esta resolviendo. Verificar tambien se cobra
-            # (30 % del premio de esa tarea) y no hace falta recalcular nada
-            # en el Core, que era el cuello de botella de la red.
-            es_replica = bool(_cuerpo.get(&quot;replica&quot;))
-            if not pend:
-                motivo = str(_cuerpo.get(&quot;motivo&quot;) or &quot;&quot;)
-                if &quot;limite&quot; in motivo:
-                    # El cupo del nodo esta lleno (tareas colgadas de antes): el
-                    # vigia lo suelta, aqui solo se espera sin martillear.
-                    cuenta[&quot;ultimo_limite&quot;] = time.time()
-                    time.sleep(1.0)
-                else:
-                    time.sleep(0.5)
-                continue
-            pid = str(pend.get(&quot;id&quot;) or &quot;&quot;)
-            tipo = pend.get(&quot;tipo&quot;)
-            ok_t, motivo_t, params = validar_tarea(tipo, pend.get(&quot;params&quot;))
-            if not pid or not ok_t:
-                print(f&quot;[KUKIA] {etiqueta} tarea {pid[:8] or &#x27;?&#x27;} rechazada localmente: &quot;
-                      f&quot;{motivo_t or &#x27;id vacio&#x27;}&quot;, flush=True)
-                time.sleep(3)
-                continue
-            t0 = time.time()
-            metrica = trabajo_local(tipo, params, device)
-            duracion_ms = (time.time() - t0) * 1000.0
-            estado_tarea[&quot;ms&quot;] = round(duracion_ms, 1)
-            if metrica == &quot;tarea_no_soportada&quot;:
-                print(f&quot;[KUKIA] {etiqueta} tipo &#x27;{tipo}&#x27; no implementado en este worker&quot;, flush=True)
-                time.sleep(5)
-                continue
-            firma = WALLET.firmar(f&quot;{pid}:{metrica}&quot;, privkey) if privkey else &quot;&quot;
-            # Telemetria REAL del nodo: tiempo de la tarea, FLOPs que acaba de
-            # hacer y GFLOPS medidos en ESTA tarea. Con eso el panel dibuja la
-            # potencia y la latencia de cada GPU con datos, no con una media
-            # declarada. No influye en el pago.
-            _fl = flops_tarea(tipo, params)
-            _ms = max(0.001, float(duracion_ms))
-            _vram_usada = 0.0
-            try:
-                if str(device).startswith(&quot;cuda&quot;):
-                    import torch
-                    _vram_usada = round(torch.cuda.memory_reserved(device) / (1024 * 1024), 1)
-            except Exception:
-                _vram_usada = 0.0
-            telemetria = json.dumps({&quot;device&quot;: str(device), &quot;vram_gb&quot;: vram_gb,
-                                     &quot;tops_declarados&quot;: tops,
-                                     &quot;gflops_base&quot;: _GFLOPS_BASE.get(str(device), 0.0),
-                                     &quot;tarea_ms&quot;: round(duracion_ms, 1),
-                                     &quot;tipo&quot;: str(tipo),
-                                     &quot;flops&quot;: round(_fl, 1),
-                                     &quot;gflops_tarea&quot;: round(_fl / (_ms / 1000.0) / 1e9, 3),
-                                     &quot;vram_usada_mb&quot;: _vram_usada},
-                                    separators=(&quot;,&quot;, &quot;:&quot;))
+            cupo_vuelo.release()
+        except Exception:
+            pass
+        with en_vuelo_lock:
+            en_vuelo[&quot;n&quot;] = max(0, en_vuelo[&quot;n&quot;] - 1)
+
+    def _entregar(pid, tipo, metrica, duracion_ms, telemetria, es_replica, firma):
+        &quot;&quot;&quot;Manda la entrega (o la verificacion) sin bloquear al dispositivo.&quot;&quot;&quot;
+        try:
+            nid_e = ctx[&quot;nid&quot;]
             if es_replica:
-                # Entrega de verificacion: no paga ahora; el Core la guarda y
-                # la cruza con el primario. La firma es la misma.
+                # Verificacion: no paga ahora; el Core la cruza con el primario.
                 try:
                     rv = _post(f&quot;{CORE}/tareas/replica&quot;,
-                               json={&quot;tid&quot;: pid, &quot;nodo_id&quot;: nid, &quot;metrica&quot;: metrica,
+                               json={&quot;tid&quot;: pid, &quot;nodo_id&quot;: nid_e, &quot;metrica&quot;: metrica,
                                      &quot;firma&quot;: firma, &quot;device&quot;: str(device),
                                      &quot;duracion_ms&quot;: duracion_ms},
                                timeout=TIMEOUT_ENTREGA)
@@ -4812,28 +5615,21 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                             print(f&quot;[KUKIA] {etiqueta} el Core no admite replicas &quot;
                                   f&quot;(actualiza el Core); sigo&quot;, flush=True)
                         else:
-                            # Normal: la tarea se cerro o la replica ya no estaba
-                            # reclamada. No es un fallo del minero.
                             print(f&quot;[KUKIA] {etiqueta} replica {pid[:8]} sin reclamar: {det}&quot;,
                                   flush=True)
                     elif rv.status_code == 409:
-                        # La tarea se pago antes de que llegara la verificacion:
-                        # el Core ya la cerro y esta replica no se cobra. Es
-                        # normal en tareas cortas; solo se avisa.
+                        # La tarea se pago antes de que llegara la verificacion.
                         print(f&quot;[KUKIA] {etiqueta} replica {pid[:8]} llego tarde &quot;
                               f&quot;(la tarea ya estaba pagada)&quot;, flush=True)
-                    espera_error = 5.0
                 except Exception as e:
                     print(f&quot;[KUKIA] {etiqueta} replica {pid[:8]} no entregada: {e}&quot;, flush=True)
-                continue
-            entrega = {&quot;tid&quot;: pid, &quot;nodo_id&quot;: nid, &quot;metrica&quot;: metrica,
+                return
+            entrega = {&quot;tid&quot;: pid, &quot;nodo_id&quot;: nid_e, &quot;metrica&quot;: metrica,
                        &quot;firma&quot;: firma, &quot;device&quot;: str(device),
                        &quot;duracion_ms&quot;: duracion_ms, &quot;telemetria&quot;: telemetria}
             rr = None
             for _intento in (1, 2):
                 try:
-                    # AUDITORIA 2026-10-20: cuerpo JSON (sin limite de URL). Si el
-                    # Core es antiguo y la ruta no existe, se usa la query string.
                     rr = _post(f&quot;{CORE}/tareas/resultado_json&quot;, json=entrega,
                                timeout=TIMEOUT_ENTREGA)
                     if rr.status_code == 404 and &quot;Not Found&quot; in (rr.text or &quot;&quot;):
@@ -4841,8 +5637,8 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                                    timeout=TIMEOUT_ENTREGA)
                 except requests.exceptions.RequestException as e:
                     # Un timeout no significa que no se haya cobrado: se
-                    # reintenta UNA vez. Si ya estaba pagada, el segundo intento
-                    # devuelve 409 y no hay doble pago.
+                    # reintenta UNA vez (si ya estaba pagada, el segundo
+                    # intento devuelve 409 y no hay doble pago).
                     if _intento == 1:
                         print(f&quot;[KUKIA] {etiqueta} entrega de {pid[:8]} sin respuesta &quot;
                               f&quot;({type(e).__name__}); reintento&quot;, flush=True)
@@ -4851,33 +5647,31 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                           f&quot;la tarea volvera a la cola&quot;, flush=True)
                     rr = None
                     break
-                # El Core ha perdido la fila del nodo un instante (404/401
-                # &quot;nodo&quot;): se comprueba/registra otra vez y se reintenta. Es la
-                # unica forma de no perder un trabajo ya calculado.
                 if (_intento == 1 and rr.status_code in (401, 404)
                         and &quot;nodo&quot; in (rr.text or &quot;&quot;)):
-                    print(f&quot;[KUKIA] {etiqueta} el Core no ve el nodo {nid} al entregar &quot;
+                    print(f&quot;[KUKIA] {etiqueta} el Core no ve el nodo {nid_e} al entregar &quot;
                           f&quot;{pid[:8]}; lo compruebo y reintento&quot;, flush=True)
-                    nuevo = _re_registrar(nid, etiqueta, device, vram_gb, tops,
+                    nuevo = _re_registrar(nid_e, etiqueta, device, vram_gb, tops,
                                           pubkey, direccion, privkey)
-                    if nuevo and nuevo != nid:
-                        ctx[&quot;nid&quot;] = nid = nuevo
-                        entrega[&quot;nodo_id&quot;] = nid
+                    if nuevo and nuevo != nid_e:
+                        ctx[&quot;nid&quot;] = nid_e = nuevo
+                        entrega[&quot;nodo_id&quot;] = nid_e
                         entrega[&quot;firma&quot;] = WALLET.firmar(f&quot;{pid}:{metrica}&quot;, privkey)
                     continue
                 break
             if rr is None:
-                espera_error = 5.0
-                continue
+                return
             if rr.status_code == 429:
-                print(f&quot;[KUKIA] {etiqueta} Core saturado (429) al entregar, espero 20 s&quot;, flush=True)
-                bloqueado_hasta = time.time() + 20
-                continue
+                print(f&quot;[KUKIA] {etiqueta} Core saturado (429) al entregar, espero 20 s&quot;,
+                      flush=True)
+                bloqueado[&quot;hasta&quot;] = time.time() + 20
+                return
             if rr.status_code != 200:
-                print(f&quot;[KUKIA] {etiqueta} entrega rechazada: {rr.status_code} {rr.text[:140]}&quot;, flush=True)
+                print(f&quot;[KUKIA] {etiqueta} entrega rechazada: {rr.status_code} &quot;
+                      f&quot;{rr.text[:140]}&quot;, flush=True)
                 if rr.status_code in (429, 403):
-                    bloqueado_hasta = time.time() + 30
-                continue
+                    bloqueado[&quot;hasta&quot;] = time.time() + 30
+                return
             res = rr.json()
             if res.get(&quot;ok&quot;):
                 with cuenta_lock:
@@ -4886,19 +5680,320 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                     cuenta[&quot;ultimo_ok&quot;] = time.time()
                 print(f&quot;[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -&gt; OK +{res.get(&#x27;kuki&#x27;)} KIA &quot;
                       f&quot;({duracion_ms:.0f} ms)&quot;, flush=True)
-                espera_error = 5.0
             else:
                 with cuenta_lock:
                     cuenta[&quot;err&quot;] += 1
                 print(f&quot;[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -&gt; RECHAZADO &quot;
                       f&quot;(esperado {res.get(&#x27;esperado&#x27;)}, enviado {metrica[:40]})&quot;, flush=True)
-                espera_error = 5.0
         except Exception as e:
-            # Backoff: un Core caido no debe hacer que 2 GPUs lo martilleen
-            # en bucle ni llenar el log a 1000 lineas por minuto.
-            print(f&quot;[KUKIA] {etiqueta} err: {e} (reintento en {espera_error:.0f} s)&quot;, flush=True)
-            time.sleep(espera_error)
-            espera_error = min(60.0, espera_error * 1.6)
+            print(f&quot;[KUKIA] {etiqueta} entrega de {pid[:8]} fallida: &quot;
+                  f&quot;{type(e).__name__}: {e}&quot;, flush=True)
+        finally:
+            # Se suelta SIEMPRE, con o sin exito: si no, una entrega que falle
+            # deja el cupo cogido y el nodo pierde capacidad para siempre.
+            _soltar()
+
+    def _pedir():
+        &quot;&quot;&quot;Hilo dedicado a PEDIR trabajo; el bucle de abajo solo calcula.
+
+        POR QUE (medido el 23-10-2026 en este Core): /tareas/pendiente tarda
+        353 ms de mediana (p90 555 ms). Calculado dentro del mismo hilo, la
+        tarjeta se pasaba mas tiempo esperando la tarea siguiente que
+        calculandola: 18,9 GFLOP/s atribuidos a una GPU que da 84,8 en el
+        banco. Ahora la peticionero va por delante y deja la tarea en cola.
+        &quot;&quot;&quot;
+        espera = 2.0
+        while not PARAR.is_set():
+            tengo_cupo = False
+            try:
+                ahora = time.time()
+                if ahora &lt; bloqueado[&quot;hasta&quot;]:
+                    time.sleep(min(5.0, bloqueado[&quot;hasta&quot;] - ahora))
+                    continue
+                # Barrido periodico (throttled a BARRIDO_SEG): si el Core paga
+                # directo a la direccion no hace nada; si quedo saldo viejo en
+                # algun nodo, lo mueve a la billetera.
+                barrer_saldos(etiqueta, w, privkey)
+                if not cupo_vuelo.acquire(timeout=1.0):
+                    continue
+                tengo_cupo = True
+                with en_vuelo_lock:
+                    en_vuelo[&quot;n&quot;] += 1
+                nid_p = ctx[&quot;nid&quot;]
+                # AUDITORIA 2026-10-20: peticion FIRMADA con nonce aleatorio.
+                # Sin nonce, una peticion capturada se podia repetir 5 minutos
+                # y robar la cola del nodo. El Core nuevo exige la firma con
+                # nonce; los mineros viejos siguen con el mensaje antiguo.
+                ts = int(time.time())
+                nonce = secrets.token_hex(16)
+                firma_p = WALLET.firmar(f&quot;pendiente:{nid_p}:{ts}:{nonce}&quot;,
+                                        privkey) if privkey else &quot;&quot;
+                rp = _get(f&quot;{CORE}/tareas/pendiente&quot;,
+                          params={&quot;nodo_id&quot;: nid_p, &quot;ts&quot;: ts, &quot;nonce&quot;: nonce,
+                                  &quot;firma&quot;: firma_p},
+                          timeout=TIMEOUT_API)
+                if rp.status_code == 429:
+                    print(f&quot;[KUKIA] {etiqueta} limitado por el Core (429), espero 20 s&quot;,
+                          flush=True)
+                    bloqueado[&quot;hasta&quot;] = time.time() + 20
+                    _soltar()
+                    continue
+                if rp.status_code != 200:
+                    detalle = (rp.text or &quot;&quot;)[:160]
+                    _soltar()
+                    if rp.status_code in (401, 404) and &quot;nodo no registrado&quot; in detalle:
+                        print(f&quot;[KUKIA] {etiqueta} el Core no ve el nodo {nid_p}: lo compruebo &quot;
+                              f&quot;antes de seguir&quot;, flush=True)
+                        ctx[&quot;nid&quot;] = _re_registrar(nid_p, etiqueta, device, vram_gb, tops,
+                                                   pubkey, direccion, privkey)
+                        cuenta[&quot;ultimo_core_ok&quot;] = time.time()
+                        continue
+                    print(f&quot;[KUKIA] {etiqueta} el Core rechaza la peticion de trabajo: &quot;
+                          f&quot;{rp.status_code} {detalle}&quot;, flush=True)
+                    if rp.status_code == 401:
+                        print(&quot;[KUKIA] si el Core es anterior al 20-10-2026, actualizalo: &quot;
+                              &quot;el worker nuevo firma el trabajo con nonce.&quot;, flush=True)
+                    time.sleep(10)
+                    continue
+                _cuerpo = rp.json()
+                cuenta[&quot;ultimo_core_ok&quot;] = time.time()
+                if not _cuerpo.get(&quot;tarea&quot;):
+                    motivo = str(_cuerpo.get(&quot;motivo&quot;) or &quot;&quot;)
+                    _soltar()
+                    if &quot;limite&quot; in motivo:
+                        # Cupo del nodo lleno (tareas colgadas de antes, o un
+                        # nodo nuevo que solo puede tener 1). Se espera medio
+                        # segundo: con 1 s el arranque de un nodo nuevo tarda el
+                        # doble de lo necesario.
+                        cuenta[&quot;ultimo_limite&quot;] = time.time()
+                        time.sleep(0.5)
+                    else:
+                        time.sleep(0.2)
+                    continue
+                # El cupo de esta tarea lo suelta quien la entregue.
+                tengo_cupo = False
+                cola_tareas.put(_cuerpo)
+            except Exception as e:
+                print(f&quot;[KUKIA] {etiqueta} pidiendo trabajo: {type(e).__name__}: {e} &quot;
+                      f&quot;(reintento en {espera:.0f} s)&quot;, flush=True)
+                time.sleep(espera)
+                espera = min(60.0, espera * 1.6)
+            else:
+                espera = 2.0      # la ultima peticion fue bien: sin backoff
+            finally:
+                if tengo_cupo:
+                    _soltar()
+
+    threading.Thread(target=_pedir, daemon=True,
+                     name=f&quot;pedir-{str(device).replace(&#x27;:&#x27;, &#x27;&#x27;)}&quot;).start()
+
+    def _calcular():
+        &quot;&quot;&quot;Una ranura de calculo del dispositivo (puede haber varias).
+
+        POR QUE MAS DE UNA (23-10-2026): con una sola ranura, entre tarea y
+        tarea la tarjeta esperaba al Python (pedir, firmar, montar la
+        telemetria). Medido en el ensayo de dos GPU: 28 % de uso medio y
+        49,5 GFLOP/s, con tareas de 8 ms a 400 ms. Dos ranuras solapan la
+        preparacion de una con los kernels de la otra sin tocar el Core ni
+        el pago.
+        &quot;&quot;&quot;
+        espera_error = 5.0
+        while not PARAR.is_set():
+            en_mano = False      # hay un cupo cogido por la tarea que llevamos
+            try:
+                # El trabajo lo trae el hilo _pedir; aqui solo se calcula.
+                try:
+                    _cuerpo = cola_tareas.get(timeout=2.0)
+                except queue.Empty:
+                    continue
+                en_mano = True
+                nid = ctx[&quot;nid&quot;]
+                pend = _cuerpo.get(&quot;tarea&quot;)
+                # EJECUCION REDUNDANTE (21-10-2026): el Core puede dar una tarea
+                # que otro nodo ya esta resolviendo. Verificar tambien se cobra
+                # (30 % del premio de esa tarea) y no hace falta recalcular nada
+                # en el Core, que era el cuello de botella de la red.
+                es_replica = bool(_cuerpo.get(&quot;replica&quot;))
+                pid = str(pend.get(&quot;id&quot;) or &quot;&quot;)
+                tipo = pend.get(&quot;tipo&quot;)
+                ok_t, motivo_t, params = validar_tarea(tipo, pend.get(&quot;params&quot;))
+                if not pid or not ok_t:
+                    print(f&quot;[KUKIA] {etiqueta} tarea {pid[:8] or &#x27;?&#x27;} rechazada localmente: &quot;
+                          f&quot;{motivo_t or &#x27;id vacio&#x27;}&quot;, flush=True)
+                    _soltar()
+                    en_mano = False
+                    time.sleep(3)
+                    continue
+                t0 = time.time()
+                try:
+                    metrica = trabajo_local(tipo, params, device)
+                except Exception as e:
+                    # FALLO AL CALCULAR (23-10-2026). Dos cosas:
+                    #
+                    # 1. Se REINTENTA una vez tras vaciar la cache de CUDA. Casi
+                    #    todas las faltas de memoria son fragmentacion, no tamaño:
+                    #    el segundo intento con la cache limpia suele entrar.
+                    # 2. Si vuelve a fallar, se suelta el cupo (antes se quedaba
+                    #    cogido para siempre: cuatro fallos y el nodo dejaba de
+                    #    minar en silencio) y se sigue con otra tarea.
+                    # La tarea se queda asignada en el Core hasta que vence
+                    # (ABANDONO_SEG)... eso ocupa un hueco del cupo del Core, no
+                    # del nuestro. Para eso hace falta un /tareas/soltar en el
+                    # Core: propuesto, no aplicado (toca protocolo).
+                    print(f&quot;[KUKIA] {etiqueta} error calculando {pid[:8]} &quot;
+                          f&quot;({type(e).__name__}: {e}); limpio VRAM y reintento&quot;, flush=True)
+                    try:
+                        if str(device).startswith(&quot;cuda&quot;):
+                            import torch
+                            torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    try:
+                        metrica = trabajo_local(tipo, params, device)
+                    except Exception as e2:
+                        print(f&quot;[KUKIA] {etiqueta} tampoco a la segunda {pid[:8]} &quot;
+                              f&quot;({type(e2).__name__}: {e2}); sigo con otra tarea&quot;,
+                              flush=True)
+                        _soltar()
+                        en_mano = False
+                        time.sleep(3.0)
+                        continue
+                duracion_ms = (time.time() - t0) * 1000.0
+                estado_tarea[&quot;ms&quot;] = round(duracion_ms, 1)
+                if metrica == &quot;tarea_no_soportada&quot;:
+                    print(f&quot;[KUKIA] {etiqueta} tipo &#x27;{tipo}&#x27; no implementado en este worker&quot;, flush=True)
+                    _soltar()
+                    en_mano = False
+                    time.sleep(5)
+                    continue
+                firma = WALLET.firmar(f&quot;{pid}:{metrica}&quot;, privkey) if privkey else &quot;&quot;
+                # Telemetria REAL del nodo: tiempo de la tarea, FLOPs que acaba de
+                # hacer y GFLOPS medidos en ESTA tarea. Con eso el panel dibuja la
+                # potencia y la latencia de cada GPU con datos, no con una media
+                # declarada. No influye en el pago.
+                _fl = flops_tarea(tipo, params)
+                _ms = max(0.001, float(duracion_ms))
+                _vram_usada = 0.0
+                try:
+                    if str(device).startswith(&quot;cuda&quot;):
+                        import torch
+                        _vram_usada = round(torch.cuda.memory_reserved(device) / (1024 * 1024), 1)
+                except Exception:
+                    _vram_usada = 0.0
+                telemetria = json.dumps({&quot;device&quot;: str(device), &quot;vram_gb&quot;: vram_gb,
+                                         &quot;tops_declarados&quot;: tops,
+                                         &quot;gflops_base&quot;: _GFLOPS_BASE.get(str(device), 0.0),
+                                         &quot;tarea_ms&quot;: round(duracion_ms, 1),
+                                         &quot;tipo&quot;: str(tipo),
+                                         &quot;flops&quot;: round(_fl, 1),
+                                         &quot;gflops_tarea&quot;: round(_fl / (_ms / 1000.0) / 1e9, 3),
+                                         &quot;vram_usada_mb&quot;: _vram_usada},
+                                        separators=(&quot;,&quot;, &quot;:&quot;))
+                # El dispositivo ya tiene su resultado: la entrega se manda desde
+                # otro hilo y este bucle VUELVE A PEDIR TRABAJO en el acto. Es toda
+                # la optimizacion: el calculo de la siguiente tarea se solapa con
+                # la espera del Core (que puede ser de hasta 3 s por la replica).
+                espera_error = 5.0
+                en_mano = False      # el cupo lo suelta el hilo de entrega
+                try:
+                    threading.Thread(target=_entregar,
+                                     args=(pid, tipo, metrica, duracion_ms, telemetria,
+                                           es_replica, firma),
+                                     daemon=True).start()
+                except Exception:
+                    en_mano = True   # no llego a nacer: el cupo vuelve a nosotros
+                    raise
+            except Exception as e:
+                if en_mano:
+                    _soltar()
+                    en_mano = False
+                # Backoff: un Core caido no debe hacer que 2 GPUs lo martilleen
+                # en bucle ni llenar el log a 1000 lineas por minuto.
+                print(f&quot;[KUKIA] {etiqueta} err: {e} (reintento en {espera_error:.0f} s)&quot;, flush=True)
+                time.sleep(espera_error)
+                espera_error = min(60.0, espera_error * 1.6)
+
+    # Ranuras de calculo por dispositivo. 1 = comportamiento anterior.
+    # El tope real lo pone el Core (cupo de tareas en vuelo por nodo).
+    hilos_calc = max(1, min(4, int(os.environ.get(&quot;KUKIA_HILOS_GPU&quot;, &quot;1&quot;))))
+    for _h in range(hilos_calc):
+        threading.Thread(target=_calcular, daemon=True,
+                         name=f&quot;calc-{str(device).replace(&#x27;:&#x27;, &#x27;&#x27;)}-{_h}&quot;).start()
+    while not PARAR.is_set():
+        time.sleep(0.5)
+
+    # --- SALIDA LIMPIA ------------------------------------------------------
+    # Al parar (Ctrl+C o PARAR), se dejan terminar las entregas en vuelo. Si el
+    # proceso muere con tareas asignadas sin entregar, el Core no las devuelve a
+    # la cola hasta pasados 30 min (ABANDONO_SEG) y ese calculo se pierde.
+    limite = time.time() + 15.0
+    while time.time() &lt; limite:
+        with en_vuelo_lock:
+            if en_vuelo[&quot;n&quot;] == 0:
+                break
+        time.sleep(0.2)
+    with en_vuelo_lock:
+        quedan = en_vuelo[&quot;n&quot;]
+    print(f&quot;[KUKIA] {etiqueta} parado&quot; +
+          (f&quot; ({quedan} sin entregar)&quot; if quedan else &quot; limpiamente&quot;), flush=True)
+
+def _proceso_vivo(pid: int) -&gt; bool:
+    &quot;&quot;&quot;¿Sigue vivo ese PID? (Windows sin psutil: OpenProcess + GetExitCode).&quot;&quot;&quot;
+    try:
+        pid = int(pid)
+    except Exception:
+        return False
+    if pid &lt;= 0 or pid == os.getpid():
+        return False
+    if os.name != &quot;nt&quot;:
+        try:
+            os.kill(pid, 0)
+            return True
+        except Exception:
+            return False
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)   # QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not k.GetExitCodeProcess(h, ctypes.byref(code)):
+                return False
+            return code.value == 259             # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    except Exception:
+        return False
+
+
+def _tomar_lock() -&gt; bool:
+    &quot;&quot;&quot;True si esta ventana puede minar. False si ya hay otro minero vivo.
+
+    Si el fichero tiene un PID muerto (se cerro la ventana a lo bruto) se
+    sobrescribe: la cerradura nunca deja el minero clavado.
+    &quot;&quot;&quot;
+    try:
+        if LOCK.exists():
+            otro = (LOCK.read_text(encoding=&quot;utf-8&quot;) or &quot;&quot;).strip()
+            otro = int(otro) if otro.isdigit() else 0
+            if otro and _proceso_vivo(otro):
+                print(f&quot;[KUKIA] ya hay un minero vivo (PID {otro}): esta ventana NO mina&quot;,
+                      flush=True)
+                print(&quot;[KUKIA] dos mineros en la misma GPU se reparten el cupo y rinden &quot;
+                      &quot;la mitad.&quot;, flush=True)
+                print(&quot;[KUKIA] cierra esa ventana (o ese proceso) y vuelve a abrir esta.&quot;,
+                      flush=True)
+                return False
+    except Exception:
+        pass
+    try:
+        LOCK.write_text(str(os.getpid()), encoding=&quot;utf-8&quot;)
+    except Exception:
+        pass
+    return True
+
 
 def _vigilar_direccion(seg: float = 300.0) -&gt; None:
     &quot;&quot;&quot;Si el Core se muda (tunel nuevo), el minero se entera sin reiniciar.
@@ -4936,6 +6031,8 @@ def main():
             flujo.reconfigure(encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;)
         except Exception:
             pass
+    if not _tomar_lock():
+        return 0
     _vigilar_direccion()
     ok_core, motivo_core = _core_seguro(CORE)
     if not ok_core:
@@ -4948,14 +6045,39 @@ def main():
     except Exception:
         n_gpus = 0
 
+    def _esperar(hilos):
+        &quot;&quot;&quot;Espera a los hilos y, si llega un Ctrl+C, para ordenadamente.&quot;&quot;&quot;
+        try:
+            for t in hilos:
+                t.join()
+        except KeyboardInterrupt:
+            # Ctrl+C: se avisa a los hilos y se les da tiempo a entregar lo que
+            # llevan encima antes de salir. Sin esto, el pipeline deja hasta 4
+            # tareas colgadas media hora en el Core.
+            PARAR.set()
+            print(&quot;[KUKIA] parando: termino lo que esta en vuelo y salgo...&quot;, flush=True)
+            for t in hilos:
+                t.join(timeout=20)
+            print(&quot;[KUKIA] minero detenido&quot;, flush=True)
+
     if n_gpus == 0:
         print(&quot;[KUKIA] Sin GPUs CUDA - usando CPU (mas lento)&quot;, flush=True)
         _benchmark_arranque()
-        ciclo_worker(nombre, &quot;cpu&quot;, 0, 0.0)
+        _anunciar_emision()
+        # En un hilo y no en el principal: asi el Ctrl+C pasa por la misma
+        # parada ordenada que el resto de modos (entrega lo que tenga en vuelo).
+        t = threading.Thread(target=ciclo_worker, args=(nombre, &quot;cpu&quot;, 0, 0.0), daemon=True)
+        t.start()
+        _esperar([t])
         return
 
     print(f&quot;[KUKIA] {n_gpus} GPU(s) detectada(s) - minando en TODAS a la vez&quot;, flush=True)
+    # Una linea para saber QUE version corre: con el pipeline, &quot;pide, calcula y
+    # entrega&quot; van en hilos distintos y conviene verlo en el arranque.
+    print(f&quot;[KUKIA] pipeline: {PROFUNDIDAD} tarea(s) en cola por dispositivo, &quot;
+          f&quot;{os.environ.get(&#x27;KUKIA_EN_VUELO&#x27;, &#x27;4&#x27;)} en vuelo por nodo&quot;, flush=True)
     _benchmark_arranque()
+    _anunciar_emision()
     hilos = []
     for g in range(n_gpus):
         try:
@@ -4972,8 +6094,24 @@ def main():
         t = threading.Thread(target=ciclo_worker, args=(nombre, f&quot;cuda:{g}&quot;, vram, tops_est), daemon=True)
         t.start()
         hilos.append(t)
-    for t in hilos:
-        t.join()
+
+    # CPU como un nodo mas, si se ha pedido (KUKIA_USAR_CPU). Ver _ajuste_cpu.
+    usar_cpu, hilos_cpu = _ajuste_cpu()
+    if usar_cpu:
+        try:
+            import torch
+            torch.set_num_threads(hilos_cpu)   # no ahogar a los hilos de las GPU
+        except Exception:
+            pass
+        print(f&quot;[KUKIA] CPU tambien mina: {hilos_cpu} hilos &quot;
+              f&quot;(KUKIA_USAR_CPU=0 lo apaga)&quot;, flush=True)
+        t = threading.Thread(target=ciclo_worker, args=(nombre, &quot;cpu&quot;, 0, 0.0), daemon=True)
+        t.start()
+        hilos.append(t)
+    else:
+        print(&quot;[KUKIA] CPU en reposo (KUKIA_USAR_CPU=1 para que mine tambien)&quot;, flush=True)
+
+    _esperar(hilos)
 
 if __name__ == &quot;__main__&quot;:
     raise SystemExit(main())
@@ -8592,7 +9730,15 @@ print(&quot;OK&quot;)
                 cuerpo = rr.json() if rr.status_code == 200 else {}
                 check(&quot;resultado verificado y pagado&quot;, rr.status_code == 200 and cuerpo.get(&quot;ok&quot;) is True,
                       rr.text[:160])
-                check(&quot;el pago es mayor que 0&quot;, float(cuerpo.get(&quot;kuki&quot;) or 0) &gt; 0,
+                # CONTRATO DEL 22-10-2026 (pago por potencia): una tarea de 0
+                # FLOP (checksum) cobra 0 KIA. Antes esta prueba exigia pago&gt;0
+                # porque la tarifa era plana; con potencia demostrada el
+                # checksum queda fuera de la mezcla y cobra cero a proposito
+                # (ver PAGO_POR_POTENCIA.md y tools/prueba_pago_potencia.py).
+                # El pago positivo de una tarea de calculo se comprueba mas
+                # abajo, con las matrices y sus replicas.
+                check(&quot;checksum (0 FLOP) cobra 0 KIA, como manda el pago por potencia&quot;,
+                      float(cuerpo.get(&quot;kuki&quot;) or 0) == 0,
                       f&quot;{cuerpo.get(&#x27;kuki&#x27;)} KIA&quot;)
                 tops_con_trabajo = float(s.get(f&quot;{base}/stats&quot;, timeout=30).json()[&quot;dificultad&quot;][&quot;tops_red&quot;])
                 check(&quot;un nodo con trabajo pagado SI cuenta para la dificultad&quot;,
@@ -10326,6 +11472,13 @@ FALLOS_CORE_DURO = 12
 INTERVALO_MALO = float(os.environ.get(&quot;KUKIA_GUARDIA_RAPIDO&quot;, &quot;5&quot;))
 # Si hay mas de estas tareas en cola y no hay minero nuestro vivo, se arranca.
 ATASCO_COLA_MIN = 5
+# Arranque del minero con retraso (22-10-2026): al iniciar sesion se abre la
+# ventana del minero (VER_MINERO.cmd) y esta guardia arranca a la vez. Si la
+# guardia gana la carrera, lanza el minero oculto y la ventana se cierra sola
+# al ver la cerradura cogida. Este margen le deja el sitio a la ventana; si a
+# los 60 s no hay nadie minando, la guardia arranca el suyo como siempre.
+ESPERA_MINERO_SEG = float(os.environ.get(&quot;KUKIA_GUARDIA_ESPERA_MINERO&quot;, &quot;60&quot;))
+_INICIO = time.time()
 INTERVALO = float(os.environ.get(&quot;KUKIA_GUARDIA_INTERVALO&quot;, &quot;30&quot;))
 MAX_LOG_BYTES = 5 * 1024 * 1024
 
@@ -10823,7 +11976,12 @@ def ciclo(hijos: dict, estado: Estado, verbose: bool) -&gt; int:
         #    Core pague tareas nuevas. Un minero vivo pero atascado (CUDA
         #    colgada) no sirve de nada y hay que relanzarlo igual.
         minero = hijos.get(&quot;minero&quot;)
-        if minero is not None:
+        if minero is not None and time.time() - _INICIO &lt; ESPERA_MINERO_SEG:
+            # Margen para que la ventana del minero (la del inicio de sesion)
+            # coja la cerradura primero. No es un fallo: es esperar a proposito.
+            if verbose:
+                log(&quot;[minero] esperando a la ventana del inicio de sesion&quot;)
+        elif minero is not None:
             progresando = estado.progreso(stats, verbose)
             cola = int(stats.get(&quot;tareas_pend&quot;) or 0)
             if not progresando:

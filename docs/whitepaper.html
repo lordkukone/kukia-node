@@ -100,7 +100,7 @@ th { color:var(--gold); background:rgba(18,48,94,.5); }
 <tr><td>Techo maximo</td><td>100.000.000 KIA (nunca habra mas)</td></tr>
 <tr><td>Emision hasta</td><td>2150 (escalonada por fases)</td></tr>
 <tr><td>Asignacion fundacional</td><td>15.000.000 KIA al fundador (bloque genesis + migracion a billetera con recuperacion: <code>KUK9E8B44CD7FE3AF178039453D3EEDF391EEC0CE</code>)</td></tr>
-<tr><td>Calendario de emision</td><td>Halvings cada ~20,71 anos (6 eras). Ultima moneda: <strong>13-04-2150</strong>. Tras esa fecha, emision = 0</td></tr>
+<tr><td>Calendario de emision</td><td>Halvings cada 20,67 anos (6 eras). Ultima moneda: <strong>01-01-2150</strong>. Tras esa fecha, emision = 0</td></tr>
 <tr><td>Resto del suministro</td><td>Se emite por trabajo verificado hasta completar los 100M</td></tr>
 <tr><td>Comisiones</td><td>0 % (no hay comision de red ni quema)</td></tr>
 <tr><td>Dificultad</td><td>Se ajusta al numero de nodos activos</td></tr>
@@ -125,7 +125,7 @@ th { color:var(--gold); background:rgba(18,48,94,.5); }
 <li>Si coincide: paga al nodo y sube su reputacion. Si no: tarea rechazada, 0 KIA.</li>
 <li><strong>Anti-doble-pago:</strong> cada tarea solo se puede cobrar UNA vez (segundo intento = error 409).</li>
 <li><strong>Tope en cada pago:</strong> el pago nunca supera lo que falta hasta 100M (el ledger jamas pasa del techo).</li>
-<li><strong>Recompensa dinamica:</strong> cada pago se ajusta para agotar justo el 13-04-2150 al ritmo real de la red, dentro de bandas del halving. Lo que gana el ejecutor y lo que gana el verificador suman lo mismo por tarea: la duplicacion no infla la emision.</li>
+<li><strong>Recompensa dinamica:</strong> cada pago se ajusta para agotar justo el 01-01-2150 al ritmo real de la red, dentro de bandas del halving. Lo que gana el ejecutor y lo que gana el verificador suman lo mismo por tarea: la duplicacion no infla la emision.</li>
 <li>Ademas: reputacion por nodo (max 5.0) y nonce por tarea.</li>
 </ul>
 

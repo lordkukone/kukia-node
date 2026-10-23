@@ -77,7 +77,13 @@ def ultimo_sello(ruta: Path) -> str | None:
 
 
 def verificar(db: Path, sellos: Path) -> dict:
-    """Cadena encadenada + firmas de los sellos, de la base que se le pase."""
+    """Cadena encadenada + firmas de los sellos, de la base que se le pase.
+
+    Si la base no se puede leer (copia a medias, fichero truncado), NO se lanza
+    la excepcion: se devuelve cadena_ok=False con el motivo. Este es un camino
+    de emergencia (volver al original tras un failover): un traceback aqui deja
+    al operador sin saber si la replica vale, y lo prudente es negarse.
+    """
     con = sqlite3.connect(str(db))
     con.row_factory = sqlite3.Row
     try:
@@ -102,6 +108,11 @@ def verificar(db: Path, sellos: Path) -> dict:
                 "encadenados": n, "asientos": asientos,
                 "supply": round(supply, 6), "sellos": len(lista),
                 "sellos_ok": bool(r["ok"]), "problemas": (r.get("problemas") or [])[:5]}
+    except sqlite3.DatabaseError as e:
+        # Base ilegible: se trata como replica que no cuadra, nunca como buena.
+        return {"cadena_ok": False, "alterados": [], "encadenados": 0,
+                "asientos": 0, "supply": 0.0, "sellos": 0, "sellos_ok": False,
+                "problemas": [f"base ilegible: {type(e).__name__}: {e}"]}
     finally:
         con.close()
 

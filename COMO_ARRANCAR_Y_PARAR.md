@@ -194,6 +194,40 @@ Motivo: el 20-10-2026 el minero se callo a las 12:28 y nadie lo noto hasta las
 15:00, con 121 tareas en cola. La guardia lo detecta en menos de un minuto
 (probado matando el minero: relanzado en 17 s).
 
+### La ventana del minero al iniciar sesion (22-10-2026)
+
+Al entrar en Windows se abre tambien **la ventana del minero** (donde se ve
+cada tarea y el resumen por minuto). Es un acceso de la carpeta de Inicio:
+
+```
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\KUKIA Minero.cmd
+    -> call "C:\Users\kuki\Desktop\KUKIA\VER_MINERO.cmd" minero_pc
+```
+
+Para quitarlo, borra ese fichero de Inicio (no hay que tocar nada mas).
+
+Tres cosas que lo hacen seguro, porque al encender arrancan a la vez la guardia
+y la ventana:
+
+1. **La guardia espera 60 s** antes de arrancar un minero propio
+   (`KUKIA_GUARDIA_ESPERA_MINERO`). Asi le da tiempo a la ventana a ocupar el
+   sitio; si a los 60 s no hay nadie minando, arranca el suyo (oculto, como
+   siempre). Su log lo dice: `[minero] ya esta corriendo (abierto aparte)`.
+2. **Cerradura de instancia unica** (`worker/minero.lock`, con el PID dentro).
+   Si se abre una segunda ventana, en vez de minar dice
+   `ya hay un minero vivo (PID N)`. Desde el 23/10 esa ventana **se queda con
+   el trabajo** si el minero está oculto: `tools/minero_en_ventana.py` para el
+   suyo (y el que la guardia relanza, dentro de sus 20 s de enfriamiento) y
+   mina ahí, a la vista. Si el que hay ya está en otra ventana con
+   `python.exe`, no se duplica: abre `tools/mina_en_vivo.py` para mirar. Un PID
+   muerto no bloquea: la cerradura se sobrescribe sola.
+3. Si cierras la ventana, la guardia relanza el minero a los pocos minutos,
+   pero **sin ventana** (oculto). La ventana vuelve en el siguiente inicio de
+   sesion o abriendo `VER_MINERO.cmd` a mano.
+
+Dos mineros a la vez no es un fallo visible: se reparten el cupo de 4 tareas
+del nodo y rinden la mitad sin dar ningun error. Por eso existe la cerradura.
+
 ## Parar
 
 Para la guardia primero (cierra su ventana) y luego los procesos que quieras;
@@ -267,10 +301,14 @@ curl "http://127.0.0.1:8300/stats"
 ## Por que el premio por tarea baja
 
 El pago no es fijo: el Core calcula `objetivo = restante / tareas_restantes`
-para agotar los 100M justo el **13-04-2150**. Cuando la red mina mas tareas por
-segundo, el pago por tarea baja y el total sigue acotado: hoy el presupuesto es
-**1,31 KIA/minuto** (686.000 KIA/año), o sea **0,0037 KIA por tarea** a unas
-500.000 tareas/dia.
+para agotar los 100M justo en la fecha final, el **01-01-2150** (124 años desde
+el inicio, 6 eras de 20,67). El 22-10-2026 se habia movido al 01-01-2152 y el
+23-10-2026 Kuki lo devolvio a 2150; el calendario manda la fecha del dueno, no
+el numero de años. Cuando la red mina mas tareas por segundo, el pago por tarea
+baja y el total sigue acotado: el presupuesto es **~1,31 KIA/minuto** (unos
+690.000 KIA/año), o sea centesimas de KIA por tarea a cientos de miles de
+tareas/dia.
+Los numeros exactos de hoy: `python tools\calculo_moneda.py`.
 
 Ojo con un detalle que ya costo un susto: hasta el 19-10-2026 habia un **suelo**
 de `techo*0,1` = 1 KIA por tarea. Con ~300 tareas/min son 432.000 KIA/dia y los
@@ -280,7 +318,8 @@ media historica, que se quedaba corta al acelerar la red.
 
 Es el diseno, no un fallo: si quieres premios altos por tarea, deja la red
 minando menos tareas por minuto (baja `KUKIA_AUTO_LOTE` o sube `KUKIA_AUTO_SEG`);
-lo que se emite por minuto no cambia.
+lo que se emite por minuto no cambia. Y al reves: mas potencia no adelanta la
+fecha, solo reparte los mismos KIA/min entre mas tareas.
 
 ## Reglas de cobro y castigo (19-10-2026)
 
@@ -296,8 +335,8 @@ lo que se emite por minuto no cambia.
 - **Tamano de tarea por tiempo**: el Core persigue ~2 s por tarea
   (`KUKIA_TAREA_MS`). Si las tareas salen cortas, las agranda; si se pasan, las
   encoge. Asi el ritmo se queda estable (~50 tareas/min con 2 GPUs) y el premio
-  por tarea sube a ~0,025 KIA, sin mover el presupuesto de 1,31 KIA/min ni la
-  fecha de 2150. Techo: `difusion_pasos` 20.000 y matriz `n` 3x.
+  por tarea sube, sin mover el presupuesto de KIA/min ni la fecha final.
+  Techo: `difusion_pasos` 20.000 y matriz `n` 3x.
 - **TOPS solo de nodos activos**: la dificultad cuenta unicamente nodos vistos
   en las ultimas 24 h. Antes sumaba todos los registros (11.192 TOPS fantasma
   frente a 200 reales) y agrandaba las tareas 2,5x.
@@ -696,6 +735,53 @@ python tools\vigilante_servicios.py --verificar-copia   :: revalidar ya, sin esp
 Salidas: `logs/vigilante_servicios.log` (historial con hora),
 `logs/vigilante_servicios.json` (estado por servicio) y `ESTADO_WEBS.txt`
 (resumen legible de la ultima pasada).
+
+### Aviso por disponibilidad del dia (por debajo del 99 %)
+
+Cada pasada mira tambien **como va el dia**: si un servicio lleva el dia por
+debajo del **99 %**, avisa (toast + Telegram + log) con el peor primero y
+cuanto tiempo estuvo caido. Se calcula con los mismos logs, asi que un hueco
+sin pasadas (PC apagado) no ensucia el porcentaje.
+
+- **Una vez por servicio y dia** (`logs/disponibilidad_avisada.json`): un 98 % a
+  las 14:00 no repite aviso a las 14:05. Si por la tarde cae otro servicio, ese
+  otro si avisa. Al dia siguiente vuelve a estar disponible el aviso.
+- **Minimo 30 minutos medidos** (`KUKIA_DISPONIBLE_OBSERVADO_MIN=1800`): a las
+  00:10 un fallo de un minuto daria 0 % y no significa nada.
+- **Umbral configurable**: `KUKIA_DISPONIBLE_MIN=99` (por ejemplo 99.5).
+- `paquete-igual` **no** cuenta aqui: compara versiones entre webs, no dice si
+  algo esta arriba (para eso ya tiene su propio aviso).
+- Se ve sin esperar al aviso en `ESTADO_WEBS.txt` (bloque «Disponibilidad de
+  hoy») y en `python tools\incidencias.py`.
+
+### Historico de incidencias (que se cayo, cuanto y que % de disponibilidad)
+
+Lo que antes solo se veia de la ultima pasada ahora se ve por dia:
+
+```cmd
+python tools\incidencias.py                   :: ultimos 7 dias
+python tools\incidencias.py --dias 30         :: un mes
+python tools\incidencias.py --dias 0          :: todo lo que haya en los logs
+python tools\incidencias.py --detalle         :: cada caida con hora y motivo
+python tools\incidencias.py --servicio surge  :: solo uno (core-local, github, web ...)
+python tools\incidencias.py --json            :: para scripts
+VER_INCIDENCIAS.cmd                           :: lo mismo, con doble clic
+```
+
+Sale una linea por dia y servicio con **caidas**, **tiempo caido** y
+**disponibilidad %**, y al final el total del periodo. Reglas, para que las
+cifras no enganen:
+
+- Dos pasadas malas seguidas son **una** caida, no dos; dura hasta la primera
+  pasada buena.
+- Un hueco sin pasadas (PC apagado, tarea parada) **no cuenta**: ni como caida
+  ni como tiempo disponible. Es la diferencia entre "no estaba mirando" y
+  "estaba caido".
+- Una caida que sigue abierta ahora mismo se muestra como `sigue`.
+- Se lee de los logs de los dos vigilantes (`vigilante_servicios.log` cada
+  5 min y `vigilante_web.log` cada 10 min), no del Core.
+
+Prueba de la logica (fechas fijas, sin red): `python tools/prueba_incidencias.py`.
 
 Si alguna vez vuelve a aparecer una ventana, el sospechoso es un
 `subprocess.run([...])` nuevo sin `creationflags`: se busca con

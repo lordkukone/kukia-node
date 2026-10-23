@@ -82,6 +82,13 @@ EN_ZIP = [
     "publico/ARRANCAR_METRICAS.cmd",
     "ARRANCAR_MINERO.cmd",
     "VER_SALDO_MINERO.cmd",
+    # 23-10-2026: GUIA_MINERO.md (que si va en el paquete) manda abrir
+    # VER_MINERO.cmd para ver el minero y nombra el visor y el ayudante que se
+    # queda con el minero oculto. Misma norma que ARRANCAR_TUNEL.cmd: si un
+    # documento del paquete nombra un fichero, el fichero va dentro.
+    "VER_MINERO.cmd",
+    "tools/mina_en_vivo.py",
+    "tools/minero_en_ventana.py",
     "COPIAR_LEDGER.cmd",
     "ARRANCAR_VALIDADOR.cmd",
     "ARRANCAR_PANEL.cmd",

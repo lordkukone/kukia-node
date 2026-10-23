@@ -315,7 +315,7 @@ Sale 0 solo si pasan las 93 comprobaciones.
 - 15.000.000 KIA fundacionales al fundador en el bloque genesis
   (`KUK9E8B44CD7FE3AF178039453D3EEDF391EEC0CE`).
 - El resto sale por emision de trabajo verificado: 1,31 KIA/min hoy, con
-  halvings cada ~20,7 anos y fin de emision el 2150-04-13. Nunca se acuña por
+  halvings cada ~20,7 anos y fin de emision el 2150-01-01. Nunca se acuña por
   encima del tope: se comprueba en cada pago.
 - El reparto 25M/40M/15M/10M/10M que habia aqui era una propuesta antigua y no
   es lo que corre: el codigo no tiene esas bolsas.

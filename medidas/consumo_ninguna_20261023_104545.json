@@ -1,0 +1,22 @@
+{
+  "cuando": "2026-10-23 10:45:45",
+  "segundos": 150.0,
+  "carga": "ninguna",
+  "cpu_pct_medio": 86.0,
+  "cpu_w": null,
+  "gpu": {
+    "0": {
+      "nombre": "NVIDIA GeForce RTX 5070",
+      "w_medio": 37.01,
+      "w_max": 66.75,
+      "uso_medio": 20.0
+    },
+    "1": {
+      "nombre": "NVIDIA GeForce RTX 5060 Ti",
+      "w_medio": 19.68,
+      "w_max": 35.49,
+      "uso_medio": 9.3
+    }
+  },
+  "gpu_w_total": 56.69
+}

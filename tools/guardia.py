@@ -104,6 +104,13 @@ FALLOS_CORE_DURO = 12
 INTERVALO_MALO = float(os.environ.get("KUKIA_GUARDIA_RAPIDO", "5"))
 # Si hay mas de estas tareas en cola y no hay minero nuestro vivo, se arranca.
 ATASCO_COLA_MIN = 5
+# Arranque del minero con retraso (22-10-2026): al iniciar sesion se abre la
+# ventana del minero (VER_MINERO.cmd) y esta guardia arranca a la vez. Si la
+# guardia gana la carrera, lanza el minero oculto y la ventana se cierra sola
+# al ver la cerradura cogida. Este margen le deja el sitio a la ventana; si a
+# los 60 s no hay nadie minando, la guardia arranca el suyo como siempre.
+ESPERA_MINERO_SEG = float(os.environ.get("KUKIA_GUARDIA_ESPERA_MINERO", "60"))
+_INICIO = time.time()
 INTERVALO = float(os.environ.get("KUKIA_GUARDIA_INTERVALO", "30"))
 MAX_LOG_BYTES = 5 * 1024 * 1024
 
@@ -601,7 +608,12 @@ def ciclo(hijos: dict, estado: Estado, verbose: bool) -> int:
         #    Core pague tareas nuevas. Un minero vivo pero atascado (CUDA
         #    colgada) no sirve de nada y hay que relanzarlo igual.
         minero = hijos.get("minero")
-        if minero is not None:
+        if minero is not None and time.time() - _INICIO < ESPERA_MINERO_SEG:
+            # Margen para que la ventana del minero (la del inicio de sesion)
+            # coja la cerradura primero. No es un fallo: es esperar a proposito.
+            if verbose:
+                log("[minero] esperando a la ventana del inicio de sesion")
+        elif minero is not None:
             progresando = estado.progreso(stats, verbose)
             cola = int(stats.get("tareas_pend") or 0)
             if not progresando:
