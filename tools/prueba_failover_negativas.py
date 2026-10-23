@@ -326,6 +326,11 @@ def caso_separada(base: Path) -> None:
     original = base / "original_copia"
     if not (original / "kukia.db").exists():
         original.mkdir(parents=True, exist_ok=True)
+        # OJO: `shutil.copyfile` vale AQUI porque el ensayo se hace con el Core
+        # parado (el ledger esta quieto). Con el Core escribiendo, la copia sale
+        # a medias y el fichero queda mal formado; comprobado el 23-10-2026.
+        # No se cambia a la API de backup: en caliente la copia de la red viva
+        # ya la hace `replica_ledger`, y aqui el escenario exige foto congelada.
         shutil.copyfile(ORIGINAL_DB, original / "kukia.db")
         shutil.copyfile(ORIGINAL_SELLOS, original / "sellos.jsonl")
 

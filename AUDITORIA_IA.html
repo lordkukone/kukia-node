@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8">
+<title>KUKIA · auditoría 23/10/2026</title>
+<style>
+  body { margin:0; background:#12151b; color:#e6e6e6;
+        font:16px/1.6 -apple-system,Segoe UI,Roboto,sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:32px 24px 80px; }
+  h1 { font-size:1.9em; color:#ffcc66; border-bottom:2px solid #333; padding-bottom:8px; }
+  h2 { margin-top:2em; color:#7fd1ff; border-bottom:1px solid #2a2f3a; padding-bottom:4px; }
+  h3 { color:#c8e6a0; margin-top:1.4em; }
+  table { border-collapse:collapse; width:100%; margin:1em 0; font-size:0.95em; }
+  th,td { border:1px solid #333a45; padding:6px 10px; text-align:left; }
+  th { background:#1d2330; }
+  tr:nth-child(even) td { background:#171b23; }
+  code { background:#1d2330; padding:1px 5px; border-radius:4px; font-size:0.92em; }
+  pre { background:#0d1017; border:1px solid #2a2f3a; border-radius:8px;
+        padding:12px; overflow-x:auto; }
+  pre code { background:none; padding:0; }
+  strong { color:#fff; }
+  hr { border:none; border-top:1px solid #2a2f3a; margin:2em 0; }
+  ul,ol { padding-left:1.3em; }
+</style></head>
+<body><main><h1>KUKIA — dossier de auditoría del 23/10/2026 (para otra IA)</h1>
+<p>Esto es todo lo que se ha hecho hoy en el nodo, con las pruebas al lado, para que otra
+IA lo audite <strong>sin acceso a esta conversación</strong>. Cada afirmación lleva su evidencia
+(fichero, comando o número medido). Lo que no está probado se dice en el apartado 7.</p>
+<p>Ruta del proyecto: <code>C:\Users\kuki\Desktop\KUKIA</code> (Windows, PowerShell/Git Bash).
+Lenguaje: Python 3.12 + SQLite. Nada de esto se ha commiteado.</p>
+<p><strong>Resumen en cinco líneas</strong></p>
+<ol>
+<li>El pago estaba mal en frío: un Core nuevo pagaba 47 KIA el primer minuto contra un
+   presupuesto de 1,31 KIA/min. Arreglado con una <strong>bolsa de emisión</strong> (tope global de
+   1 minuto de presupuesto). Medido: 8,83 KIA en 8 min en vez de 47 en el primero.</li>
+<li>Se sacaron las <strong>difusiones</strong> de los nodos CPU (19,5 s allí contra 0,8 s en GPU).
+   Medido: 50 tareas / 6 min → 1.836 tareas / 6 min.</li>
+<li>El Core de producción se <strong>reinició</strong> a las 15:51 con ese código y se comprobó que
+   sigue pagando igual (1,29 → 1,26-1,29 KIA/min, 0 errores).</li>
+<li>Se midió el <strong>100 % de GPU</strong>: solo, no paga más (1,433 → 1,406 KIA/min con el doble
+   de vatios); con un rival compitiendo y la tarjeta ocupada, paga un 2,7 % más; con la
+   tarjeta <strong>libre</strong>, un <strong>10,5 %</strong> más. Nunca el doble: el pastel es fijo.</li>
+<li>Queda pendiente: <strong>un defecto abierto en la bolsa</strong> (el modo «plano» paga sin bolsa
+   cuando la red lleva 10 min parada; medido, 2,27 KIA en 20 s en vez de 0,44), y
+   commitear, porque producción corre 381 líneas sin versionar.</li>
+</ol>
+<hr />
+<h2>0. Qué es KUKIA, en tres líneas</h2>
+<p>Una moneda minable con su propio Core (coordinador HTTP en <code>127.0.0.1:8300</code>), su ledger
+SQLite (<code>coordinator/ledger/kukia.db</code>, 319 MB, encadenado por hash y sellado cada hora)
+y su minero (<code>worker/kukia_worker.py</code>, GPU CUDA). El pago va <strong>por trabajo demostrado</strong>
+(GFLOPs verificados × precio), la emisión tiene calendario hasta el 01-01-2150 y un
+presupuesto de <strong>1,3106 KIA/minuto</strong>.</p>
+<p>Reglas de la casa que un auditor NO puede romper:</p>
+<ul>
+<li><strong>Nada de borrar.</strong> Solo añadir, y solo si el dueño lo pide.</li>
+<li><code>I:\CEREBRO</code> es de solo lectura (el cerebro de la máquina). No se toca.</li>
+<li>Antes de parar o reiniciar algo: copia verificada (tamaño + hash).</li>
+<li>Copiar &gt; verificar &gt; preguntar. Nunca mover.</li>
+<li>No tocar Python, CUDA, drivers ni entornos de Pinokio sin autorización.</li>
+<li>Distinguir siempre lo comprobado de lo supuesto.</li>
+</ul>
+<hr />
+<h2>1. Estado del sistema AHORA (comprobado a las 16:44 del 23/10)</h2>
+<pre><code>127.0.0.1:8300  Core       PID 37892  (relanzado por el guardia a las 15:51:46)
+127.0.0.1:8301  Panel      PID 37132  HTTP 200
+minero          PID 53828  (levantado por el guardia a las 17:15, tras el ensayo libre)
+guardia         PID 48676  (relanzado a las 17:14; mantiene Core, panel, minero, etc.)
+</code></pre>
+<p>Aviso: entre las 16:42 y las 17:15 el minero y el guardia estuvieron <strong>parados a
+propósito</strong> para medir el 100 % de GPU con la tarjeta libre. Producción perdió ~33 min
+de minado (delta 0 de tareas, comprobado dentro de los dos ensayos) y se restauró
+después: el guardia nuevo levantó el minero solo y volvió a pagar (+237 tareas en 60 s).</p>
+<p><code>GET /stats</code> en el momento de escribir esto:</p>
+<table>
+<thead>
+<tr>
+<th>Campo</th>
+<th>Valor</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>version</code></td>
+<td>0.4.2</td>
+</tr>
+<tr>
+<td><code>supply_emitido</code></td>
+<td>15.086.453,679954 KIA (techo 100.000.000)</td>
+</tr>
+<tr>
+<td><code>tareas_ok</code></td>
+<td>360.791 · cola 95 · nodos 18</td>
+</tr>
+<tr>
+<td><code>emision_por_min</code></td>
+<td><strong>1,3106</strong> (el presupuesto)</td>
+</tr>
+<tr>
+<td><code>modo_pago</code></td>
+<td><strong>potencia</strong></td>
+</tr>
+<tr>
+<td><code>precio_gflop</code></td>
+<td>0,001217892294 (GFLOP/min de la red: 1.076,089)</td>
+</tr>
+<tr>
+<td><code>dificultad</code></td>
+<td><code>tops_red</code> 1.060 · factor 0,779 · matriz_n 598 · inferencia_n 149 · difusion_pasos 1.907</td>
+</tr>
+<tr>
+<td><code>integridad</code></td>
+<td>238 sellos · <code>pagos_bloqueados: false</code></td>
+</tr>
+<tr>
+<td><code>emision.fin_emision</code></td>
+<td><strong>2150-01-01</strong>, era 0, halving 20,67 años</td>
+</tr>
+</tbody>
+</table>
+<p>Hashes de los ficheros que están <strong>corriendo</strong> (para que el auditor compruebe que
+audita el código que corre):</p>
+<pre><code>coordinator/kukia_core.py         191428 B  sha256 d4a84e08504e2c26…
+worker/kukia_worker.py             83017 B  sha256 fd5ab5eb08b954e3…
+tools/ensayo_competencia.py        16767 B  sha256 89a7870a685bbd09…
+medidas/medir_pagos_produccion.py   2103 B  sha256 0fe10bbdf93210ff…
+</code></pre>
+<p>Ojo: el Core <strong>sí</strong> corre el fichero de arriba (reiniciado a las 15:51). El minero
+<strong>no</strong>: su proceso es de las 14:17 y el fichero se tocó a las 15:15 (ver apartado 7.2).</p>
+<hr />
+<h2>2. Cambios de hoy en código, uno por uno</h2>
+<h3>2.1 Minero: dos ranuras de cálculo por tarjeta (opcional, apagado por defecto)</h3>
+<ul>
+<li><strong>Qué</strong>: el bucle de cálculo se separó en <code>_calcular()</code> y por cada dispositivo se
+  lanzan <code>KUKIA_HILOS_GPU</code> ranuras (1 = comportamiento de siempre).</li>
+<li><strong>Mandos nuevos</strong> (todos por variable de entorno): <code>KUKIA_HILOS_GPU</code> (1 por defecto),
+  y para acompañarla <code>KUKIA_PROFUNDIDAD</code> 2→6, <code>KUKIA_EN_VUELO</code> 4→8,
+  <code>KUKIA_MAX_TAREAS_NODO</code> 4→8 (estos dos últimos en el Core).</li>
+<li><strong>Por qué está apagado</strong>: medido, el 100 % sube la GPU del 28 % al 60 % pero
+  <strong>baja</strong> el KIA/kWh un 27 %. La emisión va por presupuesto: el mismo KIA por más
+  vatios.</li>
+<li><strong>Evidencia</strong>: <code>KUKIA_GPU_100_2026-10-23.md</code>; <code>medidas/ensayos/gpu2_hora_20261023_115519/</code>
+  (60 min de serie: 1,433 KIA/min, GPU al 27,8 %) y
+  <code>medidas/ensayos/gpu_100pct_20261023_150358/</code> (10 min con 2 ranuras: 1,406 KIA/min,
+  GPU al 60,2 %).</li>
+<li><strong>Riesgo</strong>: 2 ranuras suben CPU y vatios; no se midió la fuente.</li>
+</ul>
+<h3>2.2 Difusiones fuera de los nodos CPU</h3>
+<ul>
+<li><strong>Qué</strong>: el Core ya no entrega <code>difusion_calor</code> a un nodo CPU, ni como tarea ni como
+  réplica. El nodo declara <code>device</code> en el registro (columna nueva <code>nodos.device</code>); los
+  nodos viejos se reconocen por VRAM 0 y 0 TOPS (<code>_nodo_es_cpu</code>). Además, el generador
+  de tareas no fabrica difusiones si no hay GPU activa y no deja que las encoladas
+  ocupen la cola.</li>
+<li><strong>Por qué</strong>: una difusión cuesta 0,8 s en GPU y 19,5 s en CPU; al nodo CPU se le iba
+  el 81 % del tiempo en la tarea que peor hace.</li>
+<li><strong>Evidencia</strong> (<code>KUKIA_DIFUSIONES_CPU_2026-10-23.md</code>): nodo CPU solo, 6 min antes y
+  después → 50 tareas y 15 difusiones vs <strong>1.836 tareas y 0 difusiones</strong>; parada
+  ordenada 21,1 s → 0,6 s. Con nodo GPU, 148 difusiones, 0,4 s de media (no se rompió).</li>
+<li><strong>Estado en producción</strong>: activo desde el reinicio de las 15:51. Hoy no hay ningún
+  nodo CPU conectado, así que en producción aún no ha hecho nada visible.</li>
+</ul>
+<h3>2.3 Bolsa de emisión (el arreglo del arranque en frío)</h3>
+<ul>
+<li><strong>El fallo que arregla</strong>: el precio por GFLOP sale de los GFLOP/min de los últimos
+  10 min. Con un Core recién creado esa ventana está vacía, el precio se dispara y las
+  primeras tareas se pagaban a precio de oro: <strong>47,46 KIA en el primer minuto</strong> y 13,58
+  en el segundo, contra un presupuesto de 1,31 KIA/min (×36). El techo por tarea no lo
+  evitaba: 147 tareas × 0,3 KIA siguen siendo 47.</li>
+<li><strong>Qué se añadió</strong> (<code>coordinator/kukia_core.py</code>, bloque «BOLSA DE EMISION»):</li>
+<li><code>presupuesto_por_minuto()</code>: KIA/min que toca según el calendario (mismo número que
+    <code>/stats</code>).</li>
+<li><code>cobrar_de_la_bolsa(kia)</code>: recorta el pago a lo que queda en la bolsa y lo
+    descuenta. La bolsa se llena a <code>presupuesto × (segundos desde el último pago)/60</code>
+    y <strong>no guarda más de 1 minuto</strong> (<code>KUKIA_BOLSA_TOPE_MIN</code>, 1 por defecto), así que da
+    igual cuánto tiempo haya estado parada la red: no hay rebote de KIA acumulados.</li>
+<li>Se aplica dentro de <code>pago_por_trabajo()</code>, justo antes de devolver el pago, o sea
+    <strong>antes</strong> de repartir el 70/30 entre ejecutor y verificador.</li>
+<li>El estado vive en <code>meta</code> (<code>bolsa_kia</code>, <code>bolsa_ts</code>) y se escribe dentro de la misma
+    transacción <code>BEGIN IMMEDIATE</code> con <code>_pago_lock</code> que el pago (línea ~2297 de
+    <code>kukia_core.py</code>), así que si el pago no se confirma, el descuento tampoco.</li>
+<li><code>/stats</code> publica <code>bolsa_emision: {kia_disponible, tope_min, presupuesto_kia_min}</code>
+    para poder verlo desde fuera.</li>
+<li><strong>Evidencia</strong>: Core aislado recién creado, 2 GPU, 6 min pedidos / 8 min de serie
+  (<code>medidas/ensayos/bolsa_frio_20261023_152523/resumen.json</code>):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Antes del arreglo</th>
+<th>Con la bolsa</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Primer minuto</td>
+<td>47,46 KIA</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Total de la ventana</td>
+<td>47 + 13,58 + …</td>
+<td><strong>8,83 KIA en 8 min</strong> (1,10 KIA/min)</td>
+</tr>
+<tr>
+<td>Pagos en cero</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Tareas / fallos</td>
+<td>—</td>
+<td>1.184 pagadas / 0 fallos</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Comprobado en producción</strong> tras el reinicio: <code>meta</code> tiene <code>bolsa_kia</code> y <code>bolsa_ts</code>
+  (solo las escribe esta versión) y el pago se quedó en 1,289 KIA/min.</li>
+</ul>
+<h3>2.4 Reinicio del Core de producción (15:51)</h3>
+<ul>
+<li>Copia verificada antes: <code>backups/kukia_20261023_155117/</code> (396.744 asientos,
+  233 sellos, «VERIFICADA: la copia cuadra con los sellos»), <code>kukia.db</code>
+  319.045.632 B sha256 <code>47a9cbdf756a34b3…</code>.</li>
+<li>Parada: <code>taskkill /F /PID 42048</code> (no hay parada ordenada posible: corre con
+  <code>pythonw.exe</code>, sin consola, y uvicorn no recibe Ctrl+C).</li>
+<li>Relanzado <strong>solo por el guardia</strong> en 7 s (PID 37892). Log <code>logs/core.log</code>:
+  <code>integridad OK: cadena intacta, 233 sellos</code>, <code>Application startup complete</code>,
+  <code>auto-tareas: cola 101 -&gt; 120</code>. Después, 6 min sin un solo <code>ERROR</code>, <code>Traceback</code> ni
+  500.</li>
+<li>Pago antes/después: <strong>1,2937 KIA/min → 1,2588 KIA/min</strong>, 0,0051 KIA/tarea en los dos
+  lados, 0 pagos en cero, máximo por tarea 0,0222 (techo 10).
+  <code>KUKIA_REINICIO_CORE_2026-10-23.md</code> y <code>medidas/medir_pagos_produccion.py</code>.</li>
+</ul>
+<h3>2.5 Ensayo de competencia (herramienta nueva)</h3>
+<ul>
+<li><code>tools/ensayo_competencia.py</code>: Core aislado + dos mineros reales en árboles separados
+  (identidad y cerradura propias), uno fijo de rival y otro con <code>--ranuras 1|2</code>.
+  Mide KIA por nodo <strong>desde el ledger</strong> (las cuentas de cobro, no lo que dice el
+  minero), GFLOP/min de la red, precio y uso de cada GPU.</li>
+<li>Resultado con la GPU <strong>ocupada</strong> por el minero de producción (14 min por brazo,
+  <code>KUKIA_COMPETENCIA_2026-10-23.md</code>):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Test 1 ranura</th>
+<th>Test 2 ranuras</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>KIA del nodo de prueba</td>
+<td>9,1858</td>
+<td>9,4353 (<strong>+2,7 %</strong>)</td>
+</tr>
+<tr>
+<td>Su parte del pastel</td>
+<td>49,9 %</td>
+<td>50,8 %</td>
+</tr>
+<tr>
+<td>Tareas pagadas</td>
+<td>1.695</td>
+<td>1.803 (+6,4 %)</td>
+</tr>
+<tr>
+<td>KIA por tarea</td>
+<td>0,005419</td>
+<td>0,005233 (−3,4 %)</td>
+</tr>
+<tr>
+<td>KIA/min de la red</td>
+<td>1,3147</td>
+<td>1,3253</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>Repetido luego con el <strong>minero de producción parado</strong> (GPU libre), que es lo que
+  pedía el dueño (<code>KUKIA_COMPETENCIA_GPU_LIBRE_2026-10-23.md</code>):</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Test 1 ranura</th>
+<th>Test 2 ranuras</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>KIA/min del nodo de prueba</td>
+<td>0,6786</td>
+<td><strong>0,7496 (+10,5 %)</strong></td>
+</tr>
+<tr>
+<td>Su parte del pastel</td>
+<td>50,1 %</td>
+<td>52,1 %</td>
+</tr>
+<tr>
+<td>KIA/min del rival</td>
+<td>0,6764</td>
+<td>0,6899</td>
+</tr>
+<tr>
+<td>KIA/min de la red</td>
+<td>1,3550</td>
+<td>1,4394</td>
+</tr>
+<tr>
+<td>GFLOP/min de la red</td>
+<td>1.704</td>
+<td>1.755</td>
+</tr>
+</tbody>
+</table>
+<p>O sea: el 100 % paga <strong>+10,5 %</strong> con la tarjeta libre (contra +2,7 % con la tarjeta
+  ocupada), nunca el doble. El reparto manda: el pastel es fijo.</p>
+<ul>
+<li>Lectura: el pago es <code>presupuesto × tu parte</code>. Con competencia, trabajar más sube tu
+  parte, pero mucho menos que tu trabajo (el precio por GFLOP baja en cuanto sube el
+  GFLOP/min de la red). Y con la GPU ya ocupada por el minero de producción, la
+  segunda ranura no compró potencia: el uso de la 5070 no subió (74,4 % → 71,7 %).</li>
+</ul>
+<hr />
+<h2>3. Mapa de ficheros de hoy</h2>
+<p>Código tocado (sin commitear):</p>
+<table>
+<thead>
+<tr>
+<th>Fichero</th>
+<th>Cambio</th>
+<th>Tamaño</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>coordinator/kukia_core.py</code></td>
+<td>+381 / −32 líneas (bolsa, difusiones a GPU, <code>device</code>, calendario 2150, pago por potencia)</td>
+<td>191.428 B</td>
+</tr>
+<tr>
+<td><code>worker/kukia_worker.py</code></td>
+<td>+700 líneas aprox (ranuras, <code>device</code>, pipeline)</td>
+<td>83.017 B</td>
+</tr>
+</tbody>
+</table>
+<p>Herramientas nuevas:</p>
+<ul>
+<li><code>tools/ensayo_competencia.py</code> — el ensayo de dos nodos (apartado 2.5).</li>
+<li><code>medidas/medir_pagos_produccion.py</code> — pago por minuto del ledger real, en solo lectura.</li>
+</ul>
+<p>Informes (todos en la raíz del proyecto):</p>
+<table>
+<thead>
+<tr>
+<th>Fichero</th>
+<th>Qué cuenta</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>KUKIA_GPU_100_2026-10-23.md</code></td>
+<td>100 % de GPU: sube el uso, baja el KIA/kWh</td>
+</tr>
+<tr>
+<td><code>KUKIA_DIFUSIONES_CPU_2026-10-23.md</code></td>
+<td>difusiones fuera de los nodos CPU</td>
+</tr>
+<tr>
+<td><code>KUKIA_REINICIO_CORE_2026-10-23.md</code></td>
+<td>reinicio de producción y pago antes/después</td>
+</tr>
+<tr>
+<td><code>KUKIA_COMPETENCIA_2026-10-23.md</code></td>
+<td>dos nodos compitiendo por la emisión (GPU ocupada)</td>
+</tr>
+<tr>
+<td><code>KUKIA_COMPETENCIA_GPU_LIBRE_2026-10-23.md</code></td>
+<td>lo mismo con el minero de producción parado</td>
+</tr>
+<tr>
+<td><code>KUKIA_MINERO_VALIDACION_2026-10-23.md</code></td>
+<td>validación general (suites, 60 min, A/B)</td>
+</tr>
+<tr>
+<td><code>AUDITORIA_PARA_OTRA_IA_2026-10-23.md</code></td>
+<td>este documento</td>
+</tr>
+</tbody>
+</table>
+<p>Medidas crudas: <code>medidas/ensayos/&lt;etiqueta&gt;_&lt;fecha&gt;/</code> con <code>resumen.json</code>,
+<code>muestras.jsonl</code>, <code>core.log</code> y los logs de cada minero. Nada se borra.</p>
+<hr />
+<h2>4. Cómo reproducir cada cosa</h2>
+<pre><code class="language-bash">cd C:/Users/kuki/Desktop/KUKIA
+
+# 1) Estado de producción
+curl -s http://127.0.0.1:8300/stats
+python medidas/medir_pagos_produccion.py 15        # pago por minuto, solo lectura
+
+# 2) Cadena y salud de la moneda
+python tools/verificar_moneda.py
+python publico/verificar_sellos.py --db coordinator/ledger/kukia.db --sellos coordinator/sellos.jsonl
+
+# 3) El arranque en frío (Core aislado, NO toca producción)
+python tools/ensayo_estabilidad.py --minutos 8 --gpus 0,1 --etiqueta bolsa_frio
+
+# 4) Competencia de dos nodos (14 min por brazo)
+python tools/ensayo_competencia.py --minutos 14 --ranuras 1
+python tools/ensayo_competencia.py --minutos 14 --ranuras 2
+
+# 5) Copia verificada del ledger
+python tools/backup_ledger.py --sin-clave
+</code></pre>
+<p>Los ensayos aíslan el Core con <code>KUKIA_DB</code> y su propia carpeta: <strong>nunca</strong> escriben en
+<code>coordinator/ledger/kukia.db</code>. La variable correcta es <code>KUKIA_DB</code> (ver la pifia del
+apartado 6.1).</p>
+<hr />
+<h2>5. Lo que ya estaba, y lo que se ha parado (siempre restaurado)</h2>
+<ul>
+<li>El nodo de pago por potencia (<code>pago_por_trabajo</code>, <code>precio_gflop</code>, ventana 10 min,
+  techo por tarea 10 KIA) es de días anteriores; hoy solo se le colgó la bolsa.</li>
+<li>El calendario de emisión (fin 2150-01-01, 6 eras de 20,67 años) ya estaba puesto al
+  arrancar el Core de las 11:40.</li>
+<li>Producción se ha parado dos veces y siempre a propósito: el Core 7 s a las 15:51
+  (reinicio con el parche) y el minero 33 min, de 16:42 a 17:15, para el ensayo con
+  GPU libre. Las dos veces se restauró y se comprobó que volvía a pagar.</li>
+<li>La billetera, el ledger, los sellos y la cadena no se han tocado a mano en todo el día.</li>
+</ul>
+<hr />
+<h2>6. Pifias conocidas (las mías), para que el auditor no las confunda con bugs</h2>
+<h3>6.1 Abrí el ledger de producción con una instancia de prueba (14:51)</h3>
+<p>Al hacer una prueba de humo puse <code>KUKIA_LEDGER_DIR</code> cuando la buena era <code>KUKIA_DB</code>.
+Resultado: una instancia de prueba abrió el ledger <strong>real</strong> durante ~1 segundo. Qué
+hizo exactamente: los <code>ALTER TABLE</code> de arranque (añadió <code>nodos.device</code>, que habría
+añadido igual el Core nuevo) y el saneado de difusiones encoladas. No pagó, no creó
+tareas (<code>KUKIA_AUTO_TAREAS=0</code>) ni tocó el ledger. Se comprobó después: <code>PRAGMA
+quick_check</code> ok y <strong>historial completo de sellos OK</strong> (384.668 asientos, 227 sellos).
+Está contado entero en <code>KUKIA_DIFUSIONES_CPU_2026-10-23.md</code>.</p>
+<h3>6.2 Parada dura en el reinicio</h3>
+<p><code>taskkill /F</code> sobre el Core (no había otra). No se perdió trabajo: 7 tareas en
+ejecución y 114 en cola en el momento de mirar, ninguna fallida, y la cadena siguió
+intacta. Pero no es una parada ordenada y conviene decirlo.</p>
+<h3>6.3 Un falso positivo en los ensayos</h3>
+<p><code>verificar_sellos.py --core</code> avisa «ALTERADO: sello 0 … no encadena» porque en ese modo
+pide solo los últimos 200 sellos y el primero de la ventana no tiene predecesor dentro
+de ella. Con el historial completo (<code>--db</code> + <code>--sellos</code>) sale OK. No es un fallo.</p>
+<hr />
+<h2>7. Huecos, riesgos y lo que un auditor debería mirar con lupa</h2>
+<h3>7.1 Código sin versionar en producción</h3>
+<p>El Core que corre en producción tiene <strong>381 líneas nuevas sin commitear</strong>. Funciona y
+está medido, pero un <code>git checkout</code> dejaría producción con código distinto al de disco
+y nadie se enteraría hasta el siguiente reinicio. Decisión pendiente del dueño.</p>
+<h3>7.2 Los nodos existentes no declaran su <code>device</code></h3>
+<p>El worker <strong>sí</strong> manda <code>device</code> al registrarse (<code>kukia_worker.py:416</code>), pero solo al
+registrarse: al arrancar con una identidad guardada <strong>no vuelve a llamar</strong> a
+<code>/nodos/registrar</code> (solo <code>_re_registrar</code> si el Core dice que el nodo no existe).
+Comprobado hoy: el minero se reinició a las 17:15 con el fichero nuevo y los 38 nodos
+siguen con <code>device</code> vacío; en el log del Core no hay ni un <code>/nodos/registrar</code> reciente.</p>
+<p>Consecuencia: para <strong>todos</strong> los nodos que ya existían, el Core usa el plan B (VRAM 0 y
+0 TOPS) para saber quién es CPU. Funciona, pero es un rodeo, y un nodo CPU con VRAM
+declarada &gt;0 se colaría como GPU. Hoy producción no tiene nodos CPU, así que no se
+nota; y el corte de difusiones a CPU <strong>sigue sin probarse en producción</strong> (solo en
+banco). Arreglo posible: que el worker mande <code>device</code> en la telemetría (ya lo manda) y
+que el Core lo guarde también por ahí, o un <code>/nodos/registrar</code> al arrancar.</p>
+<h3>7.3 La bolsa puede premiar la prisa, no el trabajo</h3>
+<p>La bolsa se vacía <strong>por orden de llegada</strong>. Si la red produce trabajo por más valor que
+el presupuesto del minuto, las tareas que lleguen tarde cobran menos o cero. Dato que
+apunta ahí, sin aislarlo: al pasar el nodo de prueba a 2 ranuras, sus pagos por
+<strong>verificación redundante</strong> bajaron de 282 a 266 asientos (−5,7 %) y los del rival de
+326 a 316 (−3,1 %), mientras los pagos por trabajo subían. Total de la red: 1,3147 y
+1,3253 KIA/min, o sea clavado en el presupuesto. <strong>Sospecha, no hecho.</strong> Si al dueño le
+importa el reparto justo, hay que decidir si la bolsa se reparte proporcionalmente en
+vez de por llegada.</p>
+<h3>7.4 Detalles de implementación que conviene revisar</h3>
+<ul>
+<li><code>cobrar_de_la_bolsa()</code> se traga los errores al escribir <code>meta</code> (<code>except Exception:
+  pass</code>). Si esa escritura falla, el pago sale igual y la bolsa no descuenta: se podría
+  emitir de más sin dejar rastro. Es una línea, pero está.</li>
+<li><code>_bolsa_lock</code> es un cerrojo aparte de <code>_pago_lock</code>, aunque la bolsa solo se toca
+  dentro de <code>_pago_lock</code> + <code>BEGIN IMMEDIATE</code>. Redundante, no incorrecto.</li>
+<li><code>bolsa_disponible()</code> (la que enseña <code>/stats</code>) lee <code>meta</code> <strong>fuera</strong> de la transacción:
+  es solo informativa, pero puede ir un instante por detrás.</li>
+<li>La bolsa no cambia el total emitido a largo plazo (el calendario manda); solo reparte
+  mejor. No hay test automático de la bolsa: se probó con el ensayo, no con una suite.</li>
+</ul>
+<h3>7.6 DEFECTO ABIERTO: la bolsa no cubre el modo «plano»</h3>
+<p>Encontrado en el ensayo con GPU libre (23/10, 16:57). Si la red lleva <strong>más de 10 min
+parada</strong>, la ventana de precios está vacía, <code>precio_gflop()</code> devuelve <code>modo: "plano"</code> y
+<code>pago_por_trabajo()</code> paga con <code>recompensa_pago()</code> <strong>sin pasar por la bolsa</strong>:</p>
+<pre><code class="language-python">if d.get(&quot;modo&quot;) != &quot;potencia&quot;:
+    pago, info = recompensa_pago(tier)   # sin cobrar_de_la_bolsa()
+    return pago, ...
+</code></pre>
+<p>Medido: los primeros 20 s de ese brazo pagaron <strong>2,27 KIA</strong> (68 asientos a 0,033 cada
+uno) cuando el presupuesto del tramo era ~0,44; el total del brazo salió <strong>1,4394
+KIA/min</strong> frente a 1,3106. La caché de precio (<code>PRECIO_TTL</code>, 20 s) mantiene la decisión
+«plano» esos 20 s aunque las tareas ya estén entrando.</p>
+<p>No es el desastre de 47 KIA (la bolsa lo habría cortado) pero <strong>es una fuga real</strong>, y
+está en el Core que corre producción. Arreglo pendiente: aplicar la bolsa también en
+esa rama (2-3 líneas) y volver a medir.</p>
+<h3>7.5 Lo que no se ha probado</h3>
+<ul>
+<li>Reinicio del Core con un nodo CPU conectado (el corte de difusiones a CPU está probado
+  en banco, no en producción).</li>
+<li>3 y 4 ranuras por tarjeta.</li>
+<li>El brazo de 2 ranuras con la ventana de precios ya llena desde el principio (en el
+  ensayo libre arrancó vacía y eso mete el efecto del apartado 7.6 en el total).</li>
+<li>Vatios de CPU y fuente (con 2 ranuras la CPU sube; el consumo real es peor que el
+  medido).</li>
+<li>Arranque en frío de la máquina entera (que el guardia levante todo y el minero vuelva
+  a cobrar).</li>
+<li>¿El KIA/kWh con la bolsa puesta? Los ensayos de vatios son anteriores al arreglo.</li>
+</ul>
+<hr />
+<h2>8. Preguntas concretas para el auditor</h2>
+<ol>
+<li>¿La bolsa está bien colocada en <code>pago_por_trabajo()</code> y no antes del reparto 70/30?
+   ¿Se te ocurre un camino en el que un nodo cobre más del presupuesto entre dos
+   transacciones?</li>
+<li>Con el precio = presupuesto ÷ GFLOP/min de la red, ¿hay alguna forma de que un nodo
+   con poca potencia pero mucha latencia (muchas tareas pequeñas) gane más que uno
+   potente? Los números del ensayo de competencia dicen que la parte manda, pero no se
+   ha probado un perfil así.</li>
+<li>¿El recorte de la bolsa por orden de llegada es aceptable para la moneda, o hay que
+   repartir proporcionalmente? Consecuencias en el ledger y en los sellos.</li>
+<li>¿Ves riesgo en que el Core de producción corra 381 líneas sin commitear?</li>
+<li><code>_nodo_es_cpu()</code> usa «VRAM 0 y 0 TOPS» para los nodos viejos. ¿Qué pasa con un nodo
+   GPU que declare mal su VRAM (drivers raros)? Se quedaría sin difusiones y cobraría
+   menos; ¿lo considerarías abuso o accidente?</li>
+</ol>
+<p style="margin-top:3em;color:#888;font-size:.85em">Generado desde AUDITORIA_IA.md</p>
+</main></body></html>

@@ -23,6 +23,17 @@ manifiesto de fuera, el despliegue "sale bien" pero sube lo que haya en el
 workspace (o nada) y el sitio sigue con la version vieja sin dar error. Hay que
 copiar sitio_publicado/ al workspace (carpeta deploy_site/) y desplegar desde
 alli. Perdido 20 minutos por esto: tres despliegues en verde sin cambiar nada.
+
+DONDE ESTA EL WORKSPACE DEL HILO (comprobado el 22-10-2026 a las 20:15): no es
+esta carpeta. Es
+  C:/Users/kuki/.config/freebuff-desktop/local-projects/<id-proyecto>/threads/<id-hilo>/
+y ahi vive el deploy_site/ que se publica de verdad. El 22/10 se actualizo
+KUKIA/deploy_site con contenido nuevo, se desplego dos veces en verde y el sitio
+siguio con la version del 18:38: el publicador estaba subiendo OTRO deploy_site
+(el del hilo, congelado). Se detecta en un segundo mirando el `request_hash` del
+recibo: si no cambia aunque cambien los ficheros, se esta subiendo otra copia.
+Solucion: refrescar el deploy_site del hilo (copia de seguridad primero) y
+desplegar desde ahi.
 """
 import argparse
 import json
@@ -94,7 +105,7 @@ export default {
 # Lo que NUNCA puede acabar aqui. docs/ se genera sin secretos, pero se
 # comprueba igual: un despiste en un script futuro no debe publicar una llave.
 PROHIBIDO = ("wallet/", "admin_token", "sello_key", ".db", ".log",
-             "recuperacion", "identidad")
+             "recuperacion", "identidad", "telegram")
 
 
 def comprobar(destino: Path) -> None:

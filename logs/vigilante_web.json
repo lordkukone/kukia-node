@@ -1,21 +1,21 @@
 {
   "visto": "listo",
   "detalle": "",
-  "ultimo": "2026-10-22 18:27",
+  "ultimo": "2026-10-23 20:27",
   "base": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page",
   "avisado": true,
   "avisado_para": "listo",
   "enviado": "2026-10-21 18:17",
   "indexado": {
-    "dia": "2026-10-22",
+    "dia": "2026-10-23",
     "host": "site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page",
-    "intentos": 3,
-    "cuando": "2026-10-22 12:38:39",
+    "intentos": 1,
+    "cuando": "2026-10-23 09:37:01",
     "google": "sin_comprobar",
     "detalle_google": "Google no sirve resultados a un programa: se mira en Search Console -> Inspeccion de URL (ver SEO_BUSCADORES.md)",
     "url_google": "",
-    "bing": "sin_comprobar",
-    "detalle_bing": "control es.wikipedia.org: DuckDuckGo respondio HTTP 202",
+    "bing": "no",
+    "detalle_bing": "",
     "url_bing": ""
   }
 }

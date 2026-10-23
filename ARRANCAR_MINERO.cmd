@@ -81,6 +81,14 @@ if errorlevel 1 (
 )
 echo [OK] Core accesible.
 
+rem --- CPU ADEMAS de las GPU (opcional, apagado por defecto) ---------------
+rem KUKIA_USAR_CPU=1 anade la CPU como un nodo mas mientras las GPU minan.
+rem Medido en este PC (23-10-2026): la CPU es el 88 % de una GPU en matriz,
+rem pero 44 veces mas lenta en difusion, asi que en un PC con GPU resta. Util
+rem en maquinas sin GPU o con la GPU ya saturada. Un numero (2, 4, 6...) pide
+rem esos hilos exactos. Descomenta la linea para activarlo:
+rem set "KUKIA_USAR_CPU=1"
+
 rem --- nombre del nodo ---
 set "NOMBRE=%~1"
 if not defined NOMBRE set "NOMBRE=minero_%COMPUTERNAME%"
