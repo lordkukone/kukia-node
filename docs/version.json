@@ -1,4 +1,8 @@
 {
   "v": "v1.2.2-csp",
-  "generado": "2026-10-23 20:28:01"
+  "generado": "2026-10-23 20:55:33",
+  "core": "0.4.3",
+  "zip": "kukia-node.zip",
+  "zip_sha256": "bf48a5b2fb5687f8f6e5a5775378135a45f480eab52af06beef3b05b646d116e",
+  "verificar": "Descarga kukia-node.zip y ejecuta 'sha256sum kukia-node.zip' (Windows: 'certutil -hashfile kukia-node.zip SHA256'): tiene que dar el zip_sha256 de este fichero. La version del Core se ve en http://127.0.0.1:8300/version, que ademas publica el hash de cada fichero que esta ejecutando."
 }

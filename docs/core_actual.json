@@ -1,7 +1,7 @@
 {
-  "core": "https://catch-rabbit-requested-seattle.trycloudflare.com",
-  "actualizado": "2026-10-23T18:38:51Z",
-  "version": "0.4.2",
+  "core": "https://stockholm-compounds-rover-prepare.trycloudflare.com",
+  "actualizado": "2026-10-23T18:55:17Z",
+  "version": "0.4.3",
   "nodos": 18,
   "tareas_ok": 395223,
   "core_local": "http://127.0.0.1:8300",

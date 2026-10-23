@@ -329,8 +329,28 @@ Sale 0 solo si pasan las 93 comprobaciones.
 El plan detallado, con lo que se puede y no se puede ganar a Bitcoin y el plan
 del minero por fases: [ESTRATEGIA.md](ESTRATEGIA.md).
 
-## Honestidad
+## HonestidadKUKIA NO promete ser la IA mas potente del mundo. Es una red util de computo
+ distribuido (inferencia, imagen, video, RLVR). El valor esta en trabajo
+ verificado, no en humo. (W: es un prototipo, no oferta de valores.)
 
-KUKIA NO promete ser la IA mas potente del mundo. Es una red util de computo
-distribuido (inferencia, imagen, video, RLVR). El valor esta en trabajo
-verificado, no en humo. (W: es un prototipo, no oferta de valores.)
+### Limites conocidos (auditoria del 23-10-2026)
+
+Para no tener que leer una auditoria entera para saber que NO esta resuelto:
+
+- **Hay un solo Core que liquida.** Los validadores recalculan y firman
+  atestaciones, pero no mueven saldos ni bloquean un pago discrepante. Si cae la
+  maquina del operador, la red se para. No es Bitcoin ni pretende serlo todavia.
+- **Nodos externos: ninguno por ahora.** Todo lo medido se ha medido aqui.
+- **CPU/GPU se declara al registrarse.** El Core no se lo cree del todo (lo corrige
+  con el latido firmado y no manda difusiones a quien no ha demostrado GPU), pero
+  una CPU que diga ser GPU puede recibir trabajo que no acabe a tiempo.
+- **Sin auditoria externa.** Las pruebas de este repo las escribe el propio
+  proyecto; una revision adversarial de terceros sigue pendiente.
+
+Lo que SI esta cerrado y se puede comprobar: la emision no puede pasarse del
+presupuesto del minuto (`tools/prueba_bolsa_arranque.py`), el reparto es
+proporcional al trabajo y no al orden de llegada (`tools/prueba_precio_minuto.py`),
+la telemetria no crece sin tope y el Core publica que codigo esta ejecutando en
+`/version` (`tools/huella_codigo.py`).
+
+Detalle, medidas y lo que queda pendiente: [INFORME_AUDITORIA_2026-10-23_ARREGLOS.md](INFORME_AUDITORIA_2026-10-23_ARREGLOS.md).

@@ -1260,7 +1260,79 @@ def _verificar_embeddings(tipo, params, metrica):
     except Exception:
         return False
 
-app = FastAPI(title="KUKIA Core", version="0.4.2")
+app = FastAPI(title="KUKIA Core", version="0.4.3")
+
+# ============================================================
+#  HUELLA DEL CODIGO QUE SE ESTA EJECUTANDO (23-10-2026)
+#
+#  POR QUE EXISTE: una auditoria del 23-10 contesto lo que nadie podia
+#  comprobar desde fuera: "una revision de main NO demuestra que codigo se
+#  esta ejecutando". Tenia razon: el Core no decia ni que version corria ni
+#  desde cuando. Ahora publica en /stats (y en /version) el SHA-256 de los
+#  ficheros clave, la fecha de cada uno, la hora de arranque y el commit del
+#  repo si esta al lado. Cualquiera puede descargar el fichero de GitHub,
+#  calcularle el SHA-256 y compararlo con lo que responde el Core vivo.
+#
+#  Se calcula UNA vez, al importar: si el fichero cambia en disco despues, la
+#  huella sigue siendo la del codigo cargado en memoria, que es justo lo que
+#  se quiere demostrar (que no basta con editar el .py para cambiar el Core).
+# ============================================================
+FICHEROS_HUELLA = (
+    "coordinator/kukia_core.py",
+    "worker/kukia_worker.py",
+    "ledger/kukia_wallet.py",
+    "ledger/sellos.py",
+    "tools/guardia.py",
+)
+
+
+def _sha256_fichero(ruta: Path) -> str:
+    try:
+        return hashlib.sha256(ruta.read_bytes()).hexdigest()
+    except Exception:
+        return ""
+
+
+def _commit_del_repo(raiz: Path) -> str:
+    """Commit de HEAD leido del .git a mano: sin lanzar git ni tocar la red."""
+    try:
+        git = raiz / ".git"
+        cabeza = (git / "HEAD").read_text(encoding="utf-8").strip()
+        if cabeza.startswith("ref:"):
+            ref = cabeza.split(":", 1)[1].strip()
+            fichero = git / ref
+            if fichero.exists():
+                return fichero.read_text(encoding="utf-8").strip()[:7]
+            # ref empaquetada (git pack-refs)
+            empaquetadas = git / "packed-refs"
+            if empaquetadas.exists():
+                for linea in empaquetadas.read_text(encoding="utf-8").splitlines():
+                    if linea.endswith(" " + ref):
+                        return linea.split(" ", 1)[0][:7]
+            return ""
+        return cabeza[:7]
+    except Exception:
+        return ""
+
+
+def _huella_codigo() -> dict:
+    raiz = Path(__file__).resolve().parent.parent
+    ficheros = {}
+    for rel in FICHEROS_HUELLA:
+        f = raiz / rel
+        ficheros[rel] = {"sha256": _sha256_fichero(f)[:16],
+                         "mtime": (time.strftime("%Y-%m-%d %H:%M:%S",
+                                                  time.localtime(f.stat().st_mtime))
+                                   if f.exists() else "")}
+    return {"version": app.version,
+            "commit": _commit_del_repo(raiz),
+            "arranque": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "arranque_ts": round(time.time(), 3),
+            "ficheros": ficheros,
+            "nota": "sha256 en 16 hex: se compara con el fichero de GitHub tal cual"}
+
+
+_HUELLA = _huella_codigo()
 
 # ============================================================
 #  RATE LIMIT (anti-spam)  +  AUDITORIA: un cubo POR RUTA
@@ -3160,7 +3232,8 @@ _precio_minuto = {"minuto": -1, "datos": None}
 # volvia a poner la bolsa a cero y se podia pagar dos veces el presupuesto del
 # mismo minuto. Y si la escritura falla, el pago se aborta: mejor no pagar una
 # tarea que emitir por fuera del presupuesto.
-_minuto_actual = {"minuto": -1, "pagado": 0.0, "credito": 0.0}
+_minuto_actual = {"minuto": -1, "pagado": 0.0, "credito": 0.0,
+                  "presupuesto": None}
 
 
 def _guardar_bolsa() -> None:
@@ -3232,12 +3305,15 @@ def _cerrar_minuto_si_toca(minuto: int) -> None:
     if c["minuto"] == minuto:
         return
     if c["minuto"] >= 0:
-        presu = presupuesto_por_minuto()
+        # Se cierra con el presupuesto que de verdad se uso en ese minuto.
+        presu = float(c.get("presupuesto") or presupuesto_por_minuto())
         c["credito"] += presu - c["pagado"]
         # Nunca mas de un presupuesto de credito: asi una red parada un mes no
         # se pone a pagar el doble durante dias al volver.
         c["credito"] = max(-presu, min(presu, c["credito"]))
     c["minuto"], c["pagado"] = minuto, 0.0
+    # Tope nuevo, congelado para todo el minuto (ver presupuesto_del_minuto).
+    c["presupuesto"] = presupuesto_por_minuto()
 
 
 def precio_unico_minuto() -> dict:
@@ -3246,7 +3322,7 @@ def precio_unico_minuto() -> dict:
     if _precio_minuto["datos"] is not None and _precio_minuto["minuto"] == minuto:
         return _precio_minuto["datos"]
     _cerrar_minuto_si_toca(minuto)
-    presu = presupuesto_por_minuto()
+    presu = presupuesto_del_minuto()
     ajuste = max(-presu, min(presu, _minuto_actual["credito"]))
     objetivo = max(0.0, presu + ajuste)
     gflop = _gflop_entre((minuto - 1) * 60.0, minuto * 60.0)
@@ -3295,15 +3371,45 @@ def _anotar_pagado(kia: float) -> None:
 _cargar_bolsa()          # el minuto en curso sigue donde lo dejo el reinicio
 
 
+def presupuesto_del_minuto() -> float:
+    """Presupuesto CONGELADO al empezar el minuto (no se recalcula por tarea).
+
+    POR QUE (auditoria 23-10-2026, hallazgo H1/H4): `presupuesto_por_minuto()`
+    sale de lo que queda por emitir dividido por los minutos que faltan hasta
+    2150. Ese numero BAJA mientras corre el minuto, asi que cada tarea veia un
+    tope un pelo menor que la anterior y, sumando, el minuto podia cerrar unas
+    diezmilesimas por encima del presupuesto que se publicaba. Nada grave, pero
+    "la bolsa nunca se pasa" tiene que ser cierto al decimal, no al redondeo.
+    Congelando el tope al abrir el minuto, la suma de pagos no puede pasarse ni
+    un 1e-9, y lo que se publica es exactamente lo que se reparte.
+    """
+    _cerrar_minuto_si_toca(int(time.time() // 60))
+    if _minuto_actual.get("presupuesto") is None:
+        _minuto_actual["presupuesto"] = presupuesto_por_minuto()
+    return float(_minuto_actual["presupuesto"] or 0.0)
+
+
 def bolsa_disponible(ahora: float = None) -> float:
     """KIA del presupuesto de este minuto que aun no se han pagado."""
-    presu = presupuesto_por_minuto()
+    presu = presupuesto_del_minuto()
     if presu <= 0:
         return 0.0
     minuto = int((time.time() if ahora is None else ahora) // 60)
     if minuto != int(time.time() // 60):
         return presu                         # otro minuto: se enseña el tope
     return max(0.0, presu - pagado_en_minuto())
+
+
+def _redondear_kia(x: float) -> float:
+    """Redondea HACIA ABAJO a 9 decimales.
+
+    POR QUE (23-10-2026): `round(x, 9)` puede subir. Al recortar un pago a lo
+    que queda en la bolsa, redondear hacia arriba devolvia un pelin mas que el
+    presupuesto: con 25 tareas el minuto cerraba 1e-8 por encima y la promesa
+    "la bolsa nunca se pasa" dejaba de ser cierta al decimal. KIA no se regala
+    por redondeo: hacia abajo siempre.
+    """
+    return math.floor(float(x) * 1e9) / 1e9
 
 
 def pago_plano(tier: float = 1.0) -> tuple:
@@ -3320,10 +3426,10 @@ def pago_plano(tier: float = 1.0) -> tuple:
     `pago_por_trabajo`: se corta en lo que le queda al minuto y se anota con
     `_anotar_pagado`. La bolsa deja de tener puertas abiertas.
     """
-    presu = presupuesto_por_minuto()
+    presu = presupuesto_del_minuto()
     pago, info = recompensa_pago(tier)
     disp = max(0.0, presu - pagado_en_minuto())
-    pagado = round(min(pago, disp), 9)
+    pagado = _redondear_kia(min(pago, disp))
     _anotar_pagado(pagado)
     return pagado, dict(info or {}, modo_pago="plano", fuente_precio="plano",
                         bolsa_kia_min=round(presu, 6),
@@ -3354,13 +3460,13 @@ def pago_por_trabajo(tipo: str, params, tier: float = 1.0) -> tuple:
     precio = float(pm["precio"])
     # 9 decimales y no 6: el pago por tarea puede ser mucho mas pequeno que con
     # la tarifa plana, y redondear a 6 lo dejaria en cero si la red crece.
-    pago = round(min(precio * cobrable, techo, restante), 9)
+    pago = _redondear_kia(min(precio * cobrable, techo, restante))
     # FUSIBLE del minuto: solo actua si algo va muy desmadrado (de golpe, diez
     # veces el trabajo del minuto anterior). En regimen normal no toca nada.
     disp = max(0.0, pm["presupuesto_kia_min"] * FUSIBLE_MINUTO_X - pagado_en_minuto())
     recortado = max(0.0, pago - disp)
     if recortado > 0:
-        pago = round(disp, 9)
+        pago = _redondear_kia(disp)
     _anotar_pagado(pago)
     return pago, {"modo_pago": "potencia",
                   "gflop_tarea": round(gl, 6),
@@ -3395,6 +3501,12 @@ def castigo_por_fallo(tier: float) -> float:
     pago, _ = recompensa_pago(tier)
     return min(PENALIZACION, max(PENALIZACION_MIN, PENALIZACION_MULT * pago))
 
+@app.get("/version")
+def version():
+    """Que codigo esta ejecutandose, para compararlo con el de GitHub."""
+    return _HUELLA
+
+
 @app.get("/stats")
 def stats():
     # AUDITORIA 2026-10-20: total materializado; antes era un SUM de todo el
@@ -3417,6 +3529,8 @@ def stats():
     _ss = _sellos_leidos()
     return {
         "version": app.version,
+        # Que codigo corre de verdad: hash de los ficheros + arranque + commit.
+        "codigo": _HUELLA,
         "supply_emitido": sum,
         "max_supply": MAX_SUPPLY,
         # Nodos VIVOS: los retirados (nombres repetidos de identidades viejas)
@@ -3448,7 +3562,7 @@ def stats():
         # presupuesto por trabajo, no por orden de llegada. Se publica el
         # precio, de donde sale y lo que llevamos pagado en el minuto.
         "bolsa_emision": {"kia_disponible": round(bolsa_disponible(), 6),
-                          "presupuesto_kia_min": round(presupuesto_por_minuto(), 6),
+                          "presupuesto_kia_min": round(presupuesto_del_minuto(), 6),
                           "pagado_en_minuto": round(pagado_en_minuto(), 6),
                           "tope_min": 1,
                           "precio_minuto": (round(float(precio_unico_minuto()["precio"]), 12)
@@ -3650,6 +3764,69 @@ def archivar_tareas(retencion: int = None, lote: int = None) -> dict:
     return {"borradas": borradas, "retencion": ret, "lote": bat,
             "archivadas_total": int(_meta_float("tareas_archivadas", 0.0))}
 
+# ============================================================
+#  PODA DE TELEMETRIA (23-10-2026)
+#  AUDITORIA 23-10, hallazgo H6: `planificador_log` y `gpu_telemetria` crecian
+#  sin tope (medido: 396.165 y 307.503 filas, base de 349 MB) y solo se
+#  limpiaban al borrar un nodo entero. Con el tiempo eso llena el disco y hace
+#  lento cada INSERT. Ahora se poda lo viejo cada pasada del archivador, y hay
+#  un tope duro de filas por si alguien inunda la telemetria en un dia.
+#  No se toca NADA del ledger, saldos, tareas ni sellos: son tablas de traza.
+# ============================================================
+PODA_TELEMETRIA_H = max(1.0, float(os.environ.get("KUKIA_PODA_TELEMETRIA_H", "48")))
+PODA_TELEMETRIA_MAX = max(1000, int(os.environ.get("KUKIA_PODA_TELEMETRIA_MAX", "200000")))
+
+
+def _epoch_de_ts(txt) -> float | None:
+    """Las tablas de traza guardan `time.ctime()` (texto), no epoch."""
+    try:
+        return time.mktime(time.strptime(str(txt), "%a %b %d %H:%M:%S %Y"))
+    except Exception:
+        return None
+
+
+def podar_telemetria(horas: float = None, tope: int = None,
+                     lote: int = 5000) -> dict:
+    """Borra traza vieja de planificador_log y gpu_telemetria.
+
+    Dos limites, en este orden:
+      1. Por edad: lo mas viejo que `horas` (48 h por defecto). Se borra a
+         trozos desde el principio (los id van en orden de llegada), asi la
+         transaccion no se eterniza con 700.000 filas de golpe.
+      2. Por tamano: si aun asi quedan mas de `tope` filas (por ejemplo, un
+         dia con miles de nodos), se recorta por arriba dejando las ultimas.
+    """
+    horas = PODA_TELEMETRIA_H if horas is None else max(0.0, float(horas))
+    tope = PODA_TELEMETRIA_MAX if tope is None else max(0, int(tope))
+    corte = time.time() - horas * 3600.0
+    borradas = {}
+    with _escritura():
+        for tabla in ("planificador_log", "gpu_telemetria"):
+            total = 0
+            while True:
+                filas = con.execute(f"SELECT id, ts FROM {tabla} ORDER BY id ASC LIMIT ?",
+                                    (lote,)).fetchall()
+                if not filas:
+                    break
+                viejos = [r["id"] for r in filas if (_epoch_de_ts(r["ts"]) or 0.0) < corte]
+                if not viejos:
+                    break
+                cur = con.execute(f"DELETE FROM {tabla} WHERE id <= ?", (viejos[-1],))
+                total += max(0, cur.rowcount or 0)
+                if len(viejos) < len(filas):
+                    break
+            # Tope duro: deja solo las ultimas `tope` filas.
+            n = con.execute(f"SELECT COUNT(*) c FROM {tabla}").fetchone()["c"]
+            if n > tope:
+                cur = con.execute(f"DELETE FROM {tabla} WHERE id NOT IN "
+                                  f"(SELECT id FROM {tabla} ORDER BY id DESC LIMIT ?)",
+                                  (tope,))
+                total += max(0, cur.rowcount or 0)
+            borradas[tabla] = total
+    return {"horas": horas, "tope": tope, "borradas": borradas,
+            "total": sum(borradas.values())}
+
+
 def _bucle_archivado():
     while True:
         try:
@@ -3670,6 +3847,13 @@ def _bucle_archivado():
                 print(f"[KUKIA Core] podados {n} nodos que nunca trabajaron", flush=True)
         except Exception as e:
             print(f"[KUKIA Core] poda de nodos error: {e}", flush=True)
+        try:
+            r = podar_telemetria()
+            if r.get("total"):
+                print(f"[KUKIA Core] telemetria podada: {r['borradas']} "
+                      f"(quedan los ultimos {r['horas']:.0f} h)", flush=True)
+        except Exception as e:
+            print(f"[KUKIA Core] poda de telemetria error: {e}", flush=True)
         time.sleep(ARCHIVAR_INTERVALO)
 
 threading.Thread(target=_bucle_archivado, daemon=True).start()
@@ -3684,6 +3868,13 @@ def admin_archivar(retencion: int = -1, lote: int = -1, _ok: None = Depends(exig
 def admin_podar_nodos(horas: float = -1, _ok: None = Depends(exigir_admin)):
     """Fuerza la poda de nodos que nunca trabajaron (pruebas y mantenimiento)."""
     return {"podados": podar_nodos(None if horas < 0 else horas)}
+
+@app.post("/admin/podar_telemetria")
+def admin_podar_telemetria(horas: float = -1, tope: int = -1,
+                           _ok: None = Depends(exigir_admin)):
+    """Fuerza la poda de traza (planificador_log y gpu_telemetria)."""
+    return podar_telemetria(None if horas < 0 else horas,
+                            None if tope < 0 else tope)
 
 @app.post("/admin/recalcular_resumen")
 def admin_recalcular_resumen(_ok: None = Depends(exigir_admin)):
