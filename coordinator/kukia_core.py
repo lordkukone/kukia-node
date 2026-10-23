@@ -518,6 +518,13 @@ def schema():
         # 'cuda:0' o con 'cpu'. El planificador necesita saberlo para no
         # mandarle difusiones a una CPU (0,8 s en GPU contra 17,3 s en CPU).
         "ALTER TABLE nodos ADD COLUMN device TEXT DEFAULT ''",
+        # FIRMA GUARDADA (23-10-2026, auditoria de la billetera): la firma
+        # Ed25519 se comprobaba al entrar y se tiraba. Con esto queda en el
+        # registro y un auditor puede volver a verificarla meses despues sin
+        # creerse a nadie. Las transferencias de antes de hoy no la tienen
+        # (columna vacia): eso se dice, no se finge.
+        "ALTER TABLE transferencias ADD COLUMN firma TEXT DEFAULT ''",
+        "ALTER TABLE transferencias ADD COLUMN clave_publica TEXT DEFAULT ''",
     ):
         try:
             con.execute(_sql)
@@ -1260,7 +1267,7 @@ def _verificar_embeddings(tipo, params, metrica):
     except Exception:
         return False
 
-app = FastAPI(title="KUKIA Core", version="0.4.3")
+app = FastAPI(title="KUKIA Core", version="0.4.4")
 
 # ============================================================
 #  HUELLA DEL CODIGO QUE SE ESTA EJECUTANDO (23-10-2026)
@@ -4037,13 +4044,19 @@ def transferir(t: TransferIn):
                 con.execute("ROLLBACK")
                 raise HTTPException(409, "saldo insuficiente")
             try:
-                con.execute("INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts) VALUES(?,?,?,?,?)",
-                            (de, a, monto, t.nonce, time.ctime()))
+                con.execute("INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts,"
+                            "firma,clave_publica) VALUES(?,?,?,?,?,?,?)",
+                            (de, a, monto, t.nonce, time.ctime(), t.firma, pub))
             except Exception:
                 con.execute("ROLLBACK")
                 raise HTTPException(409, "nonce ya usado (repeticion bloqueada)")
-            _asiento(f"tx-{t.nonce[:12]}", de, -monto, "transferencia salida")
-            _asiento(f"tx-{t.nonce[:12]}", a, monto, "transferencia entrada")
+            # ID COMPLETO (23-10-2026): antes era el nonce cortado a 12 letras y
+            # dos transferencias distintas podian caer en el MISMO id de asiento
+            # (paso el 19-10 con tres barridos). El importe y las cuentas estaban
+            # bien, pero emparejarlas despues era a ciegas. Con el nonce entero,
+            # cada transferencia tiene su id y su pareja de asientos.
+            _asiento(f"tx-{t.nonce}", de, -monto, "transferencia salida")
+            _asiento(f"tx-{t.nonce}", a, monto, "transferencia entrada")
             con.commit()
             return {"ok": True, "de": de, "a": a, "monto": monto,
                     "supply": round(supply_emitido(), 6)}

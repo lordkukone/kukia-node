@@ -87,7 +87,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>bf48a5b2fb5687f8f6e5a5775378135a45f480eab52af06beef3b05b646d116e</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>f8646231e87747403e6c37039e27e5811a79e68a0061ec7fe4b1dcc8d83bab97</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -614,6 +614,13 @@ def schema():
         # &#x27;cuda:0&#x27; o con &#x27;cpu&#x27;. El planificador necesita saberlo para no
         # mandarle difusiones a una CPU (0,8 s en GPU contra 17,3 s en CPU).
         &quot;ALTER TABLE nodos ADD COLUMN device TEXT DEFAULT &#x27;&#x27;&quot;,
+        # FIRMA GUARDADA (23-10-2026, auditoria de la billetera): la firma
+        # Ed25519 se comprobaba al entrar y se tiraba. Con esto queda en el
+        # registro y un auditor puede volver a verificarla meses despues sin
+        # creerse a nadie. Las transferencias de antes de hoy no la tienen
+        # (columna vacia): eso se dice, no se finge.
+        &quot;ALTER TABLE transferencias ADD COLUMN firma TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE transferencias ADD COLUMN clave_publica TEXT DEFAULT &#x27;&#x27;&quot;,
     ):
         try:
             con.execute(_sql)
@@ -1356,7 +1363,7 @@ def _verificar_embeddings(tipo, params, metrica):
     except Exception:
         return False
 
-app = FastAPI(title=&quot;KUKIA Core&quot;, version=&quot;0.4.3&quot;)
+app = FastAPI(title=&quot;KUKIA Core&quot;, version=&quot;0.4.4&quot;)
 
 # ============================================================
 #  HUELLA DEL CODIGO QUE SE ESTA EJECUTANDO (23-10-2026)
@@ -4133,13 +4140,19 @@ def transferir(t: TransferIn):
                 con.execute(&quot;ROLLBACK&quot;)
                 raise HTTPException(409, &quot;saldo insuficiente&quot;)
             try:
-                con.execute(&quot;INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts) VALUES(?,?,?,?,?)&quot;,
-                            (de, a, monto, t.nonce, time.ctime()))
+                con.execute(&quot;INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts,&quot;
+                            &quot;firma,clave_publica) VALUES(?,?,?,?,?,?,?)&quot;,
+                            (de, a, monto, t.nonce, time.ctime(), t.firma, pub))
             except Exception:
                 con.execute(&quot;ROLLBACK&quot;)
                 raise HTTPException(409, &quot;nonce ya usado (repeticion bloqueada)&quot;)
-            _asiento(f&quot;tx-{t.nonce[:12]}&quot;, de, -monto, &quot;transferencia salida&quot;)
-            _asiento(f&quot;tx-{t.nonce[:12]}&quot;, a, monto, &quot;transferencia entrada&quot;)
+            # ID COMPLETO (23-10-2026): antes era el nonce cortado a 12 letras y
+            # dos transferencias distintas podian caer en el MISMO id de asiento
+            # (paso el 19-10 con tres barridos). El importe y las cuentas estaban
+            # bien, pero emparejarlas despues era a ciegas. Con el nonce entero,
+            # cada transferencia tiene su id y su pareja de asientos.
+            _asiento(f&quot;tx-{t.nonce}&quot;, de, -monto, &quot;transferencia salida&quot;)
+            _asiento(f&quot;tx-{t.nonce}&quot;, a, monto, &quot;transferencia entrada&quot;)
             con.commit()
             return {&quot;ok&quot;: True, &quot;de&quot;: de, &quot;a&quot;: a, &quot;monto&quot;: monto,
                     &quot;supply&quot;: round(supply_emitido(), 6)}
