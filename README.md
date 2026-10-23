@@ -23,8 +23,10 @@ VERIFICADO con KUKIA Coin (KIA).
    el y compara. Si no coincide: no cobra, pierde reputacion, se le cobra una
    penalizacion (acotada a su saldo) y no puede pedir trabajo unos minutos
 5. El pago se abona a su **direccion de cobro**, no al id del nodo
-6. La **prima por tier** (x1,3 / x1,6) solo se paga si la GPU la ha demostrado
-   con trabajo verificado: ver "Potencia demostrada"
+6. El pago va **por trabajo medido** (FLOPs x precio del minuto, ver "Pago por
+   potencia"). La **prima por tier** (x1,3 / x1,6) solo se paga si se apaga el
+   pago por potencia (`KUKIA_PAGO_POR_FLOP=0`), y aun así solo si la GPU la ha
+   demostrado con trabajo verificado: ver "Potencia demostrada"
 7. El ledger va encadenado (hash del asiento anterior) y se sella cada pocos
    minutos con una clave Ed25519 que no esta en la base de datos
 
@@ -32,11 +34,62 @@ Lo que **no** existe todavia y por tanto no se promete: staking con colateral
 y bounty economico por cazar mentirosos. Estan como fase 2 en
 [ESTRATEGIA.md](ESTRATEGIA.md), no en el codigo.
 
+## Pago por potencia: lo que cobra cada tarea
+
+Hasta el 22-10-2026 cobraba lo mismo un checksum (0 FLOPs) que una difusion de
+20 GFLOP, y encima el tier multiplicaba por la VRAM declarada: se pagaba dos
+veces por lo mismo. Desde el 23-10 manda el trabajo medido.
+
+- **Precio unico del minuto.** El presupuesto del minuto (lo que queda por
+  emitir hasta 2150 repartido entre los minutos que faltan, mas lo que sobró o
+  faltó en el minuto anterior) se divide por los GFLOP/min que entregó la red
+  en el minuto anterior. De ahí sale UN precio por GFLOP, igual para todas las
+  tareas de ese minuto.
+- **Pago de una tarea = precio x GFLOP verificados.** A 8x trabajo, 8x pago
+  (medido: x8,0000 exacto). El reparto es por trabajo, no por orden de llegada.
+- **El tier no multiplica** en este modo: la prima por VRAM y la prima por
+  potencia eran pagar dos veces lo mismo.
+- **Techo por tarea**: 10 KIA x halving. **Fusible del minuto**: 2x el
+  presupuesto, solo salta si algo va muy desmadrado.
+- **La bolsa del minuto se congela al abrirlo** y los pagos se redondean hacia
+  abajo, así que la suma del minuto no se pasa ni un decimal. Si no se puede
+  anotar la bolsa en disco, **el pago se aborta**: mejor no pagar una tarea que
+  emitir fuera de presupuesto.
+- **Sin suelo por defecto**: un checksum son 0 FLOPs y cobra 0 KIA. Si algún día
+  interesa un fijo pequeño por tarea: `KUKIA_GFLOP_MIN=0.5` (en GFLOP).
+- **Red sin historial** (primer arranque, sin ninguna medida): cae a modo plano,
+  que también pasa por la bolsa, así que tampoco puede emitir de más.
+- Tope duro de **100M KIA** intacto y fin de emisión el **2150-01-01**.
+
+Cifras de hoy (23-10, 21:20, minero parado): precio **0,003742558085 KIA/GFLOP**,
+presupuesto **1,310562 KIA/min**, referencia **700,356 GFLOP/min**. Con ese
+precio, una matriz de 0,128 GFLOP paga 0,000479 KIA y una de 1,024 GFLOP paga
+0,003832 KIA. El número cambia cada minuto con el trabajo de la red: no es una
+tabla fija.
+
+Se comprueba sin creerse el panel: `GET /stats` devuelve `bolsa_emision` (precio,
+presupuesto, pagado en el minuto, fusible) y `pago_por_potencia` (interruptor y
+suelo). Pruebas aisladas sobre una **copia** del ledger (producción no se toca):
+
+```bash
+python tools/prueba_precio_minuto.py      # precio unico y reparto proporcional
+python tools/prueba_bolsa_arranque.py     # la bolsa no se pasa ni en modo plano
+python tools/prueba_pago_potencia.py      # FLOPs x precio, techo y tope de 100M
+```
+
+Interruptor: `KUKIA_PAGO_POR_FLOP=0` vuelve a la tarifa plana (que también va
+dentro de la bolsa). Por defecto está **encendido**.
+
 ## Potencia demostrada (el tier se gana)
 
 En Bitcoin el hashrate no se declara: se mide resolviendo. Aqui el tier salia
 de la VRAM que el propio minero decia tener, asi que una CPU podia declarar
 24 GB y cobrar x1,6 sin demostrar nada.
+
+Esto decide el pago cuando se usa la **tarifa plana**. Con el pago por
+potencia (el de serie desde el 23-10) **el tier no multiplica**: se cobra
+por FLOPs medidos y punto. La medición sigue sirviendo para todo lo demás
+(panel, reparto de trabajo y castigo a quien declara de más).
 
 El panel (puerto 8301) muestra **tres cifras que no se mezclan**:
 
@@ -111,6 +164,44 @@ Al relanzarlo hacia falta algo mas: las tareas que tenia en vuelo el proceso
 muerto seguian contando en su cupo y lo dejaban **30 minutos** sin minar. Ahora
 el minero avisa firmando en `POST /nodos/{id}/reinicio` y el Core le devuelve
 sus propias tareas a la cola (medido: 4 por GPU, al instante).
+
+## El minero nuevo (23-10-2026): una ventana, un minero, todo a la vista
+
+Antes corría escondido (pythonw) y no se veía nada: si se quedaba sin cobrar,
+nadie se enteraba. Ahora mina **en una ventana normal de cmd**, con cada tarea
+en pantalla y un resumen por minuto.
+
+```bash
+VER_MINERO.cmd                 # o doble clic: mina aquí y lo cuenta todo
+VER_MINERO.cmd minero_pc       # reutiliza la identidad de siempre
+python worker/kukia_worker.py mi_nombre      # a mano, sin el .cmd
+```
+
+- **Se ve todo**: cada tarea, y cada minuto tareas/min, KIA/min, KIA/h, KIA/día
+  y KIA/h por GFLOPS. Al arrancar imprime el calendario de emisión. Lo mismo
+  queda en `logs/minero_visible.log`.
+- **Un solo minero.** El primero que arranca apunta su PID en
+  `worker/minero.lock`; si abres otra ventana, **no mina** y te dice qué PID
+  está trabajando. Dos mineros en la misma GPU se reparten el cupo (4 tareas
+  por nodo) y rinden la mitad.
+- **`VER_MINERO.cmd` no duplica**: si el minero está escondido en segundo plano
+  lo aparta y se queda minando a la vista; si ya está en otra ventana, se
+  limita a enseñar cómo va (`tools/minero_en_ventana.py`).
+- **Todas las GPUs a la vez**, un hilo por GPU. La CPU se añade con
+  `KUKIA_USAR_CPU=1`; una CPU no recibe difusiones (0,8 s en GPU contra 17,3 s
+  en CPU), aunque sí matrices, checksums e inferencia.
+- **Ctrl+C no deja basura**: termina lo que tiene en vuelo antes de salir, así
+  no deja tareas colgadas ocupando el cupo media hora.
+- **Vigía propio**: si pasan 2 minutos sin cobrar con el cupo lleno, pide el
+  reinicio firmado de su nodo y el Core le devuelve sus tareas a la cola; si
+  pasan 5 y el Core está en pie, sale con código 3 para que la guardia lo
+  levante limpio.
+- **La guardia puede ir sin minero**: `python tools/guardia.py --sin-minero`
+  (es lo que usamos cuando se para a propósito: si la guardia vigila al minero,
+  lo relanza en segundos).
+- Al arrancar imprime también **qué Core** está usando y, si es una dirección
+  `auto`, la vuelve a resolver cada 5 minutos: si el túnel cambia, se entera
+  sin reiniciar.
 
 ## Anclado en Bitcoin (lo que no depende de nosotros)
 
@@ -248,9 +339,10 @@ cd coordinator && python -m uvicorn kukia_core:app --port 8300
 cd dashboard && python -m uvicorn kukia_dash:app --port 8301
 #    o doble clic en ARRANCAR_PANEL.cmd
 
-# 3. Worker (una instancia por GPU)
-cd worker && python kukia_worker.py nodo_5070   # GPU0
-cd worker && python kukia_worker.py nodo_5060ti # GPU1
+# 3. Minero: UNA ventana (usa todas las GPUs). NO lances dos.
+VER_MINERO.cmd                    # o doble clic; deja ver cada tarea
+VER_MINERO.cmd minero_pc          # reutiliza la identidad de siempre
+#    a mano: cd worker && python kukia_worker.py nodo_5070
 
 # 4. Wallets
 cd ledger && python kukia_wallet.py nodo_fundador
@@ -278,7 +370,8 @@ cd ledger && python kukia_wallet.py nodo_fundador
 | /red/witness | GET | Manifiesto firmado de trabajo verificado (para validadores) |
 | /validador/atestacion | POST | Atestacion firmada de un validador independiente |
 | /validador/estado | GET | Validadores activos, tareas revalidadas y discrepancias |
-| /stats | GET | Supply, nodos, tareas, dificultad, integridad |
+| /version | GET | Que codigo esta ejecutando: version, hora de arranque, commit y SHA-256 de los ficheros clave (comparalo con GitHub con `tools/huella_codigo.py -g`) |
+| /stats | GET | Supply, nodos, tareas, dificultad, integridad, bolsa del minuto y precio por GFLOP |
 
 ## Verificar que no esta roto
 
