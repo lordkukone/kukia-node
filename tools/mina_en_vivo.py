@@ -26,7 +26,23 @@ from pathlib import Path
 import requests
 
 RAIZ = Path(__file__).resolve().parent.parent
-LOG = RAIZ / "worker" / "minero.log"
+# Dos sitios segun quien arranque al minero: la guardia lo hace oculto y escribe
+# en worker/minero.log; la ventana (VER_MINERO) lo copia a logs/minero_visible.log.
+# Se lee el que se haya tocado mas recientemente.
+CANDIDATOS = (RAIZ / "worker" / "minero.log", RAIZ / "logs" / "minero_visible.log")
+
+def _log_vivo() -> Path:
+    mejor, cuando = CANDIDATOS[0], -1.0
+    for f in CANDIDATOS:
+        try:
+            m = f.stat().st_mtime
+        except Exception:
+            continue
+        if m > cuando:
+            mejor, cuando = f, m
+    return mejor
+
+LOG = _log_vivo()
 
 # Misma resolucion que el minero: KUKIA_CORE, luego core_minero.txt, si no el
 # Core de este PC.
@@ -59,7 +75,7 @@ def num(x, dec=3):
 def cola_del_log(n_lineas=220):
     """Ultimas lineas del log sin leer 25 MB cada vez."""
     try:
-        with open(LOG, "rb") as f:
+        with open(_log_vivo(), "rb") as f:
             f.seek(0, 2)
             tam = f.tell()
             f.seek(max(0, tam - 400_000))

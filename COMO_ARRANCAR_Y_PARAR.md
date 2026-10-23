@@ -215,11 +215,12 @@ y la ventana:
    siempre). Su log lo dice: `[minero] ya esta corriendo (abierto aparte)`.
 2. **Cerradura de instancia unica** (`worker/minero.lock`, con el PID dentro).
    Si se abre una segunda ventana, en vez de minar dice
-   `ya hay un minero vivo (PID N)` y **enseña cómo va el que ya está**: abre
-   `tools/mina_en_vivo.py` (ritmo en tareas/min y KIA/min, estado de cada
-   nodo y último pago; no mina ni escribe nada). Antes esa ventana intentaba
-   minar y el worker la rechazaba, que parecía un fallo. Un PID muerto no
-   bloquea: la cerradura se sobrescribe sola.
+   `ya hay un minero vivo (PID N)`. Desde el 23/10 esa ventana **se queda con
+   el trabajo** si el minero está oculto: `tools/minero_en_ventana.py` para el
+   suyo (y el que la guardia relanza, dentro de sus 20 s de enfriamiento) y
+   mina ahí, a la vista. Si el que hay ya está en otra ventana con
+   `python.exe`, no se duplica: abre `tools/mina_en_vivo.py` para mirar. Un PID
+   muerto no bloquea: la cerradura se sobrescribe sola.
 3. Si cierras la ventana, la guardia relanza el minero a los pocos minutos,
    pero **sin ventana** (oculto). La ventana vuelve en el siguiente inicio de
    sesion o abriendo `VER_MINERO.cmd` a mano.

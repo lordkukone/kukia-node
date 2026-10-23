@@ -68,18 +68,23 @@ como esta:
 ```
 
 Si **ya hay un minero minando** (lo normal: la guardia lo arranca oculto al
-iniciar sesión), esa ventana no lanza un segundo minero: abre
-`tools/mina_en_vivo.py` y enseña cómo va el que ya está. Cada 5 s pinta el
-ritmo real (tareas/min y KIA/min medidos sobre una ventana de 20 s, no el
-salto de un segundo), el estado de cada nodo (device, GFLOPS, tareas, KIA/min,
-último latido) y el último pago. Ese visor no mina ni escribe nada; Ctrl+C lo
-cierra y el minero sigue.
+iniciar sesión), esa ventana **se queda con el trabajo**: `tools/minero_en_ventana.py`
+aparta el minero oculto —y el que la guardia relanza al verlo morir, dentro de
+sus 20 s de enfriamiento— y mina ahí, a la vista. Si el minero ya está en otra
+ventana (`python.exe`), no se lanza otro: abre `tools/mina_en_vivo.py`, que
+cada 5 s pinta el ritmo real (tareas/min y KIA/min medidos sobre 20 s), el
+estado de cada nodo y las últimas tareas, sin minar ni escribir nada.
 
 Al arrancar dice también la emisión (KIA por tarea, KIA/min de la red) y la
 fecha de la última moneda. Todo queda copiado en `logs/minero_visible.log`.
 Los dos cambios que hay que entender: **KIA/h según potencia** = tareas/min
 multiplicado por el pago de cada tarea, y **cerrar la ventana para el minero**
 (la guardia lo vuelve a arrancar sola, pero sin ventana).
+
+Ojo a los `+0.0 KIA`: el presupuesto por minuto (1,31 KIA) se agota tras unas
+decenas de tareas y el resto del minuto se paga 0. No está roto: la emisión
+total sigue en su objetivo (medido esa noche: 0,656 + 0,906 KIA/min entre los
+dos nodos). Lo que se ve por tarea depende de cuándo caiga dentro del minuto.
 - Una GPU de 12 GB hace tareas de milisegundos a ~7 segundos según el tipo.
 - **KIA todavía no tiene precio ni mercado.** Minar hoy no da dinero: da
   posición en la red para cuando la haya. Si vienes a ganar euros, esto no es

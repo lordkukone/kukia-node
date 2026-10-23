@@ -52,10 +52,16 @@ if not defined OKCORE (
 )
 echo [OK] Core accesible.
 
-rem --- ¿Ya hay un minero vivo? Entonces esta ventana MIRA, no mina ----------
+rem --- nombre del nodo (se necesita antes de decidir quien mina) -----------
+set "NOMBRE=%~1"
+if not defined NOMBRE set "NOMBRE=minero_%COMPUTERNAME%"
+
+rem --- ¿Ya hay un minero vivo? Que decida tools\minero_en_ventana.py ---------
 rem La guardia arranca el minero oculto al iniciar sesion, asi que lo normal es
 rem que ya haya uno. Abrir este .cmd lanzaba un segundo que el cerrojo
-rem (worker\minero.lock) rechazaba, y parecia que el minero estaba roto.
+rem (worker\minero.lock) rechazaba, y parecia que el minero estaba roto. Ahora
+rem esa ventana se queda con el trabajo: si el minero esta oculto lo aparta y
+rem mina aqui a la vista; si ya esta en otra ventana, ensena como va.
 set "PIDMIN="
 if exist "worker\minero.lock" set /p PIDMIN=<"worker\minero.lock"
 set "VIVO="
@@ -66,24 +72,20 @@ if defined PIDMIN (
 )
 if defined VIVO (
   echo.
-  echo [i] Ya hay un minero vivo ^(PID !PIDMIN!^). Esta ventana NO va a minar:
-  echo     dos mineros se reparten el cupo y rinden la mitad.
-  echo     Te enseno como va el que ya esta corriendo. Ctrl+C para cerrar.
+  echo [i] Ya hay un minero vivo ^(PID !PIDMIN!^).
+  echo     Si esta oculto, esta ventana lo aparta y mina aqui, a la vista.
+  echo     Si ya esta en otra ventana, te enseno como va. Ctrl+C para cerrar.
   echo.
   rem El aviso de urllib3/chardet al importar requests no aporta nada aqui.
   set "PYTHONWARNINGS=ignore"
-  python -u tools\mina_en_vivo.py
+  python -u tools\minero_en_ventana.py %NOMBRE%
   echo.
-  echo [visor cerrado; el minero sigue]
+  echo [ventana cerrada]
   pause
   exit /b 0
 )
 
 echo [i] No hay otro minero vivo: esta ventana mina de verdad.
-
-
-set "NOMBRE=%~1"
-if not defined NOMBRE set "NOMBRE=minero_%COMPUTERNAME%"
 echo Nodo: %NOMBRE%
 echo Log:  logs\minero_visible.log
 echo.
