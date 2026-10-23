@@ -50,11 +50,25 @@ def pedir(url: str, tiempo: float = 15.0) -> bytes:
         return r.read()
 
 
+def sha256_normalizado(ruta: Path, largo: int = 16) -> str:
+    """sha256 ignorando finales de linea (CRLF en Windows, LF en el repo).
+
+    Git guarda LF y en el disco se ve CRLF, asi que los bytes NO son iguales
+    aunque el codigo sea el mismo. Para comparar con GitHub se normaliza; el
+    hash que publica el Core sigue siendo el crudo, que es el del fichero que
+    de verdad tiene cargado.
+    """
+    try:
+        return hashlib.sha256(ruta.read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:largo]
+    except Exception:
+        return ""
+
+
 def desde_github(rel: str, largo: int = 16) -> str:
     """sha256 del fichero tal como esta en main (raw.githubusercontent)."""
     try:
         datos = pedir(f"https://raw.githubusercontent.com/{REPO}/{RAMA}/{rel}", 25)
-        return hashlib.sha256(datos).hexdigest()[:largo]
+        return hashlib.sha256(datos.replace(b"\r\n", b"\n")).hexdigest()[:largo]
     except Exception:
         return ""
 
@@ -86,7 +100,8 @@ def main() -> int:
         iguales_disco += 1 if fila["coincide"] else 0
         if args.github:
             fila["github"] = desde_github(rel)
-            fila["coincide_github"] = fila["github"] == fila["core"]
+            # Se compara normalizado: git guarda LF y aqui el fichero esta en CRLF.
+            fila["coincide_github"] = fila["github"] == sha256_normalizado(RAIZ / rel)
             iguales_github += 1 if fila["coincide_github"] else 0
         filas.append(fila)
 
@@ -100,16 +115,16 @@ def main() -> int:
     print(f" Core {vivo.get('version')} · arrancado {vivo.get('arranque')} · "
           f"commit {vivo.get('commit') or '(sin repo)'}")
     print("=" * 74)
-    cabecera = f" {'fichero':38} {'Core (cargado)':17} {'disco':17}"
+    cabecera = f" {'estado':4} {'fichero':36} {'Core (cargado)':17} {'disco':17}"
     if args.github:
         cabecera += " github"
     print(cabecera)
     for f in filas:
-        estado = "OK " if f["coincide"] else "DIF"
-        linea = f" {f['fichero']:38} {f['core']:17} {f['disco']:17}"
+        estado = "OK" if f["coincide"] else "DIF"
+        linea = f" {estado:4} {f['fichero']:36} {f['core']:17} {f['disco']:17}"
         if args.github:
-            linea += " " + ("OK " if f.get("coincide_github") else "DIF")
-        print(f"{estado}{linea[3:]}")
+            linea += " " + ("OK" if f.get("coincide_github") else "DIF")
+        print(linea)
     print("-" * 74)
     if iguales_disco == len(filas):
         print(f" El Core vivo ejecuta EXACTAMENTE el codigo del disco ({len(filas)}/{len(filas)}).")
