@@ -48,3 +48,15 @@ cortafuegos/reglas_cerradas_*
 # Copias del ledger de los ensayos (6,9 GB el 23-10-2026): se regeneran con
 # tools/ensayo_estabilidad.py y no pintan nada en un repositorio.
 medidas/ensayos/
+
+# Copias de seguridad que se quedan en el disco, no en el repositorio
+# (el 24-10-2026 se limpio ademas lo que ya estaba commiteado).
+backup_docs_*.zip
+_backup_*.py
+
+# Estado de los vigilantes: se reescribe solo cada pocos minutos. Tenerlo
+# versionado hacia que el repo cambiara sin que nadie tocara nada.
+logs/vigilante_web.json
+logs/disponibilidad_avisada.json
+logs/core_actual_cache.txt
+logs/*.err
