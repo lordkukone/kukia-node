@@ -453,7 +453,7 @@ proyecto, que no se publica en este repositorio.
 
 ## Derechos de autor
 
-(c) 2026 LordKukone. Todos los derechos reservados.
+(c) 2026 RMR (LordKukone). Todos los derechos reservados.
 
 El codigo de este repositorio se publica para que se pueda LEER y comprobar,
 no para reutilizarlo. No se concede permiso para copiarlo, modificarlo,
