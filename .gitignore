@@ -110,3 +110,11 @@ docs/core_actual.json
 
 # Temporales de los ensayos (valores esperados de las pruebas).
 esperados_tmp.json
+
+# Capturas locales de la revision (24-10-2026): no se publican.
+capturas_local/
+
+# CNAME local de docs/ (24-10-2026): apunta a un dominio de Surge, y si viaja al
+# repo GitHub Pages lo toma como dominio propio, no puede verificarlo y tumba el
+# sitio. GitHub Pages se sirve en lordkukone.github.io/kukia-node y Surge aparte.
+docs/CNAME

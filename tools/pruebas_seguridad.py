@@ -450,6 +450,47 @@ def main() -> int:
             "clave_publica": pub})
         check("saldo insuficiente rechazado", r7.status_code == 409, r7.text[:120])
 
+        # AUDITORIA 24-10-2026 (A1): POST /cliente/tareas aceptaba un tipo
+        # inventado. _flops_tarea devolvia 0 y la tarea se cobraba al minimo
+        # facturable y se quedaba en la cola para siempre, porque ningun
+        # minero sabe ejecutarla. Ahora se rechaza con 400 antes de tocar
+        # dinero. La prueba comprueba las dos cosas: el codigo Y que no se
+        # retiene nada.
+        print("\n== API DE CLIENTE ==")
+        seed_c = hashlib.sha256(b"cliente-pruebas-kukia").hexdigest()
+        pub_c = pub_de(seed_c)
+        dir_c = dir_de(pub_c)
+        alta = s.post(f"{base}/admin/clientes", timeout=30,
+                      json={"nombre": "cliente-pruebas", "direccion": dir_c}, headers=admin)
+        if alta.status_code == 409:
+            # Ya existe de una ejecucion anterior de la suite sobre esta copia:
+            # sin token no hay forma de usarlo, asi que se prueba con otra.
+            seed_c = hashlib.sha256(secrets.token_hex(8).encode()).hexdigest()
+            pub_c = pub_de(seed_c)
+            dir_c = dir_de(pub_c)
+            alta = s.post(f"{base}/admin/clientes", timeout=30,
+                          json={"nombre": "cliente-pruebas", "direccion": dir_c}, headers=admin)
+        check("alta de cliente para las pruebas", alta.status_code == 200, alta.text[:140])
+        if alta.status_code == 200:
+            cab_c = {"X-Cliente-Token": alta.json()["token"]}
+            saldo_antes = s.get(f"{base}/cliente/saldo", timeout=30, headers=cab_c).json()
+            inventado = s.post(f"{base}/cliente/tareas", timeout=30, headers=cab_c, json={
+                "tipo": "tarea_inventada", "params": {}, "tope": 1.0,
+                "nonce": "cli-" + secrets.token_hex(4), "clave_publica": pub_c,
+                "firma": "00"})
+            check("tipo de tarea inventado rechazado con 400",
+                  inventado.status_code == 400, inventado.text[:140])
+            saldo_despues = s.get(f"{base}/cliente/saldo", timeout=30, headers=cab_c).json()
+            check("el tipo inventado no retiene ni encola nada",
+                  abs(float(saldo_despues["retenido"]) - float(saldo_antes["retenido"])) < 1e-9
+                  and int(saldo_despues["tareas"]) == int(saldo_antes["tareas"]),
+                  f"retenido {saldo_antes['retenido']} -> {saldo_despues['retenido']}, "
+                  f"tareas {saldo_antes['tareas']} -> {saldo_despues['tareas']}")
+            precio_malo = s.get(f"{base}/cliente/precio", timeout=30, headers=cab_c,
+                                params={"tipo": "tarea_inventada"})
+            check("/cliente/precio de un tipo inventado tambien es 400",
+                  precio_malo.status_code == 400, precio_malo.text[:140])
+
         print("\n== COMPATIBILIDAD: NODO ==")
         tops_antes = float(s.get(f"{base}/stats", timeout=30).json()["dificultad"]["tops_red"])
         sin_prueba = s.post(f"{base}/nodos/registrar", timeout=30, json={
@@ -817,6 +858,22 @@ print("OK")
                     "firma_reto": firmar(seed_f, reto_f.get("mensaje") or "")})
                 nid_f = reg_f.json().get("id") if reg_f.status_code == 200 else None
                 if nid_f:
+                    # AUDITORIA 24-10-2026: `_mismo_dueno()` no deja que un nodo
+                    # verifique a otro con la MISMA IP o la misma cuenta de
+                    # cobro (anti-Sybil). Aqui los dos nodos salen de este PC,
+                    # asi que el Core hacia bien en no ofrecer la replica y la
+                    # suite se quedaba en rojo por un detalle del entorno, no
+                    # del mecanismo. Para probar el camino real (dos operadores
+                    # distintos) se le da a B una IP de registro distinta, de la
+                    # red reservada para documentacion (RFC 5737).
+                    con_ip = sqlite3.connect(str(tmp / "kukia.db"), timeout=10)
+                    con_ip.execute("DELETE FROM registros_nodo WHERE clave_publica=?",
+                                   ((pub_f or "").lower(),))
+                    con_ip.execute("INSERT INTO registros_nodo(clave_publica, ip, ts) "
+                                   "VALUES(?,?,?)",
+                                   ((pub_f or "").lower(), "198.51.100.23", time.time()))
+                    con_ip.commit()
+                    con_ip.close()
                     print("\n== EJECUCION REDUNDANTE: dos nodos, el Core no recalcula ==")
 
                     def _matriz_valor(n_, seed_):
@@ -830,10 +887,18 @@ print("OK")
                         # contra un tid concreto y con replicas por delante el
                         # nodo podria recibir la verificacion de otra tarea.
                         nz = secrets.token_hex(8)
-                        return s.get(f"{base}/tareas/pendiente", timeout=30, params={
+                        r = s.get(f"{base}/tareas/pendiente", timeout=30, params={
                             "nodo_id": nodo_, "colas": "A", "ts": ts_, "nonce": nz,
                             "solo_primaria": 1 if solo else 0,
-                            "firma": firmar(seed_, f"pendiente:{nodo_}:{ts_}:{nz}")}).json()
+                            "firma": firmar(seed_, f"pendiente:{nodo_}:{ts_}:{nz}")})
+                        # 24-10-2026: si el Core contesta 429/500, antes esto
+                        # devolvia None y la suite se caia con un AttributeError
+                        # que ocultaba el motivo real. Ahora se devuelve el
+                        # error y la comprobacion falla diciendo que paso.
+                        try:
+                            return r.json()
+                        except Exception:
+                            return {"_status": r.status_code, "_texto": r.text[:160]}
 
                     def _perdonar(nodo_):
                         """Quita el bloqueo temporal en la base de prueba.
@@ -980,13 +1045,24 @@ print("OK")
                         "tipo": "difusion_calor", "params": params_d, "cola": "A",
                         "prioridad": 1e9, "campana": "pruebas-replica-difusion"})
                     tid_d = rt_d.json().get("tarea_id") if rt_d.status_code == 200 else None
+                    # 24-10-2026: las escenas anteriores entregan resultados con
+                    # device="cpu" y el Core marca al nodo como CPU. Por diseno
+                    # (medido el 23-10: 17,3 s en CPU contra 0,8 s en GPU) una
+                    # CPU no recibe difusiones, asi que A se quedaba sin tarea y
+                    # la prueba fallaba por el entorno, no por el mecanismo.
+                    # Aqui A vuelve a declararse GPU, que es lo que se quiere
+                    # probar: la replica de una difusion entre dos GPUs.
+                    con_g = sqlite3.connect(str(tmp / "kukia.db"), timeout=10)
+                    con_g.execute("UPDATE nodos SET device='cuda:0' WHERE id=?", (nid,))
+                    con_g.commit()
+                    con_g.close()
                     pa_d = _pedir(nid, seed, int(time.time()))
                     pd = _pedir(nid_f, seed_f, int(time.time()), solo=False)
                     check("una difusion cara (1,2 GFLOP) tambien se replica",
-                          bool(tid_d) and pa_d.get("tarea", {}).get("id") == tid_d
+                          bool(tid_d) and (pa_d.get("tarea") or {}).get("id") == tid_d
                           and pd.get("replica") is True
                           and (pd.get("tarea") or {}).get("id") == tid_d,
-                          f"primario={str(pa_d.get('tarea'))[:60]} replica={str(pd)[:80]}")
+                          f"primario={str(pa_d)[:120]} replica={str(pd)[:100]}")
                     if pd.get("replica") is True and (pd.get("tarea") or {}).get("id") == tid_d:
                         rd = s.post(f"{base}/tareas/replica", timeout=60, json={
                             "tid": tid_d, "nodo_id": nid_f, "metrica": valor_d,
@@ -1315,9 +1391,18 @@ print("OK")
               f"puntos={len(pts_g)} con_dato={len(con_dato)} "
               f"con_gflops={len(con_gflops)} devices={sg.get('devices')}")
         stats = s.get(f"{base}/stats", timeout=30).json()
+        # 24-10-2026: esta prueba pedia la version "0.4.2" a mano y se quedo
+        # vieja en cuanto el Core subio a 0.4.4 (daba rojo con el codigo bien).
+        # Ahora se compara con la VERSION que declara el propio coordinator, asi
+        # que no hay que tocarla cada vez que se sube la version.
+        import re as _re
+        _ver_core = _re.search(r'FastAPI\(title="KUKIA Core", version="([^"]+)"',
+                               (COORD / "kukia_core.py").read_text(encoding="utf-8"))
+        _ver_esperada = _ver_core.group(1) if _ver_core else None
         check("/stats incluye integridad y version",
-                  bool(stats.get("integridad")) and stats.get("version") == "0.4.2",
-                  f"version={stats.get('version')}")
+              bool(stats.get("integridad")) and bool(_ver_esperada)
+              and stats.get("version") == _ver_esperada,
+              f"version={stats.get('version')} esperada={_ver_esperada}")
 
         print("\n== RESUMEN ==")
         fails = [r for r in resultados if not r[1]]

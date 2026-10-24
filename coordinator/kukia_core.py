@@ -103,6 +103,13 @@ CLIENTE_TOPE_DEFECTO = abs(float(os.environ.get("KUKIA_CLIENTE_TOPE", "25")))
 # Cuantas tareas puede tener en cola un cliente a la vez. Sin esto, un cliente
 # (o quien robe su clave) puede encolar mil y bloquear la cola de los mineros.
 CLIENTE_MAX_EN_COLA = max(1, int(os.environ.get("KUKIA_CLIENTE_MAX_EN_COLA", "8")))
+# AUDITORIA 24-10-2026: esta lista vivia SOLO dentro de /cliente/precio. En
+# POST /cliente/tareas no se comprobaba el tipo, asi que un tipo inventado se
+# aceptaba, se cobraba (al minimo facturable) y se quedaba en la cola para
+# siempre: ningun minero sabe ejecutarlo. Ahora la lista es una sola y se usa
+# en las dos puertas, antes de tocar dinero.
+TIPOS_CLIENTE = ("checksum", "matriz", "inferencia", "embeddings",
+                 "lote_embeddings", "difusion_calor")
 # --- Bloque genesis fundacional (una sola vez) ---
 GENESIS_DIR = "KUK77D72508BD940C9BA969B0402A3CF1F9679BE3"   # wallet fundador (Kuki)
 GENESIS_MONTO = 15_000_000.0      # 15M reservados al fundador dentro del techo de 100M
@@ -4773,8 +4780,7 @@ def cliente_precio(tipo: str, _c=Depends(exigir_cliente)):
     El precio final depende de los params; aqui se da el de una tarea minima
     del tipo pedido, que es el suelo que hay que autorizar.
     """
-    if tipo not in ("checksum", "matriz", "inferencia", "embeddings",
-                    "lote_embeddings", "difusion_calor"):
+    if tipo not in TIPOS_CLIENTE:
         raise HTTPException(400, "tipo de tarea no soportado")
     suelo = _coste_tarea_cliente(tipo, {} if tipo != "checksum" else {"n": 10})
     return {"tipo": tipo, "coste_minimo": suelo,
@@ -4811,6 +4817,9 @@ def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
     La firma va sobre `cliente:<nonce>:<tipo>:<sha256(params)>:<tope>`; incluye
     el tope para que nadie pueda cambiar el importe autorizado despues.
     """
+    if t.tipo not in TIPOS_CLIENTE:
+        # Antes de nada: un tipo que ningun minero sabe ejecutar no se cobra.
+        raise HTTPException(400, f"tipo de tarea no soportado: {t.tipo}")
     dir_cliente = (c["direccion"] or "").strip().upper()
     if not direccion_valida(dir_cliente):
         raise HTTPException(400, "el cliente no tiene billetera: pide al Core que la asocie")

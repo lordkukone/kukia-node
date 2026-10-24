@@ -3,19 +3,26 @@
 <head>
 <meta charset="utf-8">
 <link rel="canonical" href="https://lordkukone.github.io/kukia-node/wallet">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<!-- AUDITORIA 24-10-2026: se quito maximum-scale=1 / user-scalable=no. Impedia
+     ampliar con los dedos (WCAG 1.4.4) y no aportaba nada: el diseno ya es
+     responsive. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#081a3a">
 <!-- AUDITORIA 2026-10-20: la billetera tiene la clave privada en memoria.
      La CSP limita scripts/medios a este origen y las conexiones a tu Core
      local o HTTPS; no puede impedir un innerHTML mal escapado, pero corta
      inyecciones externas y envios a dominios raros. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* https:; object-src 'none'; base-uri 'self'">
-<title>KUKIA Wallet - Tu billetera KIA</title>
+<title>KUKIA Wallet - Tu billetera KIA en el navegador</title>
+<meta name="description" content="Billetera KUKIA en el navegador: crea o recupera tu direccion KUK, consulta tu saldo y envia KIA. La clave se genera en tu equipo y no se envia al servidor.">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="moneda.jpg">
 <style>
 :root { --gold:#d4af37; --navy:#081a3a; --blue:#12305e; --line:#27487c; --text:#c3d1ea; }
 * { margin:0; padding:0; box-sizing:border-box; }
+/* AUDITORIA 24-10-2026: foco visible para quien navega con el teclado. */
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:3px solid #d4af37; outline-offset:2px; border-radius:4px; }
+
 body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; min-height:100vh; }
 .hero { text-align:center; padding:2rem 1rem 1rem; background:radial-gradient(ellipse at 50% 0%, #1a3f7a 0%, var(--navy) 60%); }
 .coin { width:130px; height:130px; border-radius:50%; object-fit:cover; border:3px solid var(--gold); box-shadow:0 0 40px rgba(212,175,55,.5); }
@@ -48,12 +55,12 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
 <meta property="og:site_name" content="KUKIA Network">
 <meta property="og:locale" content="es_ES">
 <meta property="og:url" content="https://lordkukone.github.io/kukia-node/wallet">
-<meta property="og:title" content="KUKIA Wallet - Tu billetera KIA">
-<meta property="og:description" content="">
+<meta property="og:title" content="KUKIA Wallet - Tu billetera KIA en el navegador">
+<meta property="og:description" content="Billetera KUKIA en el navegador: crea o recupera tu direccion KUK, consulta tu saldo y envia KIA. La clave se genera en tu equipo y no se envia al servidor.">
 <meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="KUKIA Wallet - Tu billetera KIA">
-<meta name="twitter:description" content="">
+<meta name="twitter:title" content="KUKIA Wallet - Tu billetera KIA en el navegador">
+<meta name="twitter:description" content="Billetera KUKIA en el navegador: crea o recupera tu direccion KUK, consulta tu saldo y envia KIA. La clave se genera en tu equipo y no se envia al servidor.">
 <meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
 <script type="application/ld+json">
 {
@@ -87,7 +94,8 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
    "@type": "WebPage",
    "@id": "https://lordkukone.github.io/kukia-node/wallet#pagina",
    "url": "https://lordkukone.github.io/kukia-node/wallet",
-   "name": "KUKIA Wallet - Tu billetera KIA",
+   "name": "KUKIA Wallet - Tu billetera KIA en el navegador",
+   "description": "Billetera KUKIA en el navegador: crea o recupera tu direccion KUK, consulta tu saldo y envia KIA. La clave se genera en tu equipo y no se envia al servidor.",
    "inLanguage": "es",
    "isPartOf": {
     "@id": "https://lordkukone.github.io/kukia-node/#sitio"
@@ -137,7 +145,8 @@ textarea { min-height:90px; font-family:monospace; font-size:.82rem; }
   <div class="card">
     <h3>Mi saldo</h3>
     <input id="v-addr" placeholder="Tu dirección KUK...">
-    <input id="v-core" placeholder="Dirección del Core (se detecta sola; 127.0.0.1 si abres el fichero del disco)">
+    <input id="v-core" placeholder="Dirección del Core (https://... o http://127.0.0.1:8300)">
+    <p id="v-core-aviso" style="display:none;color:#f0d060;font-size:.82rem;line-height:1.5;margin:.2rem 0 .8rem;"></p>
     <button class="btn" onclick="saldo()">Ver saldo</button>
     <div id="v-out"></div>
     <div id="qrcode"></div>
@@ -211,6 +220,15 @@ function usaCore(url, c){
   localStorage.setItem('kukia_core', url);
 }
 
+function avisoCore(){
+  var p = document.getElementById('v-core-aviso');
+  if(!p){ return; }
+  p.style.display = 'block';
+  p.innerHTML = 'No pude leer la direccion del Core desde aqui. Pega la que da el minero: '
+    + '<a href="' + ESPEJO_CORE + '" target="_blank" rel="noopener" style="color:#d4af37;">abrir core_actual.json</a>'
+    + ' y copia el valor de <code>core</code>. Si minas en este mismo PC, vale <code>http://127.0.0.1:8300</code>.';
+}
+
 function detectarCore(){
   var c = document.getElementById('v-core');
   if(coreElegido()){ return; }
@@ -220,6 +238,12 @@ function detectarCore(){
   (function siguiente(i){
     if(i >= candidatos.length){
       usaCore(ultimo, c);        // nada fresco: al menos una que exista
+      // AUDITORIA 24-10-2026: si la deteccion falla, antes no se decia NADA y
+      // el boton daba error sin explicar por que. Pasa cuando la web publica no
+      // sirve core_actual.json en su propio dominio (no se versiona a proposito)
+      // y el espejo esta en otro dominio sin permiso CORS: el navegador no deja
+      // leerlo. Se dice y se da la salida a mano.
+      if(!coreElegido()){ avisoCore(); }
       return;
     }
     fetch(candidatos[i], {cache: 'no-store'})

@@ -9,6 +9,8 @@
 <style>
 :root { --gold:#d4af37; --navy:#081a3a; --line:#27487c; --text:#c3d1ea; }
 * { margin:0; padding:0; box-sizing:border-box; }
+/* AUDITORIA 24-10-2026: foco visible para quien navega con el teclado. */
+a:focus-visible, summary:focus-visible, button:focus-visible { outline:3px solid #d4af37; outline-offset:2px; border-radius:4px; }
 body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; line-height:1.6; }
 .wrap { max-width:1000px; margin:0 auto; padding:3rem 1.5rem; }
 h1 { color:var(--gold); font-size:2.2rem; margin-bottom:.4rem; }
@@ -87,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>90508f58cac6c165adc32885b1667785cf584f368f867ab655cb880ea3f73219</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>3083e9062900237f3e56412ac13df3ab2e2a61f7b208009b7664576b08bde552</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -199,6 +201,13 @@ CLIENTE_TOPE_DEFECTO = abs(float(os.environ.get(&quot;KUKIA_CLIENTE_TOPE&quot;, 
 # Cuantas tareas puede tener en cola un cliente a la vez. Sin esto, un cliente
 # (o quien robe su clave) puede encolar mil y bloquear la cola de los mineros.
 CLIENTE_MAX_EN_COLA = max(1, int(os.environ.get(&quot;KUKIA_CLIENTE_MAX_EN_COLA&quot;, &quot;8&quot;)))
+# AUDITORIA 24-10-2026: esta lista vivia SOLO dentro de /cliente/precio. En
+# POST /cliente/tareas no se comprobaba el tipo, asi que un tipo inventado se
+# aceptaba, se cobraba (al minimo facturable) y se quedaba en la cola para
+# siempre: ningun minero sabe ejecutarlo. Ahora la lista es una sola y se usa
+# en las dos puertas, antes de tocar dinero.
+TIPOS_CLIENTE = (&quot;checksum&quot;, &quot;matriz&quot;, &quot;inferencia&quot;, &quot;embeddings&quot;,
+                 &quot;lote_embeddings&quot;, &quot;difusion_calor&quot;)
 # --- Bloque genesis fundacional (una sola vez) ---
 GENESIS_DIR = &quot;KUK77D72508BD940C9BA969B0402A3CF1F9679BE3&quot;   # wallet fundador (Kuki)
 GENESIS_MONTO = 15_000_000.0      # 15M reservados al fundador dentro del techo de 100M
@@ -4869,8 +4878,7 @@ def cliente_precio(tipo: str, _c=Depends(exigir_cliente)):
     El precio final depende de los params; aqui se da el de una tarea minima
     del tipo pedido, que es el suelo que hay que autorizar.
     &quot;&quot;&quot;
-    if tipo not in (&quot;checksum&quot;, &quot;matriz&quot;, &quot;inferencia&quot;, &quot;embeddings&quot;,
-                    &quot;lote_embeddings&quot;, &quot;difusion_calor&quot;):
+    if tipo not in TIPOS_CLIENTE:
         raise HTTPException(400, &quot;tipo de tarea no soportado&quot;)
     suelo = _coste_tarea_cliente(tipo, {} if tipo != &quot;checksum&quot; else {&quot;n&quot;: 10})
     return {&quot;tipo&quot;: tipo, &quot;coste_minimo&quot;: suelo,
@@ -4907,6 +4915,9 @@ def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
     La firma va sobre `cliente:&lt;nonce&gt;:&lt;tipo&gt;:&lt;sha256(params)&gt;:&lt;tope&gt;`; incluye
     el tope para que nadie pueda cambiar el importe autorizado despues.
     &quot;&quot;&quot;
+    if t.tipo not in TIPOS_CLIENTE:
+        # Antes de nada: un tipo que ningun minero sabe ejecutar no se cobra.
+        raise HTTPException(400, f&quot;tipo de tarea no soportado: {t.tipo}&quot;)
     dir_cliente = (c[&quot;direccion&quot;] or &quot;&quot;).strip().upper()
     if not direccion_valida(dir_cliente):
         raise HTTPException(400, &quot;el cliente no tiene billetera: pide al Core que la asocie&quot;)
@@ -7744,6 +7755,11 @@ def verificar_cadena_db(con) -&gt; dict:
     return {&quot;ok&quot;: not problemas, &quot;ids_alterados&quot;: problemas[:50], &quot;estado&quot;: estado}
 
 
+def _parece_huella(h: str) -&gt; bool:
+    &quot;&quot;&quot;¿Tiene forma de sha256 en hex? (64 caracteres, 0-9a-f).&quot;&quot;&quot;
+    return len(h) == 64 and all(c in &quot;0123456789abcdef&quot; for c in h.lower())
+
+
 def verificar_sellos(con, sellos: list, publica_hex: str) -&gt; dict:
     &quot;&quot;&quot;Comprueba la cadena de sellos Y que cada sello cuadre con el .db.
 
@@ -7759,15 +7775,37 @@ def verificar_sellos(con, sellos: list, publica_hex: str) -&gt; dict:
     if not cadena[&quot;ok&quot;]:
         problemas.append(f&quot;asientos alterados en el .db: {cadena[&#x27;ids_alterados&#x27;][:10]}&quot;)
     # 2) Firmas y encadenado de los sellos.
-    prev = &quot;&quot;
+    #
+    # AUDITORIA 24-10-2026 (falso positivo): antes se exigia que el PRIMER
+    # sello de la lista tuviera `prev` vacio. Eso solo es cierto si la lista
+    # empieza en el sello 0. Con `--core` se piden `?limite=200` y el Core
+    # devuelve los 200 ULTIMOS (hoy hay 319): el primero de los 200 trae el
+    # `prev` de su antecesor, que no viaja en la respuesta, y el auditor decia
+    # ALTERADO con el historial perfectamente sano. Lo mismo con un
+    # sellos.jsonl rotado o recortado. Un tramo no se puede comprobar hacia
+    # atras: se comprueba todo lo que SI esta (firmas, cada eslabon entre los
+    # sellos presentes y cada sello contra el .db) y se avisa de que falta la
+    # cabeza, en vez de inventarse un fallo.
+    prev = None
     ultimo = None
+    tramo = {&quot;desde&quot;: None, &quot;cabeza&quot;: True}
     for i, s in enumerate(sellos):
         if not isinstance(s, dict):
             problemas.append(f&quot;sello {i}: no es un objeto&quot;)
             continue
         if not verificar_firma(s, publica_hex):
             problemas.append(f&quot;sello {i} (hasta {s.get(&#x27;hasta&#x27;)}): firma invalida&quot;)
-        if (s.get(&quot;prev&quot;) or &quot;&quot;) != prev:
+        sprev = s.get(&quot;prev&quot;) or &quot;&quot;
+        if prev is None:
+            # Primer sello de la lista: su `prev` no se puede contrastar con
+            # nada. Solo se mira que, si lo trae, sea una huella con forma de
+            # sha256 (un `prev` inventado no cuela como &quot;tramo&quot;).
+            tramo[&quot;desde&quot;] = s.get(&quot;hasta&quot;)
+            tramo[&quot;cabeza&quot;] = not sprev
+            if sprev and not _parece_huella(sprev):
+                problemas.append(
+                    f&quot;sello 0 (hasta {s.get(&#x27;hasta&#x27;)}): &#x27;prev&#x27; malformado&quot;)
+        elif sprev != prev:
             problemas.append(f&quot;sello {i} (hasta {s.get(&#x27;hasta&#x27;)}): no encadena con el anterior&quot;)
         if s.get(&quot;v&quot;) not in FORMATOS_VALIDOS:
             problemas.append(f&quot;sello {i}: version {s.get(&#x27;v&#x27;)} desconocida&quot;)
@@ -7819,7 +7857,7 @@ def verificar_sellos(con, sellos: list, publica_hex: str) -&gt; dict:
                     f&quot;sello {i} (hasta {hasta}): el .db no coincide &quot;
                     f&quot;(hash/asientos/suma)&quot;)
     return {&quot;ok&quot;: not problemas, &quot;problemas&quot;: problemas,
-            &quot;cadena&quot;: cadena, &quot;ultimo&quot;: ultimo}
+            &quot;cadena&quot;: cadena, &quot;ultimo&quot;: ultimo, &quot;tramo&quot;: tramo}
 
 
 # ============================================================
@@ -8005,10 +8043,12 @@ def main() -&gt; int:
         print(f&quot;[auditor] no existe el .db: {db}&quot;, file=sys.stderr)
         return 2
 
+    total_sellos = None
     if args.core:
         data = pedir(args.core, &quot;/ledger/sellos?limite=200&quot;)
         lista = data.get(&quot;sellos&quot;) or []
         clave = data.get(&quot;clave_publica&quot;) or &quot;&quot;
+        total_sellos = data.get(&quot;total&quot;)
         if not lista:
             print(&quot;[auditor] el Core no devolvio sellos todavia&quot;, file=sys.stderr)
             return 2
@@ -8071,8 +8111,23 @@ def main() -&gt; int:
             u = lista[-1]
             print(f&quot;[auditor] ultimo sello      : hasta {u.get(&#x27;hasta&#x27;)} &quot;
                   f&quot;({u.get(&#x27;asientos&#x27;)} asientos, {u.get(&#x27;suma&#x27;)} KIA)&quot;)
+        # El Core devuelve como mucho los 200 ULTIMOS sellos: si hay mas, la
+        # lista empieza a mitad de cadena y el eslabon anterior al primero no
+        # se puede comprobar. Se dice, en vez de dar por bueno mas de lo que se
+        # ha mirado (y en vez de llamarlo ALTERADO, que era el falso positivo).
+        tramo = r.get(&quot;tramo&quot;) or {}
+        cabeza = bool(tramo.get(&quot;cabeza&quot;, True))
+        if not cabeza:
+            cuantos = f&quot; ({len(lista)} de {total_sellos})&quot; if total_sellos else &quot;&quot;
+            print(f&quot;[auditor] tramo             : la lista empieza en el sello &quot;
+                  f&quot;hasta {tramo.get(&#x27;desde&#x27;)}{cuantos}; el eslabon anterior no &quot;
+                  f&quot;viaja y no se comprueba&quot;)
         if r[&quot;ok&quot;]:
-            print(&quot;[auditor] OK: historial intacto y firmado.&quot;)
+            if cabeza:
+                print(&quot;[auditor] OK: historial intacto y firmado.&quot;)
+            else:
+                print(&quot;[auditor] OK: el tramo comprobado cuadra (firmas, encadenado &quot;
+                      &quot;y .db). No prueba nada anterior al primer sello de la lista.&quot;)
         else:
             print(&quot;[auditor] ALTERADO:&quot;)
             for p in r[&quot;problemas&quot;][:20]:
@@ -8363,6 +8418,320 @@ def main() -&gt; int:
 
 if __name__ == &quot;__main__&quot;:
     sys.exit(main())
+</code></pre>
+
+<h2>Calculadora de valor (supuestos a la vista) - tools/calculadora_valor.py</h2>
+
+<pre><code>#!/usr/bin/env python3
+&quot;&quot;&quot;Calculadora: cuanto valdria 1 KIA segun la demanda REAL de computo.
+
+Que hace y que NO hace
+----------------------
+NO pone precio a KIA. Calcula un **ancla contable**: si la red vendiera X GFLOP
+al dia a un precio P por GFLOP, y ese dinero se repartiera entre los KIA que se
+emiten ese dia, cada KIA valdria (X*P)/emision_dia. Eso es aritmetica, no una
+cotizacion: sin un cliente que pague, el resultado es 0.
+
+Lo que se lee del Core (comprobado, no supuesto) y lo que se supone se imprime
+por separado, para que no se mezcle. Los supuestos se cambian con argumentos.
+
+Uso
+---
+  python tools/calculadora_valor.py
+  python tools/calculadora_valor.py --core https://mi-core
+  python tools/calculadora_valor.py --eur-hora 0.35 --tflops 15
+  python tools/calculadora_valor.py --precio-gflop 0.00001
+  python tools/calculadora_valor.py --demanda 5000000
+  python tools/calculadora_valor.py --json
+
+  --demanda es en GFLOP por dia y salta la tabla de utilizacion: calcula el
+  valor con ESA demanda concreta (la que un cliente te haya dicho de verdad).
+&quot;&quot;&quot;
+import argparse
+import json
+import sys
+import urllib.request
+
+CORE_POR_DEFECTO = &quot;http://127.0.0.1:8300&quot;
+
+# Supuestos de partida. Son MIOS, no del Core: por eso salen en pantalla y se
+# pueden cambiar por argumentos. 0,35 EUR/hora por una GPU tipo 5070 que hace
+# ~15 TFLOP/s EFECTIVOS (no de pico: en estas tareas el rendimiento real es
+# mucho menor que la ficha del fabricante).
+EUR_HORA_DEFECTO = 0.35
+TFLOPS_DEFECTO = 15.0
+
+# Utilizaciones de la capacidad de la red que se simulan (fraccion 0..1).
+UTILIZACIONES = (0.0, 0.01, 0.05, 0.25, 1.0)
+
+# Anclas de valor por KIA para la pregunta inversa (cuanto habria que vender).
+OBJETIVOS_EUR = (0.01, 0.05, 0.10, 0.50, 1.00)
+
+
+def leer_core(base: str) -&gt; dict:
+    &quot;&quot;&quot;Lee /stats del Core. Lanza RuntimeError si no responde o no trae lo necesario.&quot;&quot;&quot;
+    url = base.rstrip(&quot;/&quot;) + &quot;/stats&quot;
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            dato = json.load(r)
+    except Exception as e:
+        raise RuntimeError(f&quot;no puedo leer {url}: {e}&quot;)
+    s = dato.get(&quot;stats&quot;, dato)
+    faltan = [k for k in (&quot;supply_emitido&quot;, &quot;max_supply&quot;) if k not in s]
+    if faltan:
+        raise RuntimeError(&quot;el Core no devuelve &quot; + &quot;, &quot;.join(faltan))
+    return s
+
+
+def datos_del_core(s: dict) -&gt; dict:
+    &quot;&quot;&quot;Saca los numeros que importan, con las tres formas en que el Core los publica.&quot;&quot;&quot;
+    bolsa = s.get(&quot;bolsa_emision&quot;) or {}
+    pago = s.get(&quot;pago_por_potencia&quot;) or {}
+    detalle = s.get(&quot;detalle_pago&quot;) or {}
+
+    # Emision diaria: se prefiere el presupuesto del minuto (es lo que se emite
+    # de verdad); si no esta, se cae a emision_por_min.
+    emision_min = bolsa.get(&quot;presupuesto_kia_min&quot;) or s.get(&quot;emision_por_min&quot;) or 0.0
+    try:
+        emision_min = float(emision_min)
+    except (TypeError, ValueError):
+        emision_min = 0.0
+
+    # Precio interno del trabajo: KIA que cuesta 1 GFLOP verificado.
+    precio_gflop_kia = bolsa.get(&quot;precio_minuto&quot;) or pago.get(&quot;precio_gflop&quot;) or 0.0
+    try:
+        precio_gflop_kia = float(precio_gflop_kia)
+    except (TypeError, ValueError):
+        precio_gflop_kia = 0.0
+
+    # Capacidad medida de la red en GFLOP/min (la ventana que usa el Core).
+    gflop_min = (pago.get(&quot;gflop_red_por_min&quot;) or detalle.get(&quot;gflop_por_min&quot;)
+                 or bolsa.get(&quot;gflop_minuto_anterior&quot;) or 0.0)
+    try:
+        gflop_min = float(gflop_min)
+    except (TypeError, ValueError):
+        gflop_min = 0.0
+
+    supply = float(s.get(&quot;supply_emitido&quot;) or 0.0)
+    maximo = float(s.get(&quot;max_supply&quot;) or 0.0)
+    return {
+        &quot;supply&quot;: supply,
+        &quot;max_supply&quot;: maximo,
+        &quot;restante&quot;: maximo - supply,
+        &quot;emision_por_min&quot;: emision_min,
+        &quot;emision_dia&quot;: emision_min * 1440.0,
+        &quot;precio_gflop_kia&quot;: precio_gflop_kia,
+        &quot;gflop_por_kia&quot;: (1.0 / precio_gflop_kia) if precio_gflop_kia &gt; 0 else 0.0,
+        &quot;capacidad_gflop_min&quot;: gflop_min,
+        &quot;capacidad_gflop_dia&quot;: gflop_min * 1440.0,
+        &quot;nodos&quot;: s.get(&quot;nodos&quot;),
+        &quot;sellos&quot;: (s.get(&quot;integridad&quot;) or {}).get(&quot;sellos&quot;),
+    }
+
+
+def valor_por_kia(demanda_gflop_dia: float, eur_por_gflop: float,
+                  emision_dia: float) -&gt; float:
+    &quot;&quot;&quot;Ancla: ingresos diarios de la red repartidos entre los KIA emitidos ese dia.&quot;&quot;&quot;
+    if emision_dia &lt;= 0:
+        raise ValueError(&quot;la emision diaria es 0: no hay con que dividir&quot;)
+    return (demanda_gflop_dia * eur_por_gflop) / emision_dia
+
+
+def demanda_para(precio_kia: float, eur_por_gflop: float, emision_dia: float) -&gt; float:
+    &quot;&quot;&quot;Demanda diaria (GFLOP) necesaria para que 1 KIA salga a precio_kia.&quot;&quot;&quot;
+    if eur_por_gflop &lt;= 0:
+        return float(&quot;inf&quot;)
+    return (precio_kia * emision_dia) / eur_por_gflop
+
+
+def eur(n: float) -&gt; str:
+    &quot;&quot;&quot;Importe en euros, legible.
+
+    Los numeros de este problema son muy pequenos (millonesimas de euro por
+    GFLOP), asi que por debajo de una milesima se usa notacion cientifica con
+    3 cifras significativas: 0,00000675 se lee peor que 6,75e-06 y se confunde
+    con un cero a la primera.
+    &quot;&quot;&quot;
+    if n == 0:
+        return &quot;0,00&quot;
+    if abs(n) &lt; 0.001:
+        return f&quot;{n:.2e}&quot;.replace(&quot;e-0&quot;, &quot;e-&quot;).replace(&quot;e+0&quot;, &quot;e+&quot;).replace(&quot;.&quot;, &quot;,&quot;)
+    if abs(n) &lt; 1:
+        return f&quot;{n:.4f}&quot;.replace(&quot;.&quot;, &quot;,&quot;)
+    return f&quot;{n:,.2f}&quot;.replace(&quot;,&quot;, &quot;X&quot;).replace(&quot;.&quot;, &quot;,&quot;).replace(&quot;X&quot;, &quot;.&quot;)
+
+
+def gflop(n: float) -&gt; str:
+    &quot;&quot;&quot;Cantidad de GFLOP con la unidad que se lea mejor.
+
+    Escalera correcta (base GFLOP): 1.000 GFLOP = 1 TFLOP, 1e6 = 1 PFLOP,
+    1e9 = 1 EFLOP. Antes estaba corrida un escalon y 1,96 millones de GFLOP
+    salian como &quot;MFLOP&quot;, que es 1e-3 GFLOP: un error de mil millones.
+    &quot;&quot;&quot;
+    if abs(n) &gt;= 1e9:
+        return f&quot;{num(n / 1e9, 2)} EFLOP&quot;
+    if abs(n) &gt;= 1e6:
+        return f&quot;{num(n / 1e6, 2)} PFLOP&quot;
+    if abs(n) &gt;= 1e3:
+        return f&quot;{num(n / 1e3, 2)} TFLOP&quot;
+    return f&quot;{num(n)} GFLOP&quot;
+
+
+def num(n: float, dec: int = 0) -&gt; str:
+    return f&quot;{n:,.{dec}f}&quot;.replace(&quot;,&quot;, &quot;X&quot;).replace(&quot;.&quot;, &quot;,&quot;).replace(&quot;X&quot;, &quot;.&quot;)
+
+
+def main(argv=None) -&gt; int:
+    ap = argparse.ArgumentParser(
+        description=&quot;Cuanto valdria 1 KIA segun la demanda real de computo &quot;
+                    &quot;(ancla contable, no precio de mercado).&quot;)
+    ap.add_argument(&quot;--core&quot;, default=CORE_POR_DEFECTO, help=&quot;URL del Core&quot;)
+    ap.add_argument(&quot;--eur-hora&quot;, type=float, default=EUR_HORA_DEFECTO,
+                    help=f&quot;coste de una GPU de referencia en EUR/hora (def. {EUR_HORA_DEFECTO})&quot;)
+    ap.add_argument(&quot;--tflops&quot;, type=float, default=TFLOPS_DEFECTO,
+                    help=f&quot;TFLOP/s EFECTIVOS de esa GPU, no de pico (def. {TFLOPS_DEFECTO})&quot;)
+    ap.add_argument(&quot;--precio-gflop&quot;, type=float, default=None,
+                    help=&quot;EUR por GFLOP, si lo sabes: salta --eur-hora/--tflops&quot;)
+    ap.add_argument(&quot;--demanda&quot;, type=float, default=None,
+                    help=&quot;GFLOP/dia vendidos de verdad (salta la tabla de utilizacion)&quot;)
+    ap.add_argument(&quot;--json&quot;, action=&quot;store_true&quot;, help=&quot;salida en JSON&quot;)
+    args = ap.parse_args(argv)
+
+    try:
+        s = leer_core(args.core)
+        d = datos_del_core(s)
+    except RuntimeError as e:
+        print(f&quot;[error] {e}&quot;, file=sys.stderr)
+        print(&quot;       Arranca el Core o pasa --core &lt;url&gt;. Sin datos del ledger, &quot;
+              &quot;cualquier cifra seria inventada.&quot;, file=sys.stderr)
+        return 2
+
+    # --- supuestos -------------------------------------------------------
+    if args.precio_gflop is not None:
+        eur_gflop = args.precio_gflop
+        origen_precio = &quot;puesto a mano (--precio-gflop)&quot;
+    else:
+        gflop_por_hora = args.tflops * 1000.0 * 3600.0        # 1 TFLOP/s = 1000 GFLOP/s
+        eur_gflop = args.eur_hora / gflop_por_hora if gflop_por_hora &gt; 0 else 0.0
+        origen_precio = (f&quot;{args.eur_hora} EUR/hora entre {args.tflops} TFLOP/s efectivos &quot;
+                         f&quot;= {num(gflop_por_hora)} GFLOP/hora&quot;)
+
+    if eur_gflop &lt;= 0:
+        print(&quot;[error] el precio por GFLOP sale 0: revisa --eur-hora y --tflops&quot;,
+              file=sys.stderr)
+        return 2
+    if d[&quot;emision_dia&quot;] &lt;= 0:
+        print(&quot;[error] el Core dice emision 0 KIA/dia: no hay nada que valorar&quot;,
+              file=sys.stderr)
+        return 2
+
+    filas = []
+    if args.demanda is not None:
+        demanda = max(0.0, args.demanda)
+        filas.append({
+            &quot;utilizacion&quot;: (demanda / d[&quot;capacidad_gflop_dia&quot;]
+                            if d[&quot;capacidad_gflop_dia&quot;] &gt; 0 else None),
+            &quot;demanda_gflop_dia&quot;: demanda,
+            &quot;ingresos_dia&quot;: demanda * eur_gflop,
+            &quot;eur_por_kia&quot;: valor_por_kia(demanda, eur_gflop, d[&quot;emision_dia&quot;]),
+            &quot;etiqueta&quot;: &quot;demanda indicada&quot;,
+        })
+    else:
+        for u in UTILIZACIONES:
+            demanda = d[&quot;capacidad_gflop_dia&quot;] * u
+            filas.append({
+                &quot;utilizacion&quot;: u,
+                &quot;demanda_gflop_dia&quot;: demanda,
+                &quot;ingresos_dia&quot;: demanda * eur_gflop,
+                &quot;eur_por_kia&quot;: valor_por_kia(demanda, eur_gflop, d[&quot;emision_dia&quot;]),
+                &quot;etiqueta&quot;: f&quot;{num(u * 100)} % de la capacidad de hoy&quot;,
+            })
+
+    inversa = []
+    for objetivo in OBJETIVOS_EUR:
+        necesaria = demanda_para(objetivo, eur_gflop, d[&quot;emision_dia&quot;])
+        inversa.append({
+            &quot;eur_por_kia&quot;: objetivo,
+            &quot;demanda_gflop_dia&quot;: necesaria,
+            &quot;utilizacion&quot;: (necesaria / d[&quot;capacidad_gflop_dia&quot;]
+                            if d[&quot;capacidad_gflop_dia&quot;] &gt; 0 else None),
+        })
+
+    if args.json:
+        print(json.dumps({
+            &quot;core_de&quot;: s.get(&quot;version&quot;),
+            &quot;comprobado&quot;: d,
+            &quot;supuestos&quot;: {
+                &quot;eur_por_gflop&quot;: eur_gflop,
+                &quot;origen&quot;: origen_precio,
+            },
+            &quot;escenarios&quot;: filas,
+            &quot;demanda_necesaria&quot;: inversa,
+            &quot;aviso&quot;: &quot;Ancla contable, no precio de mercado: sin clientes que paguen, vale 0.&quot;,
+        }, indent=2, ensure_ascii=False))
+        return 0
+
+    # --- salida de pantalla ---------------------------------------------
+    print()
+    print(&quot;  VALOR DE 1 KIA SEGUN LA DEMANDA DE COMPUTO&quot;)
+    print(&quot;  &quot; + &quot;=&quot; * 60)
+    print()
+    print(&quot;  LO QUE DICE EL CORE AHORA MISMO (leido, no supuesto)&quot;)
+    print(f&quot;    supply emitido .......... {num(d[&#x27;supply&#x27;], 1)} de {num(d[&#x27;max_supply&#x27;])} KIA&quot;)
+    print(f&quot;    emision ................. {num(d[&#x27;emision_por_min&#x27;], 4)} KIA/min &quot;
+          f&quot;= {num(d[&#x27;emision_dia&#x27;])} KIA/dia&quot;)
+    print(f&quot;    precio interno .......... {d[&#x27;precio_gflop_kia&#x27;]:.8f} KIA/GFLOP &quot;
+          f&quot;-&gt; 1 KIA = {num(d[&#x27;gflop_por_kia&#x27;])} GFLOP&quot;)
+    print(f&quot;    capacidad medida ........ {num(d[&#x27;capacidad_gflop_min&#x27;], 1)} GFLOP/min &quot;
+          f&quot;= {gflop(d[&#x27;capacidad_gflop_dia&#x27;])}/dia&quot;)
+    print(f&quot;    eso son ................. {num(d[&#x27;capacidad_gflop_min&#x27;] / 60, 1)} GFLOP/s &quot;
+          f&quot;de red (una GPU sola hace {num(args.tflops * 1000)} GFLOP/s)&quot;)
+    print()
+    print(&quot;  SUPUESTOS (mios, no del Core; cambialos con --eur-hora / --tflops)&quot;)
+    print(f&quot;    1 GFLOP cuesta .......... {eur_gflop:.10f} EUR&quot;)
+    print(f&quot;    de donde sale ........... {origen_precio}&quot;)
+    print()
+    print(&quot;  SI LA RED VENDIERA ESO AL DIA, 1 KIA VALDRIA&quot;)
+    print(f&quot;    {&#x27;utilizacion&#x27;:&lt;34}{&#x27;trabajo/dia&#x27;:&gt;15}{&#x27;EUR/dia&#x27;:&gt;12}{&#x27;EUR/KIA&#x27;:&gt;13}&quot;)
+    print(&quot;    &quot; + &quot;-&quot; * 71)
+    for f in filas:
+        u = &quot;-&quot; if f[&quot;utilizacion&quot;] is None else f&quot;{num(f[&#x27;utilizacion&#x27;] * 100)} %&quot;
+        etiqueta = u if args.demanda is None else f[&quot;etiqueta&quot;]
+        print(f&quot;    {etiqueta:&lt;34}{gflop(f[&#x27;demanda_gflop_dia&#x27;]):&gt;15}&quot;
+              f&quot;{eur(f[&#x27;ingresos_dia&#x27;]):&gt;12}{eur(f[&#x27;eur_por_kia&#x27;]):&gt;13}&quot;)
+    print()
+    print(&quot;  QUE HARIA FALTA VENDER PARA QUE 1 KIA VALGA...&quot;)
+    for inv in inversa:
+        nece = inv[&quot;demanda_gflop_dia&quot;]
+        u = (&quot;-&quot; if inv[&quot;utilizacion&quot;] is None
+             else f&quot;{num(inv[&#x27;utilizacion&#x27;] * 100)} % de la capacidad de hoy&quot;)
+        print(f&quot;    {eur(inv[&#x27;eur_por_kia&#x27;]):&gt;10} EUR  -&gt;  {gflop(nece):&gt;18}/dia   ({u})&quot;)
+    print()
+    base = filas[-1] if args.demanda is None else filas[0]
+    print(&quot;  LECTURA HONESTA&quot;)
+    print(&quot;    - Con demanda 0 el resultado es 0. No es un suelo: es que hoy no hay&quot;)
+    print(&quot;      ni un cliente externo pagando por el trabajo de la red.&quot;)
+    print(f&quot;    - Al 100 % de la capacidad de hoy, el trabajo entero de la red vale&quot;)
+    print(f&quot;      {eur(d[&#x27;capacidad_gflop_dia&#x27;] * eur_gflop)} EUR/dia a precio de nube barata:&quot;)
+    print(&quot;      la red calcula muy poco todavia. No es que el KIA sea malo, es que&quot;)
+    print(&quot;      la red esta al 0,1 % de lo que hace UNA sola grafica.&quot;)
+    print(f&quot;    - Ese mismo reparto da {eur(base[&#x27;eur_por_kia&#x27;])} EUR por KIA. Si ademas&quot;)
+    print(f&quot;      se valorase TODO el supply emitido ({num(d[&#x27;supply&#x27;])} KIA) a ese ancla,&quot;)
+    print(f&quot;      saldrian {eur(d[&#x27;supply&#x27;] * base[&#x27;eur_por_kia&#x27;])} EUR: es aritmetica,&quot;)
+    print(&quot;      no una capitalizacion, porque nadie esta comprando.&quot;)
+    print(&quot;    - Esto es un ancla contable, no una oferta ni una promesa. Un token sin&quot;)
+    print(&quot;      comprador no tiene precio: tiene una division.&quot;)
+    print()
+    return 0
+
+
+if __name__ == &quot;__main__&quot;:
+    for _f in (sys.stdout, sys.stderr):
+        try:
+            _f.reconfigure(encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;)
+        except Exception:
+            pass
+    raise SystemExit(main())
 </code></pre>
 
 <h2>Copia de seguridad verificada - tools/backup_ledger.py</h2>
@@ -10143,6 +10512,47 @@ def main() -&gt; int:
             &quot;clave_publica&quot;: pub})
         check(&quot;saldo insuficiente rechazado&quot;, r7.status_code == 409, r7.text[:120])
 
+        # AUDITORIA 24-10-2026 (A1): POST /cliente/tareas aceptaba un tipo
+        # inventado. _flops_tarea devolvia 0 y la tarea se cobraba al minimo
+        # facturable y se quedaba en la cola para siempre, porque ningun
+        # minero sabe ejecutarla. Ahora se rechaza con 400 antes de tocar
+        # dinero. La prueba comprueba las dos cosas: el codigo Y que no se
+        # retiene nada.
+        print(&quot;\n== API DE CLIENTE ==&quot;)
+        seed_c = hashlib.sha256(b&quot;cliente-pruebas-kukia&quot;).hexdigest()
+        pub_c = pub_de(seed_c)
+        dir_c = dir_de(pub_c)
+        alta = s.post(f&quot;{base}/admin/clientes&quot;, timeout=30,
+                      json={&quot;nombre&quot;: &quot;cliente-pruebas&quot;, &quot;direccion&quot;: dir_c}, headers=admin)
+        if alta.status_code == 409:
+            # Ya existe de una ejecucion anterior de la suite sobre esta copia:
+            # sin token no hay forma de usarlo, asi que se prueba con otra.
+            seed_c = hashlib.sha256(secrets.token_hex(8).encode()).hexdigest()
+            pub_c = pub_de(seed_c)
+            dir_c = dir_de(pub_c)
+            alta = s.post(f&quot;{base}/admin/clientes&quot;, timeout=30,
+                          json={&quot;nombre&quot;: &quot;cliente-pruebas&quot;, &quot;direccion&quot;: dir_c}, headers=admin)
+        check(&quot;alta de cliente para las pruebas&quot;, alta.status_code == 200, alta.text[:140])
+        if alta.status_code == 200:
+            cab_c = {&quot;X-Cliente-Token&quot;: alta.json()[&quot;token&quot;]}
+            saldo_antes = s.get(f&quot;{base}/cliente/saldo&quot;, timeout=30, headers=cab_c).json()
+            inventado = s.post(f&quot;{base}/cliente/tareas&quot;, timeout=30, headers=cab_c, json={
+                &quot;tipo&quot;: &quot;tarea_inventada&quot;, &quot;params&quot;: {}, &quot;tope&quot;: 1.0,
+                &quot;nonce&quot;: &quot;cli-&quot; + secrets.token_hex(4), &quot;clave_publica&quot;: pub_c,
+                &quot;firma&quot;: &quot;00&quot;})
+            check(&quot;tipo de tarea inventado rechazado con 400&quot;,
+                  inventado.status_code == 400, inventado.text[:140])
+            saldo_despues = s.get(f&quot;{base}/cliente/saldo&quot;, timeout=30, headers=cab_c).json()
+            check(&quot;el tipo inventado no retiene ni encola nada&quot;,
+                  abs(float(saldo_despues[&quot;retenido&quot;]) - float(saldo_antes[&quot;retenido&quot;])) &lt; 1e-9
+                  and int(saldo_despues[&quot;tareas&quot;]) == int(saldo_antes[&quot;tareas&quot;]),
+                  f&quot;retenido {saldo_antes[&#x27;retenido&#x27;]} -&gt; {saldo_despues[&#x27;retenido&#x27;]}, &quot;
+                  f&quot;tareas {saldo_antes[&#x27;tareas&#x27;]} -&gt; {saldo_despues[&#x27;tareas&#x27;]}&quot;)
+            precio_malo = s.get(f&quot;{base}/cliente/precio&quot;, timeout=30, headers=cab_c,
+                                params={&quot;tipo&quot;: &quot;tarea_inventada&quot;})
+            check(&quot;/cliente/precio de un tipo inventado tambien es 400&quot;,
+                  precio_malo.status_code == 400, precio_malo.text[:140])
+
         print(&quot;\n== COMPATIBILIDAD: NODO ==&quot;)
         tops_antes = float(s.get(f&quot;{base}/stats&quot;, timeout=30).json()[&quot;dificultad&quot;][&quot;tops_red&quot;])
         sin_prueba = s.post(f&quot;{base}/nodos/registrar&quot;, timeout=30, json={
@@ -10510,6 +10920,22 @@ print(&quot;OK&quot;)
                     &quot;firma_reto&quot;: firmar(seed_f, reto_f.get(&quot;mensaje&quot;) or &quot;&quot;)})
                 nid_f = reg_f.json().get(&quot;id&quot;) if reg_f.status_code == 200 else None
                 if nid_f:
+                    # AUDITORIA 24-10-2026: `_mismo_dueno()` no deja que un nodo
+                    # verifique a otro con la MISMA IP o la misma cuenta de
+                    # cobro (anti-Sybil). Aqui los dos nodos salen de este PC,
+                    # asi que el Core hacia bien en no ofrecer la replica y la
+                    # suite se quedaba en rojo por un detalle del entorno, no
+                    # del mecanismo. Para probar el camino real (dos operadores
+                    # distintos) se le da a B una IP de registro distinta, de la
+                    # red reservada para documentacion (RFC 5737).
+                    con_ip = sqlite3.connect(str(tmp / &quot;kukia.db&quot;), timeout=10)
+                    con_ip.execute(&quot;DELETE FROM registros_nodo WHERE clave_publica=?&quot;,
+                                   ((pub_f or &quot;&quot;).lower(),))
+                    con_ip.execute(&quot;INSERT INTO registros_nodo(clave_publica, ip, ts) &quot;
+                                   &quot;VALUES(?,?,?)&quot;,
+                                   ((pub_f or &quot;&quot;).lower(), &quot;198.51.100.23&quot;, time.time()))
+                    con_ip.commit()
+                    con_ip.close()
                     print(&quot;\n== EJECUCION REDUNDANTE: dos nodos, el Core no recalcula ==&quot;)
 
                     def _matriz_valor(n_, seed_):
@@ -10523,10 +10949,18 @@ print(&quot;OK&quot;)
                         # contra un tid concreto y con replicas por delante el
                         # nodo podria recibir la verificacion de otra tarea.
                         nz = secrets.token_hex(8)
-                        return s.get(f&quot;{base}/tareas/pendiente&quot;, timeout=30, params={
+                        r = s.get(f&quot;{base}/tareas/pendiente&quot;, timeout=30, params={
                             &quot;nodo_id&quot;: nodo_, &quot;colas&quot;: &quot;A&quot;, &quot;ts&quot;: ts_, &quot;nonce&quot;: nz,
                             &quot;solo_primaria&quot;: 1 if solo else 0,
-                            &quot;firma&quot;: firmar(seed_, f&quot;pendiente:{nodo_}:{ts_}:{nz}&quot;)}).json()
+                            &quot;firma&quot;: firmar(seed_, f&quot;pendiente:{nodo_}:{ts_}:{nz}&quot;)})
+                        # 24-10-2026: si el Core contesta 429/500, antes esto
+                        # devolvia None y la suite se caia con un AttributeError
+                        # que ocultaba el motivo real. Ahora se devuelve el
+                        # error y la comprobacion falla diciendo que paso.
+                        try:
+                            return r.json()
+                        except Exception:
+                            return {&quot;_status&quot;: r.status_code, &quot;_texto&quot;: r.text[:160]}
 
                     def _perdonar(nodo_):
                         &quot;&quot;&quot;Quita el bloqueo temporal en la base de prueba.
@@ -10673,13 +11107,24 @@ print(&quot;OK&quot;)
                         &quot;tipo&quot;: &quot;difusion_calor&quot;, &quot;params&quot;: params_d, &quot;cola&quot;: &quot;A&quot;,
                         &quot;prioridad&quot;: 1e9, &quot;campana&quot;: &quot;pruebas-replica-difusion&quot;})
                     tid_d = rt_d.json().get(&quot;tarea_id&quot;) if rt_d.status_code == 200 else None
+                    # 24-10-2026: las escenas anteriores entregan resultados con
+                    # device=&quot;cpu&quot; y el Core marca al nodo como CPU. Por diseno
+                    # (medido el 23-10: 17,3 s en CPU contra 0,8 s en GPU) una
+                    # CPU no recibe difusiones, asi que A se quedaba sin tarea y
+                    # la prueba fallaba por el entorno, no por el mecanismo.
+                    # Aqui A vuelve a declararse GPU, que es lo que se quiere
+                    # probar: la replica de una difusion entre dos GPUs.
+                    con_g = sqlite3.connect(str(tmp / &quot;kukia.db&quot;), timeout=10)
+                    con_g.execute(&quot;UPDATE nodos SET device=&#x27;cuda:0&#x27; WHERE id=?&quot;, (nid,))
+                    con_g.commit()
+                    con_g.close()
                     pa_d = _pedir(nid, seed, int(time.time()))
                     pd = _pedir(nid_f, seed_f, int(time.time()), solo=False)
                     check(&quot;una difusion cara (1,2 GFLOP) tambien se replica&quot;,
-                          bool(tid_d) and pa_d.get(&quot;tarea&quot;, {}).get(&quot;id&quot;) == tid_d
+                          bool(tid_d) and (pa_d.get(&quot;tarea&quot;) or {}).get(&quot;id&quot;) == tid_d
                           and pd.get(&quot;replica&quot;) is True
                           and (pd.get(&quot;tarea&quot;) or {}).get(&quot;id&quot;) == tid_d,
-                          f&quot;primario={str(pa_d.get(&#x27;tarea&#x27;))[:60]} replica={str(pd)[:80]}&quot;)
+                          f&quot;primario={str(pa_d)[:120]} replica={str(pd)[:100]}&quot;)
                     if pd.get(&quot;replica&quot;) is True and (pd.get(&quot;tarea&quot;) or {}).get(&quot;id&quot;) == tid_d:
                         rd = s.post(f&quot;{base}/tareas/replica&quot;, timeout=60, json={
                             &quot;tid&quot;: tid_d, &quot;nodo_id&quot;: nid_f, &quot;metrica&quot;: valor_d,
@@ -11008,9 +11453,18 @@ print(&quot;OK&quot;)
               f&quot;puntos={len(pts_g)} con_dato={len(con_dato)} &quot;
               f&quot;con_gflops={len(con_gflops)} devices={sg.get(&#x27;devices&#x27;)}&quot;)
         stats = s.get(f&quot;{base}/stats&quot;, timeout=30).json()
+        # 24-10-2026: esta prueba pedia la version &quot;0.4.2&quot; a mano y se quedo
+        # vieja en cuanto el Core subio a 0.4.4 (daba rojo con el codigo bien).
+        # Ahora se compara con la VERSION que declara el propio coordinator, asi
+        # que no hay que tocarla cada vez que se sube la version.
+        import re as _re
+        _ver_core = _re.search(r&#x27;FastAPI\(title=&quot;KUKIA Core&quot;, version=&quot;([^&quot;]+)&quot;&#x27;,
+                               (COORD / &quot;kukia_core.py&quot;).read_text(encoding=&quot;utf-8&quot;))
+        _ver_esperada = _ver_core.group(1) if _ver_core else None
         check(&quot;/stats incluye integridad y version&quot;,
-                  bool(stats.get(&quot;integridad&quot;)) and stats.get(&quot;version&quot;) == &quot;0.4.2&quot;,
-                  f&quot;version={stats.get(&#x27;version&#x27;)}&quot;)
+              bool(stats.get(&quot;integridad&quot;)) and bool(_ver_esperada)
+              and stats.get(&quot;version&quot;) == _ver_esperada,
+              f&quot;version={stats.get(&#x27;version&#x27;)} esperada={_ver_esperada}&quot;)
 
         print(&quot;\n== RESUMEN ==&quot;)
         fails = [r for r in resultados if not r[1]]

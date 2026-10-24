@@ -3,9 +3,14 @@
 
 Por que existe: Surge sirve su propio robots.txt con `Disallow: /` en los
 subdominios *.surge.sh e ignora el nuestro, asi que en kukia-network.surge.sh
-Google no puede indexar NUNCA. La copia que si se indexa vive en el sitio de
-Freebuff (.freebuff.page, robots sin restricciones), y este script deja la
-carpeta lista para subirla sin depender de copiar a mano.
+Google no puede indexar NUNCA.
+
+24-10-2026: la canonica apuntaba a kukia-network.freebuff.page y ese hosting
+devuelve 404 en la portada (ademas de "Site temporarily unavailable" cuando se
+pasa de cupo). La copia viva e indexable es la de GitHub Pages
+(https://lordkukone.github.io/kukia-node), que es la que genera la web por
+defecto. Este script sirve para cualquier hosting que se le pase con
+--dominio; si el dominio no responde 200, no lo uses como canonica.
 
 Que hace:
   1. regenera docs/ con el codigo y la version reales

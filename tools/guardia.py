@@ -367,8 +367,27 @@ PATRONES = {
     # Cualquiera de los dos túneles cuenta como "el túnel": si no, al pasar a
     # dominio propio el guardia vería el rápido abierto aparte y no arrancaría
     # el suyo.
-    "tunel": ("tunel_estable.py", "tunel_dominio.py"),
+    "tunel": ("tunel_estable.py", "tunel_dominio.py", "tunel_ngrok.py"),
 }
+
+
+def _tunel_ngrok() -> bool:
+    """True si hay un dominio de ngrok apuntado en ngrok_dominio.txt.
+
+    24/10/2026: el tunel rapido de Cloudflare cambia de nombre en cada arranque,
+    y un tunel CON NOMBRE de Cloudflare exige dominio propio (de pago). Ngrok da
+    un dominio fijo en su plan gratis, asi que si esta configurado manda el:
+    URL que no cambia sin gastar un euro. Si conviven las dos cosas, gana ngrok
+    porque el fichero de dominio es una decision explicita del usuario.
+    """
+    registro = RAIZ / "ngrok_dominio.txt"
+    if not registro.exists():
+        return False
+    try:
+        return any(l.strip() and not l.startswith("#")
+                   for l in registro.read_text(encoding="utf-8").splitlines())
+    except Exception:
+        return False
 
 
 def _tunel_con_dominio() -> bool:
@@ -422,7 +441,12 @@ def construir_hijos(sin_minero: bool) -> dict:
         # Con dominio propio se usa el otro supervisor: es el mismo trabajo con
         # una URL que no caduca. Los dos escriben el MISMO docs/core_actual.json,
         # asi que el paquete descargado no nota el cambio.
-        script = "tunel_dominio.py" if _tunel_con_dominio() else "tunel_estable.py"
+        if _tunel_ngrok():
+            script = "tunel_ngrok.py"
+        elif _tunel_con_dominio():
+            script = "tunel_dominio.py"
+        else:
+            script = "tunel_estable.py"
         hijos["tunel"] = Hijo(
             "tunel", [_py(), "-u", str(RAIZ / "tools" / script)],
             RAIZ, LOGS / "tunel_stdout.log")

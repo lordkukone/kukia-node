@@ -25,9 +25,16 @@ DESTINO = RAIZ / "docs"
 #
 # 21-10-2026: Surge sirve su propio robots.txt con "Disallow: /" en los
 # subdominios *.surge.sh e IGNORA el nuestro, asi que ahi Google no puede
-# indexar nunca. La copia indexable vive en el sitio de Freebuff y es la que
-# se declara canonica; --canonico permite cambiarla sin tocar el codigo.
-CANONICO = "https://kukia-network.freebuff.page"
+# indexar nunca.
+#
+# 24-10-2026 (corregido): la canonica apuntaba a kukia-network.freebuff.page,
+# y ese hosting devuelve 404 en la portada: se le decia a Google "la pagina
+# buena es esta" y contestaba "no existe", que es la peor forma de perder el
+# indice. Comprobado hoy: SURGE 200 pero con Disallow: /, FREEBUFF.PAGE 404,
+# GITHUB PAGES 200 y con robots que permite indexar. La copia viva e indexable
+# es GitHub Pages, asi que es la canonica. --canonico permite cambiarla sin
+# tocar el codigo el dia que haya dominio propio apuntando de verdad.
+CANONICO = "https://lordkukone.github.io/kukia-node"
 
 FUENTES = [
     ("Coordinador (Core)", "coordinator/kukia_core.py"),
@@ -38,6 +45,7 @@ FUENTES = [
     ("Auditor de sellos", "publico/verificar_sellos.py"),
     ("Rescate de saldos antiguos", "tools/rescatar_saldos.py"),
     ("Salud de la moneda", "tools/salud.py"),
+    ("Calculadora de valor (supuestos a la vista)", "tools/calculadora_valor.py"),
     ("Copia de seguridad verificada", "tools/backup_ledger.py"),
     ("Restauracion probada", "tools/probar_restauracion.py"),
     ("Prueba del rele (sin red)", "publico/probar_relay.mjs"),
@@ -135,6 +143,9 @@ EN_ZIP = [
     # paquete nombra un fichero, el fichero va dentro.
     "tools/prueba_gasto_billetera.py",
     "tools/verificar_moneda.py",
+    # 24-10-2026: la pagina calculadora.html manda a esta herramienta ("la misma
+    # cuenta en tu maquina"), asi que el fichero va dentro del paquete.
+    "tools/calculadora_valor.py",
     "tools/pruebas_seguridad.py",
     "tools/pruebas_caos.py",
     "tools/prueba_failover_negativas.py",
@@ -158,6 +169,8 @@ CABECERA = """<!DOCTYPE html>
 <style>
 :root {{ --gold:#d4af37; --navy:#081a3a; --line:#27487c; --text:#c3d1ea; }}
 * {{ margin:0; padding:0; box-sizing:border-box; }}
+/* AUDITORIA 24-10-2026: foco visible para quien navega con el teclado. */
+a:focus-visible, summary:focus-visible, button:focus-visible {{ outline:3px solid #d4af37; outline-offset:2px; border-radius:4px; }}
 body {{ font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; line-height:1.6; }}
 .wrap {{ max-width:1000px; margin:0 auto; padding:3rem 1.5rem; }}
 h1 {{ color:var(--gold); font-size:2.2rem; margin-bottom:.4rem; }}
@@ -259,8 +272,15 @@ FECHA_ZIP = (2026, 1, 1, 0, 0, 0)
 
 
 def _meter(z: zipfile.ZipFile, rel: str, datos: bytes) -> None:
-    """Mete un fichero con fecha fija (zip reproducible)."""
-    zi = zipfile.ZipInfo(rel.replace("\\", "/"), date_time=FECHA_ZIP)
+    """Mete un fichero con fecha fija (zip reproducible).
+
+    Todo va dentro de una carpeta `kukia-node/`. Hasta el 24-10-2026 el zip
+    soltaba coordinator/, worker/, tools/... sueltos en la carpeta donde se
+    descomprimia, y las instrucciones de la web (`cd kukia-node`) fallaban en
+    el primer paso: no existia esa carpeta. Comprobado descomprimiendo el zip
+    publicado y mirando sus raices.
+    """
+    zi = zipfile.ZipInfo("kukia-node/" + rel.replace("\\", "/"), date_time=FECHA_ZIP)
     zi.compress_type = zipfile.ZIP_DEFLATED
     zi.external_attr = (0o644 & 0xFFFF) << 16
     z.writestr(zi, datos)

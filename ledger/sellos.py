@@ -211,6 +211,11 @@ def verificar_cadena_db(con) -> dict:
     return {"ok": not problemas, "ids_alterados": problemas[:50], "estado": estado}
 
 
+def _parece_huella(h: str) -> bool:
+    """¿Tiene forma de sha256 en hex? (64 caracteres, 0-9a-f)."""
+    return len(h) == 64 and all(c in "0123456789abcdef" for c in h.lower())
+
+
 def verificar_sellos(con, sellos: list, publica_hex: str) -> dict:
     """Comprueba la cadena de sellos Y que cada sello cuadre con el .db.
 
@@ -226,15 +231,37 @@ def verificar_sellos(con, sellos: list, publica_hex: str) -> dict:
     if not cadena["ok"]:
         problemas.append(f"asientos alterados en el .db: {cadena['ids_alterados'][:10]}")
     # 2) Firmas y encadenado de los sellos.
-    prev = ""
+    #
+    # AUDITORIA 24-10-2026 (falso positivo): antes se exigia que el PRIMER
+    # sello de la lista tuviera `prev` vacio. Eso solo es cierto si la lista
+    # empieza en el sello 0. Con `--core` se piden `?limite=200` y el Core
+    # devuelve los 200 ULTIMOS (hoy hay 319): el primero de los 200 trae el
+    # `prev` de su antecesor, que no viaja en la respuesta, y el auditor decia
+    # ALTERADO con el historial perfectamente sano. Lo mismo con un
+    # sellos.jsonl rotado o recortado. Un tramo no se puede comprobar hacia
+    # atras: se comprueba todo lo que SI esta (firmas, cada eslabon entre los
+    # sellos presentes y cada sello contra el .db) y se avisa de que falta la
+    # cabeza, en vez de inventarse un fallo.
+    prev = None
     ultimo = None
+    tramo = {"desde": None, "cabeza": True}
     for i, s in enumerate(sellos):
         if not isinstance(s, dict):
             problemas.append(f"sello {i}: no es un objeto")
             continue
         if not verificar_firma(s, publica_hex):
             problemas.append(f"sello {i} (hasta {s.get('hasta')}): firma invalida")
-        if (s.get("prev") or "") != prev:
+        sprev = s.get("prev") or ""
+        if prev is None:
+            # Primer sello de la lista: su `prev` no se puede contrastar con
+            # nada. Solo se mira que, si lo trae, sea una huella con forma de
+            # sha256 (un `prev` inventado no cuela como "tramo").
+            tramo["desde"] = s.get("hasta")
+            tramo["cabeza"] = not sprev
+            if sprev and not _parece_huella(sprev):
+                problemas.append(
+                    f"sello 0 (hasta {s.get('hasta')}): 'prev' malformado")
+        elif sprev != prev:
             problemas.append(f"sello {i} (hasta {s.get('hasta')}): no encadena con el anterior")
         if s.get("v") not in FORMATOS_VALIDOS:
             problemas.append(f"sello {i}: version {s.get('v')} desconocida")
@@ -286,7 +313,7 @@ def verificar_sellos(con, sellos: list, publica_hex: str) -> dict:
                     f"sello {i} (hasta {hasta}): el .db no coincide "
                     f"(hash/asientos/suma)")
     return {"ok": not problemas, "problemas": problemas,
-            "cadena": cadena, "ultimo": ultimo}
+            "cadena": cadena, "ultimo": ultimo, "tramo": tramo}
 
 
 # ============================================================
