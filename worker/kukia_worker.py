@@ -1012,8 +1012,19 @@ def _anunciar_emision() -> None:
     e = d.get("emision") or {}
     pago = float(d.get("pago_por_tarea") or 0.0)
     techo = int(d.get("max_supply") or 0)
+    bolsa = d.get("bolsa_emision") or {}
+    precio_gf = bolsa.get("precio_minuto")
+    if d.get("modo_pago") == "potencia" and precio_gf:
+        # 23-10-2026: con pago por trabajo, "KIA por tarea" ya no significa
+        # nada (cada tarea cobra sus GFLOP x precio). Antes imprimia 0.000000
+        # KIA por tarea y parecia que minar no pagaba.
+        suelo = float((d.get("pago_por_potencia") or {}).get("gflop_min_facturable") or 0.0)
+        como_paga = (f"{float(precio_gf):.9f} KIA por GFLOP verificado"
+                     + (f" (suelo {suelo:g} GFLOP/tarea)" if suelo > 0 else ""))
+    else:
+        como_paga = f"{pago:.6f} KIA por tarea"
     print(f"[KUKIA] emision: era {e.get('era_actual')} (x{e.get('multiplicador')}), "
-          f"{pago:.6f} KIA por tarea, {d.get('emision_por_min')} KIA/min en toda la red, "
+          f"{como_paga}, {d.get('emision_por_min')} KIA/min en toda la red, "
           f"techo {techo:,} KIA".replace(",", "."), flush=True)
     fin = str(e.get("fin_emision") or "")
     try:

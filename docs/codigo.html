@@ -87,7 +87,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>f8646231e87747403e6c37039e27e5811a79e68a0061ec7fe4b1dcc8d83bab97</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>7549e8624bdef21092526e55ee460585854f84fff82275e7414c20ec54811745</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -5638,8 +5638,19 @@ def _anunciar_emision() -&gt; None:
     e = d.get(&quot;emision&quot;) or {}
     pago = float(d.get(&quot;pago_por_tarea&quot;) or 0.0)
     techo = int(d.get(&quot;max_supply&quot;) or 0)
+    bolsa = d.get(&quot;bolsa_emision&quot;) or {}
+    precio_gf = bolsa.get(&quot;precio_minuto&quot;)
+    if d.get(&quot;modo_pago&quot;) == &quot;potencia&quot; and precio_gf:
+        # 23-10-2026: con pago por trabajo, &quot;KIA por tarea&quot; ya no significa
+        # nada (cada tarea cobra sus GFLOP x precio). Antes imprimia 0.000000
+        # KIA por tarea y parecia que minar no pagaba.
+        suelo = float((d.get(&quot;pago_por_potencia&quot;) or {}).get(&quot;gflop_min_facturable&quot;) or 0.0)
+        como_paga = (f&quot;{float(precio_gf):.9f} KIA por GFLOP verificado&quot;
+                     + (f&quot; (suelo {suelo:g} GFLOP/tarea)&quot; if suelo &gt; 0 else &quot;&quot;))
+    else:
+        como_paga = f&quot;{pago:.6f} KIA por tarea&quot;
     print(f&quot;[KUKIA] emision: era {e.get(&#x27;era_actual&#x27;)} (x{e.get(&#x27;multiplicador&#x27;)}), &quot;
-          f&quot;{pago:.6f} KIA por tarea, {d.get(&#x27;emision_por_min&#x27;)} KIA/min en toda la red, &quot;
+          f&quot;{como_paga}, {d.get(&#x27;emision_por_min&#x27;)} KIA/min en toda la red, &quot;
           f&quot;techo {techo:,} KIA&quot;.replace(&quot;,&quot;, &quot;.&quot;), flush=True)
     fin = str(e.get(&quot;fin_emision&quot;) or &quot;&quot;)
     try:
@@ -6382,28 +6393,85 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 RAIZ = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / &quot;ledger&quot;))
 import sellos as SELLOS  # noqa: E402  (JSON canonico, misma regla que el Core)
+import kukia_wallet as BILLETERA  # noqa: E402  (DPAPI: mismo cifrado que el minero)
 
 IDENTIDAD_POR_DEFECTO = Path(__file__).parent / &quot;identidad_validador.json&quot;
 TIPOS_SOPORTADOS = {&quot;checksum&quot;, &quot;matriz&quot;, &quot;inferencia&quot;, &quot;difusion_calor&quot;}
 
 
 # ------------------------------------------------------------------ identidad
+def _privada_de(d: dict) -&gt; str:
+    &quot;&quot;&quot;Clave privada de la identidad: en claro (antigua) o cifrada con DPAPI.
+
+    Devuelve &quot;&quot; si no hay ninguna legible. No imprime nada: la clave no sale
+    nunca de este proceso.
+    &quot;&quot;&quot;
+    priv = (d.get(&quot;clave_privada&quot;) or &quot;&quot;).strip()
+    if priv:
+        return priv
+    cifrada = (d.get(&quot;clave_privada_cifrada&quot;) or &quot;&quot;).strip()
+    if cifrada:
+        try:
+            return (BILLETERA._descifrar_texto(cifrada) or &quot;&quot;).strip()
+        except Exception:
+            return &quot;&quot;
+    return &quot;&quot;
+
+
+def _escribir_identidad(d: dict, ruta: Path) -&gt; None:
+    &quot;&quot;&quot;Guarda la identidad SIN la clave privada en claro (DPAPI si se puede).
+
+    En memoria `d` sigue llevando `clave_privada`; en disco queda
+    `clave_privada_cifrada`, atada al usuario de Windows, igual que las
+    billeteras del minero. En Linux/macOS no hay DPAPI y se guarda en claro,
+    dejando constancia en el campo `cifrado` (antes era siempre asi).
+    &quot;&quot;&quot;
+    salida = dict(d)
+    priv = salida.pop(&quot;clave_privada&quot;, &quot;&quot;) or &quot;&quot;
+    cifrada = BILLETERA._cifrar_texto(priv) if priv else None
+    if cifrada:
+        salida[&quot;clave_privada_cifrada&quot;] = cifrada
+        salida[&quot;cifrado&quot;] = &quot;dpapi-usuario-windows&quot;
+    else:
+        salida[&quot;clave_privada&quot;] = priv
+        salida[&quot;cifrado&quot;] = &quot;ninguno&quot;
+    ruta.write_text(json.dumps(salida, indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
+    BILLETERA._proteger(ruta)
+
+
 def cargar_identidad(ruta: Path, nombre: str) -&gt; dict:
     if ruta.exists():
         try:
             d = json.loads(ruta.read_text(encoding=&quot;utf-8&quot;))
-            if len(bytes.fromhex(d.get(&quot;clave_privada&quot;) or &quot;&quot;)) == 32:
-                d[&quot;nombre&quot;] = nombre or d.get(&quot;nombre&quot;) or &quot;validador&quot;
-                return d
+        except Exception as e:
+            raise RuntimeError(f&quot;no puedo leer {ruta.name}: {e}&quot;)
+        priv = _privada_de(d) if isinstance(d, dict) else &quot;&quot;
+        try:
+            vale = len(bytes.fromhex(priv)) == 32
         except Exception:
-            pass
+            vale = False
+        if not vale:
+            # NUNCA se crea otra identidad encima de una que no se puede leer:
+            # cambiaria la clave de un validador ya registrado y sus firmas
+            # dejarian de cuadrar. Se para y se dice por que.
+            raise RuntimeError(
+                f&quot;no puedo descifrar la clave privada de {ruta.name}: esta atada al &quot;
+                f&quot;usuario de Windows que la cifro. Recupera ese perfil o el fichero &quot;
+                f&quot;antes de arrancar el validador; no se genera una identidad nueva.&quot;)
+        # La clave vive en memoria mientras corre el validador; en disco, cifrada.
+        d[&quot;clave_privada&quot;] = priv
+        d[&quot;nombre&quot;] = nombre or d.get(&quot;nombre&quot;) or &quot;validador&quot;
+        return d
     priv = secrets.token_bytes(32).hex()
     d = {&quot;nombre&quot;: nombre or &quot;validador&quot;, &quot;clave_privada&quot;: priv,
          &quot;clave_publica&quot;: SELLOS.publica_de(priv), &quot;creado&quot;: time.ctime()}
     ruta.parent.mkdir(parents=True, exist_ok=True)
-    ruta.write_text(json.dumps(d, indent=2, ensure_ascii=False), encoding=&quot;utf-8&quot;)
+    _escribir_identidad(d, ruta)
     print(f&quot;[VALIDADOR] identidad nueva en {ruta}&quot;, flush=True)
     print(f&quot;[VALIDADOR] clave publica: {d[&#x27;clave_publica&#x27;]}&quot;, flush=True)
+    print(&quot;[VALIDADOR] clave privada cifrada con DPAPI: si se pierde este perfil &quot;
+          &quot;de Windows se puede crear una identidad nueva (la vieja deja de firmar)&quot;,
+          flush=True)
     return d
 
 
@@ -6645,7 +6713,11 @@ def main() -&gt; int:
         except Exception as e:
             print(f&quot;[validador] AVISO: no pude resolver la direccion del Core ({e})&quot;,
                   flush=True)
-    ident = cargar_identidad(Path(args.identidad), args.nombre)
+    try:
+        ident = cargar_identidad(Path(args.identidad), args.nombre)
+    except RuntimeError as e:
+        print(f&quot;[VALIDADOR] ERROR: {e}&quot;, flush=True)
+        return 2
     ident[&quot;nombre&quot;] = (args.nombre or ident[&quot;nombre&quot;]).strip()[:64]
     lote = max(1, min(50, args.lote))
     intervalo = max(5.0, args.intervalo)

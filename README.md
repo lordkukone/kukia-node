@@ -257,6 +257,11 @@ pestana **Enviar** de `docs/wallet.html`:
 - **Comision: 0 KIA.** Una transferencia no crea moneda: debita y acredita la
   misma cantidad, asi que el suministro no cambia.
 
+Para las billeteras que ya estan en este PC (cifradas con DPAPI) no hace falta
+pegar las 20 palabras en el navegador: `tools/enviar_kia.py --de <billetera>
+--a KUK... --monto N` firma en el proceso, y sin `--confirmar` solo enseña lo
+que haria (nada se envia).
+
 ## Validadores independientes (mas de un Core comprobando)
 
 El Core de pagos sigue siendo **uno** (dos pagando a la vez serian doble gasto).

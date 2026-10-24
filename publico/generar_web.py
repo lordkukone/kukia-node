@@ -113,6 +113,9 @@ EN_ZIP = [
     "ARRANCAR_TUNEL.cmd",
     "PREPARAR_DOMINIO.cmd",
     "tools/saldo_minero.py",
+    # 23-10-2026: GUIA_MINERO.md (que va en el paquete) explica como enviar
+    # desde una billetera local cifrada con este comando; el fichero va dentro.
+    "tools/enviar_kia.py",
     # AUDITORIA 2026-10-22: el paquete llevaba los documentos pero no los ficheros
     # que esos documentos mandan ejecutar. SEGURIDAD.md daba la orden exacta
     # `python tools/prueba_gasto_billetera.py ...` y ese fichero no venia; el
