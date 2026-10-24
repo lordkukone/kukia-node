@@ -1,0 +1,46 @@
+# KUKIA Core — TLS automatico con Caddy.
+#
+# Cambia TU_DOMINIO por el tuyo (por ejemplo kukia.tudominio.com). Caddy pide
+# el certificado solo la primera vez y lo renueva para siempre; no hay que
+# tocar certbot ni cron.
+#
+# ANTES de arrancar: el DNS del dominio tiene que apuntar a la IP del servidor
+# (registro A). Si el DNS no resuelve, Caddy no puede pedir el certificado y
+# falla en bucle.
+
+TU_DOMINIO {
+	encode zstd gzip
+
+	# Cabeceras de seguridad, iguales a las que ya sirve la web publica.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Limite de tamano: el Core no recibe ficheros, solo JSON pequeno.
+	request_body {
+		max_size 1MB
+	}
+
+	reverse_proxy core:8300 {
+		# El Core necesita saber la IP real del que llama (registro de nodos,
+		# cupos por IP y auditoria de abuso).
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 20MB
+			roll_keep 5
+		}
+		format console
+	}
+}
+
+# La raiz no es una web: el Core es una API. Quien entre por navegador vera el
+# 404 del Core, y eso es lo correcto.

@@ -317,7 +317,8 @@ Despues hay dos caminos, y solo cambia **una linea** de `core_minero.txt`:
   espejo cual es la direccion viva del Core, asi que no hay que tocarla cuando
   el tunel cambia de nombre.
 - **Montar tu propio Core** (red local, para probar o para validar). Deja la
-  linea por defecto `http://127.0.0.1:8300`, arranca el Core y luego el minero:
+  linea por defecto `http://127.0.0.1:8300`, arranca el Core y luego el minero
+  (paso a paso en [Montar tu propio Core](#montar-tu-propio-core)).
 
   ```bash
   cd coordinator && python -m uvicorn kukia_core:app --port 8300
@@ -353,6 +354,113 @@ VER_MINERO.cmd minero_pc          # reutiliza la identidad de siempre
 cd ledger && python kukia_wallet.py nodo_fundador
 ```
 
+## Montar tu propio Core
+
+Un **Core** es el nodo que reparte trabajo, verifica los resultados y paga. Tu
+copia es una red **independiente**: arranca con su propio historial y no hereda
+los asientos del Core del fundador. Sirve para probar, para validar y para
+levantar tu propia red cuando tengas mineros y clientes.
+
+### 0. Qué necesitas
+
+- **Python 3.10 o superior** en el PATH (probado con 3.12) y las dependencias:
+  `python -m pip install -r requirements.txt`.
+- **GPU: ninguna.** El Core verifica recalculando, y eso lo hace en CPU. (El
+  minero sí quiere GPU; el Core no.)
+- **CPU y RAM:** con 2 vCPU y 4 GB arranca y va; 4 vCPU y 8 GB es lo cómodo. La
+  verificación ocupa cerca de un núcleo de media, y con un VPS de 1 vCPU la cola
+  se atasca.
+- **Disco:** el ledger crece solo. El del fundador ronda los 350 MB con ~495.000
+  asientos; reserva varios GB y una copia de seguridad desde el primer día.
+
+### 1. Arrancarlo
+
+```bash
+python -m pip install -r requirements.txt
+cd coordinator
+python -m uvicorn kukia_core:app --host 127.0.0.1 --port 8300
+```
+
+En el **primer arranque** crea, dentro de `coordinator/`, todo lo que necesita:
+
+| Fichero | Qué es | Qué hacer con él |
+|---|---|---|
+| `ledger/kukia.db` | el ledger: asientos encadenados por hash | **no lo edites a mano** (la cadena lo delata y bloquea pagos) |
+| `admin_token.txt` | token de administrador del Core | no lo compartas; quien lo tenga manda |
+| `sello_key.txt` | clave Ed25519 que sella el historial | **la más importante**: sin ella no puedes volver a sellar |
+| `sellos.jsonl` | sellos publicados (hash + firma) | se verifican con `GET /ledger/integridad` |
+
+Nada de eso va a git (está en `.gitignore`). Son tu base y tus llaves.
+
+### 2. Comprobar que está vivo (sin creerte el log)
+
+```bash
+curl http://127.0.0.1:8300/version        # versión, hora de arranque y SHA-256 del código
+curl http://127.0.0.1:8300/stats          # supply, nodos, tareas, bolsa del minuto
+curl http://127.0.0.1:8300/ledger/integridad   # tiene que decir "cadena_ok": true
+```
+
+Si `cadena_ok` es `false`, **no sigas**: el Core está bloqueando pagos a propósito
+porque el historial no cuadra.
+
+### 3. Darle trabajo
+
+- **Sin mineros**, el Core se llena la cola él solo (`auto_tareas`, activo por
+  defecto: matrices, inferencia y difusión). Verás tareas y pagos moverse, pero
+  no es una red: es un banco de pruebas. Se apaga con `KUKIA_AUTO_TAREAS=0`.
+- **Con un minero** en la misma máquina: deja `core_minero.txt` con
+  `http://127.0.0.1:8300` y arranca `ARRANCAR_MINERO.cmd` o
+  `cd worker && python kukia_worker.py minero_pc`.
+- **Con un minero en otro PC**, tu Core tiene que ser alcanzable: abre solo lo
+  necesario o publica con un túnel ([TUNEL_ESTABLE.md](TUNEL_ESTABLE.md)).
+  Recuerda que el minero se niega a hablar con un Core cuyo `Host` no esté en
+  `KUKIA_HOSTS`; si le pones dominio, añádelo a esa variable.
+
+### 4. Publicarlo: PC encendido o servidor
+
+Todo el despliegue está en la carpeta [despliegue/](despliegue/), con su propia
+guía: [despliegue/LEEME.md](despliegue/LEEME.md). Dos caminos:
+
+- **URL fija sin mover el Core** (Tailscale Funnel, gratis): sigue dependiendo de
+  que tu PC esté encendido. `despliegue/funnel_kukia.cmd`.
+- **Core en un servidor** (no depende de tu PC): `Dockerfile` +
+  `docker-compose.yml` + `Caddyfile` con TLS automático, o
+  `kukia-core.service` si prefieres systemd sin Docker. El 8300 **no se abre a
+  internet**: solo Caddy (o cloudflared) lo alcanza en `127.0.0.1`.
+
+Antes de subir nada, copia el ledger **con el Core en marcha** usando
+`python despliegue/copiar_ledger_seguro.py`: copia con la API de backup de
+SQLite y verifica el `sha256`. Un `cp` a pelo con el Core escribiendo da una base
+rota. Después, `./despliegue/subir_al_servidor.sh usuario@servidor /srv/kukia`
+compara el hash **en el servidor** y se para si no coincide.
+
+### 5. Reglas que no se pueden saltar
+
+- **Un Core, una red.** Dos Cores con bases distintas son **dos redes distintas**,
+  aunque tengan el mismo código. Nunca dos procesos escribiendo el mismo
+  `kukia.db`, y no arranques el del servidor dejando el de tu PC con el mismo
+  historial: apaga uno antes.
+- **Copia de seguridad desde el día uno**: `python tools/backup_ledger.py`.
+- **El `admin_token.txt` no sale de la máquina** y `sello_key.txt` viaja solo si
+  te llevas el Core; si se pierde, el historial ya no se puede volver a sellar.
+- **El Core no necesita GPU, pero sí reloj correcto**: las firmas de los nodos
+  caducan si la hora está desviada.
+- **Los anclajes en Bitcoin** (`tools/anclar_ots.py`) son lo único que impide
+  reescribir el pasado con la clave del sello. Anclar seguido, no una vez.
+
+### 6. Variables de entorno que de verdad se usan
+
+| Variable | Para qué |
+|---|---|
+| `KUKIA_DB` | ruta del ledger (por defecto `coordinator/ledger/kukia.db`) |
+| `KUKIA_ADMIN_TOKEN` | ruta del fichero con el token de admin |
+| `KUKIA_SELLO_KEY` / `KUKIA_SELLOS_FILE` | clave y fichero de sellos |
+| `KUKIA_HOSTS` | hosts extra aceptados en la cabecera `Host` (dominio del túnel) |
+| `KUKIA_ORIGENES` | orígenes web extra permitidos por CORS |
+| `KUKIA_AUTO_TAREAS` | `0` apaga el trabajo sintético del Core |
+| `KUKIA_CONFIA_PROXY` | `1` cuando hay Caddy/cloudflared delante |
+| `KUKIA_ESCROW`, `KUKIA_CLIENTE_TOPE`, `KUKIA_CLIENTE_MAX_EN_COLA` | puerta de cliente |
+
 ## API
 
 | Endpoint | Metodo | Que hace |
@@ -377,10 +485,30 @@ cd ledger && python kukia_wallet.py nodo_fundador
 | /validador/estado | GET | Validadores activos, tareas revalidadas y discrepancias |
 | /version | GET | Que codigo esta ejecutando: version, hora de arranque, commit y SHA-256 de los ficheros clave (comparalo con GitHub con `tools/huella_codigo.py -g`) |
 | /stats | GET | Supply, nodos, tareas, dificultad, integridad, bolsa del minuto y precio por GFLOP |
+| /admin/clientes | POST/GET | Alta y lista de clientes (solo admin). El token se devuelve UNA vez |
+| /cliente/precio | GET | Coste mínimo de una tarea antes de firmar (no gasta la bolsa) |
+| /cliente/saldo | GET | Saldo disponible y lo retenido en tareas en curso |
+| /cliente/tareas | POST | Encola un encargo: firma Ed25519 + cobro por adelantado |
+| /cliente/tareas/{id} | GET | Estado y resultado; solo del cliente dueño |
+
+## Pedir trabajo (clientes)
+
+Un cliente compra cálculo: firma el encargo con su billetera, el Core le retiene
+el coste por adelantado y el minero cobra de ese depósito, no de la emisión
+(un cliente que paga no infla el suministro). El token de API solo identifica:
+para gastar hace falta la firma de la billetera.
+
+```bash
+curl "http://127.0.0.1:8300/cliente/precio?tipo=matriz" -H "X-Cliente-Token: kia_..."
+python tools/cliente_ejemplo.py pedir matriz --params "{\"n\": 256, \"seed\": 7}"
+```
+
+Guía completa, contrato de firma y tabla de errores: [GUIA_CLIENTE.md](GUIA_CLIENTE.md).
 
 ## Verificar que no esta roto
 
 ```bash
+python tools/prueba_cliente.py          # 40 pruebas del ciclo cliente: escrow, cobro, devolución
 python tools/pruebas_seguridad.py       # 101 pruebas sobre una COPIA del ledger
 python tools/pruebas_caos.py            # 57 de caos: doble gasto, kill -9, disco lleno, basura
 python tools/backup_ledger.py           # copia verificada en backups/

@@ -1,0 +1,63 @@
+# KUKIA Core como servicio del sistema, SIN Docker.
+#
+# Instalacion (en el servidor, como root):
+#   cp despliegue/kukia-core.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now kukia-core
+#   systemctl status kukia-core
+#   journalctl -u kukia-core -f
+#
+# Antes: usuario 'kukia' creado, proyecto en /srv/kukia, venv en /srv/kukia/.venv
+#   useradd --system --home /srv/kukia --shell /usr/sbin/nologin kukia
+#   python3 -m venv /srv/kukia/.venv
+#   /srv/kukia/.venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu -r requirements.txt
+#   chown -R kukia:kukia /srv/kukia
+
+[Unit]
+Description=KUKIA Core (coordinador de la red)
+Documentation=https://github.com/lordkukone/kukia-node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kukia
+Group=kukia
+WorkingDirectory=/srv/kukia
+
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/srv/kukia
+Environment=KUKIA_DB=/srv/kukia/coordinator/ledger/kukia.db
+Environment=KUKIA_SELLO_KEY=/srv/kukia/coordinator/sello_key.txt
+Environment=KUKIA_ADMIN_TOKEN=/srv/kukia/coordinator/admin_token.txt
+Environment=KUKIA_CONFIA_PROXY=1
+# Los origenes permitidos van en un fichero aparte para no tocar esta unidad
+# cada vez que cambie el dominio.
+EnvironmentFile=-/srv/kukia/.env
+
+ExecStart=/srv/kukia/.venv/bin/uvicorn kukia_core:app \
+    --app-dir /srv/kukia/coordinator \
+    --host 127.0.0.1 \
+    --port 8300 \
+    --proxy-headers \
+    --forwarded-allow-ips 127.0.0.1 \
+    --no-server-header
+
+# Solo escucha en loopback: Caddy (o cloudflared) hace de puerta.
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# Endurecimiento basico
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/kukia
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

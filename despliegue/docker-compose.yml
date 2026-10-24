@@ -1,0 +1,71 @@
+# KUKIA Core en un servidor, con TLS automatico.
+#
+# Uso:
+#   1. Copia este directorio al servidor (junto con el proyecto).
+#   2. Rellena el dominio en Caddyfile y en el .env.
+#   3. docker compose up -d
+#
+# Lo que NO hay aqui: la clave de los sellos ni el token de admin en texto
+# plano. Viven en ./datos/ y se montan como volumen de solo lectura.
+
+services:
+  core:
+    build:
+      context: ..
+      dockerfile: despliegue/Dockerfile
+    image: kukia-core:latest
+    container_name: kukia-core
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Dentro del contenedor siempre 8300. Fuera se publica 127.0.0.1 para que
+      # solo Caddy lo alcance: 8300 NO se abre a internet.
+      KUKIA_DB: /datos/kukia.db
+      KUKIA_SELLO_KEY: /claves/sello_key.txt
+      KUKIA_ADMIN_TOKEN: /claves/admin_token.txt
+      # Detras de Caddy hay que aceptar el proxy o el Core ve 127.0.0.1 en todos.
+      KUKIA_CONFIA_PROXY: "1"
+    volumes:
+      - ./datos:/datos          # la base del ledger, viva
+      - ./claves:/claves:ro     # sello_key y admin_token, solo lectura
+    ports:
+      - "127.0.0.1:8300:8300"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8300/version', timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 6s
+      start_period: 120s
+      retries: 3
+    # El Core verifica recalculando: sin un nucleo entero disponible, la cola
+    # se atasca. No lo bajes de 1.5.
+    deploy:
+      resources:
+        limits:
+          cpus: "3.0"
+          memory: 6G
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: kukia-caddy
+    restart: unless-stopped
+    depends_on:
+      core:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_datos:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_datos:
+  caddy_config:

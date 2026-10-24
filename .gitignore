@@ -84,6 +84,19 @@ POST_REDDIT_URL.txt
 SEO_BUSCADORES.md
 ESTADO_BUSCADORES.txt
 
+# Despliegue: el codigo y las guias SI van al repositorio (sirven a cualquiera
+# que monte un Core). Lo que NO sale de aqui: la copia del ledger, las claves y
+# el .env con el dominio y los origenes reales.
+despliegue/datos/
+despliegue/claves/
+despliegue/.env
+
+# Paquete de solicitud de listado y anuncio de lanzamiento (llevan cifras y la
+# direccion del Core; el anuncio es material de trabajo, no documentacion).
+SOLICITUD_LISTADO_KIA.md
+ANUNCIO_LANZAMIENTO.md
+PLAN_PRIMER_CLIENTE_QUE_PAGA.md
+
 # SI se publican (comprobado el 24-10-2026: sin IPs publicas ni tuneles reales,
 # solo loopback y la URL de la API de cloudflared): ANCLAJE.md, ESTRATEGIA.md y
 # SEGURIDAD.md. Van en el paquete, el README los enlaza y la web los cita; si se
