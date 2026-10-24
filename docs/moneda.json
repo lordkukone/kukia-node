@@ -1,0 +1,22 @@
+{
+  "name": "KUKIA",
+  "symbol": "KIA",
+  "full_name": "KUKIA Quantum AI Compute Network",
+  "decimals": 4,
+  "max_supply": 100000000,
+  "emission_end": "2150-01-01",
+  "type": "native",
+  "chain": "KUKIA",
+  "contract": null,
+  "algorithm": "proof-of-useful-work (resultado re-ejecutado y verificado)",
+  "description": "KUKIA paga por computo de GPU que se puede comprobar. El minero resuelve una tarea, envia el resultado firmado y el Core lo vuelve a ejecutar; si coincide bit a bit, se emite KIA. La emision tiene techo fijo de 100 millones y termina el 1 de enero de 2150: no hay inflacion despues. Ademas de las tareas, la red mide la potencia real de cada nodo (FLOPs sostenidos) y puede pagar por ella.",
+  "links": {
+    "website": "https://kukia-network.surge.sh",
+    "explorer": "https://kukia-network.surge.sh/minar",
+    "wallet": "https://kukia-network.surge.sh/wallet",
+    "source_code": "https://github.com/lordkukone/kukia-node",
+    "whitepaper": "https://kukia-network.surge.sh/whitepaper"
+  },
+  "tags": ["computing", "depin", "proof-of-useful-work", "gpu"],
+  "notes": "Moneda nativa de su propia red, no es un token de Ethereum ni de otra cadena: no tiene direccion de contrato. La direccion de cada billetera empieza por KUK y se deriva de la clave publica."
+}
