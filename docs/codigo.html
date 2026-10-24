@@ -89,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>3083e9062900237f3e56412ac13df3ab2e2a61f7b208009b7664576b08bde552</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>e46b0502fa6566a94c799967584b0e63e5fc4d9231da2df23ae1327e6948fbb5</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -532,6 +532,23 @@ def _error_escritura(e, defecto=&quot;error interno escribiendo&quot;):
     return HTTPException(500, defecto)
 
 
+def _rollback_seguro() -&gt; None:
+    &quot;&quot;&quot;ROLLBACK que nunca tapa el error de verdad.
+
+    AUDITORIA 24-10-2026 (medido en tools/pruebas_caos.py, seccion G): cuando
+    una escritura falla por falta de espacio, SQLite DESHACE la transaccion
+    el solo. El ROLLBACK que se lanzaba al recoger el error contestaba a su
+    vez &quot;cannot rollback - no transaction is active&quot; y ESA era la excepcion
+    que llegaba arriba: el Core devolvia 500 &quot;error interno&quot; en vez de 507
+    &quot;sin espacio&quot; (15 de 40 transferencias dieron 500 y 0 dieron 507). El
+    minero se quedaba sin saber que podia reintentar.
+    &quot;&quot;&quot;
+    try:
+        con.execute(&quot;ROLLBACK&quot;)
+    except Exception:
+        pass
+
+
 @contextmanager
 def _escritura():
     &quot;&quot;&quot;Escritura corta y atomica: lock + BEGIN IMMEDIATE + commit.
@@ -558,13 +575,13 @@ def _escritura():
             con.commit()
         except HTTPException:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise _error_escritura(e)
@@ -1218,13 +1235,13 @@ def recalcular_resumen() -&gt; dict:
             return {&quot;supply&quot;: round(total, 6), &quot;cuentas&quot;: int(cuentas)}
         except HTTPException:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise _error_escritura(e, &quot;error reconstruyendo totales&quot;)
@@ -2366,7 +2383,7 @@ def liberar_atascadas(max_abandonos: int = MAX_ABANDONOS, forzar: bool = False):
             return (recuperadas.rowcount + nuevas.rowcount, cerradas.rowcount)
         except Exception:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             return (0, 0)
@@ -2480,7 +2497,7 @@ def pendiente(nodo_id: str, excluir: str = &quot;&quot;, colas: str = &quot;&quo
                                     &quot;AND estado=&#x27;reclamando&#x27;&quot;, (nodo_id,)).fetchone()[&quot;c&quot;]
             cap = MAX_TAREAS_NODO if int(node[&quot;tareas_ok&quot;] or 0) &gt; 0 else MAX_TAREAS_NODO_NUEVO
             if int(en_curso or 0) &gt;= cap:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 return {&quot;tarea&quot;: None, &quot;motivo&quot;: &quot;limite de tareas simultaneas por nodo&quot;}
             vram = int(node[&quot;vram_gb&quot;] or 0)
             excl = [e.strip()[:64] for e in (excluir or &quot;&quot;).split(&quot;,&quot;) if e.strip()]
@@ -2508,11 +2525,11 @@ def pendiente(nodo_id: str, excluir: str = &quot;&quot;, colas: str = &quot;&quo
                             &quot;replica&quot;: True}
             row = con.execute(_q, _args).fetchone()
             if not row:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 return {&quot;tarea&quot;: None}
             chk = con.execute(&quot;SELECT estado FROM tareas WHERE id=?&quot;, (row[&quot;id&quot;],)).fetchone()
             if not chk or chk[&quot;estado&quot;] != &quot;queued&quot;:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 return {&quot;tarea&quot;: None}
             con.execute(&quot;UPDATE tareas SET estado=&#x27;ejecutando&#x27;, nodo_id=?, asignado=? WHERE id=?&quot;,
                         (nodo_id, time.time(), row[&quot;id&quot;]))
@@ -2529,7 +2546,7 @@ def pendiente(nodo_id: str, excluir: str = &quot;&quot;, colas: str = &quot;&quo
             raise
         except Exception as e:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise _error_escritura(e, &quot;error interno asignando tarea&quot;)
@@ -2736,21 +2753,21 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                 # por ser antigua. Antes `task2[&quot;estado&quot;]` lanzaba TypeError y el
                 # minero recibia un 500 opaco; ahora es un 409 claro y NO se paga
                 # nada (la tarea ya estaba cerrada, no habia premio que dar).
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(
                     409, &quot;la tarea ya no existe (cerrada por abandono y archivada); &quot;
                          &quot;no hay nada que pagar, no reintentes&quot;)
             if task2[&quot;estado&quot;] == &quot;ok&quot;:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(409, &quot;tarea ya pagada (doble pago bloqueado)&quot;)
             if task2[&quot;estado&quot;] == &quot;fallo&quot;:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(409, &quot;tarea ya cerrada con fallo (no reintentable)&quot;)
             if task2[&quot;estado&quot;] != &quot;ejecutando&quot;:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(409, f&quot;tarea en estado &#x27;{task2[&#x27;estado&#x27;]}&#x27;, no pagable&quot;)
             if task2[&quot;nodo_id&quot;] and task2[&quot;nodo_id&quot;] != nodo_id:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(409, &quot;tarea asignada a otro nodo&quot;)
 
             kuki = 0.0
@@ -2900,13 +2917,13 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
             # DESPUES de abrir la transaccion. Sin este ROLLBACK la transaccion
             # se quedaba abierta (y el siguiente pago fallaba con 503 en bucle).
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             # AUDITORIA 2026-10-21: antes esto se comia la excepcion y solo
@@ -4086,7 +4103,7 @@ def archivar_tareas(retencion: int = None, lote: int = None) -&gt; dict:
             con.commit()
         except Exception:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise
@@ -4336,7 +4353,7 @@ def transferir(t: TransferIn):
             # exista: antes se aceptaba cualquier cadena y el saldo se quemaba.
             if not direccion_valida(a) and not con.execute(
                     &quot;SELECT 1 FROM nodos WHERE id=?&quot;, (a,)).fetchone():
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(400, &quot;destino invalido: usa una direccion KUK... o un nodo registrado&quot;)
             node = con.execute(&quot;SELECT clave_publica FROM nodos WHERE id=?&quot;, (de,)).fetchone()
             pub = ((node[&quot;clave_publica&quot;] if node else &quot;&quot;) or &quot;&quot;).strip().lower()
@@ -4345,12 +4362,12 @@ def transferir(t: TransferIn):
                 # exactamente en esa direccion (nada que registrar).
                 candidata = (t.clave_publica or &quot;&quot;).strip().lower()
                 if not pubkey_valida(candidata) or direccion_de_pubkey(candidata) != de:
-                    con.execute(&quot;ROLLBACK&quot;)
+                    _rollback_seguro()
                     raise HTTPException(401, &quot;emisor sin clave registrada &quot;
                                              &quot;(billetera: envia clave_publica y firma)&quot;)
                 pub = candidata
             if not t.firma:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(401, &quot;falta firma&quot;)
             try:
                 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -4358,20 +4375,27 @@ def transferir(t: TransferIn):
                     bytes.fromhex(t.firma),
                     f&quot;transferir:{de}:{a}:{monto}:{t.nonce}&quot;.encode())
             except Exception:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(401, &quot;firma invalida&quot;)
             saldo = float(con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?&quot;,
                                       (de,)).fetchone()[&quot;s&quot;] or 0.0)
             if saldo &lt; monto:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(409, &quot;saldo insuficiente&quot;)
             try:
                 con.execute(&quot;INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts,&quot;
                             &quot;firma,clave_publica) VALUES(?,?,?,?,?,?,?)&quot;,
                             (de, a, monto, t.nonce, time.ctime(), t.firma, pub))
-            except Exception:
-                con.execute(&quot;ROLLBACK&quot;)
+            except sqlite3.IntegrityError:
+                _rollback_seguro()
                 raise HTTPException(409, &quot;nonce ya usado (repeticion bloqueada)&quot;)
+            except Exception as e:
+                # AUDITORIA 24-10-2026: antes CUALQUIER fallo de este INSERT se
+                # contaba como &quot;nonce ya usado&quot;. Con la base llena (SQLITE_FULL)
+                # la transferencia decia 409 &quot;repeticion&quot; cuando el problema era
+                # el espacio: mentia y nadie reintentaba. Ahora FULL -&gt; 507.
+                _rollback_seguro()
+                raise _error_escritura(e, &quot;error guardando la transferencia&quot;)
             # ID COMPLETO (23-10-2026): antes era el nonce cortado a 12 letras y
             # dos transferencias distintas podian caer en el MISMO id de asiento
             # (paso el 19-10 con tres barridos). El importe y las cuentas estaban
@@ -4384,13 +4408,13 @@ def transferir(t: TransferIn):
                     &quot;supply&quot;: round(supply_emitido(), 6)}
         except HTTPException:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise _error_escritura(e, &quot;error interno en transferencia&quot;)
@@ -4957,19 +4981,19 @@ def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
             # nonce ya usado por este cliente (firma reutilizada)
             if con.execute(&quot;SELECT 1 FROM tareas WHERE cliente=? AND nonce_cliente=?&quot;,
                            (dir_cliente, t.nonce)).fetchone():
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(409, &quot;nonce ya usado por este cliente&quot;)
             en_cola = con.execute(&quot;SELECT COUNT(*) n FROM tareas WHERE cliente=? AND &quot;
                                   &quot;estado IN (&#x27;queued&#x27;,&#x27;ejecutando&#x27;)&quot;,
                                   (dir_cliente,)).fetchone()[&quot;n&quot;]
             if int(en_cola) &gt;= CLIENTE_MAX_EN_COLA:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(429, f&quot;ya tienes {en_cola} tareas en curso &quot;
                                          f&quot;(maximo {CLIENTE_MAX_EN_COLA}); espera a que acaben&quot;)
             saldo = con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?&quot;,
                                 (dir_cliente,)).fetchone()[&quot;s&quot;]
             if float(saldo or 0.0) &lt; coste:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
                 raise HTTPException(402, f&quot;saldo insuficiente: necesitas {coste} KIA y &quot;
                                          f&quot;tienes {round(float(saldo or 0.0), 6)}&quot;)
             tid = uuid.uuid4().hex[:12]
@@ -4985,13 +5009,13 @@ def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
             con.commit()
         except HTTPException:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute(&quot;ROLLBACK&quot;)
+                _rollback_seguro()
             except Exception:
                 pass
             raise HTTPException(500, f&quot;no se pudo encolar: {type(e).__name__}&quot;)

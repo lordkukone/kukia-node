@@ -384,8 +384,12 @@ def prueba_corte(base, tmp, entorno, puerto, proc, log, admin):
         cobradas = {n: float(m) for n, m in movies}
         huerfanos = []
         for n in nonces:
+            # El id del asiento lleva el nonce ENTERO desde el 23-10-2026
+            # (antes se cortaba a 12 y dos transferencias podian compartir id).
+            # Se aceptan las dos formas para no romper con bases antiguas.
             movs = con.execute(
-                "SELECT COUNT(*) FROM ledger WHERE tarea_id=?", (f"tx-{n[:12]}",)).fetchone()[0]
+                "SELECT COUNT(*) FROM ledger WHERE tarea_id IN (?,?)",
+                (f"tx-{n}", f"tx-{n[:12]}")).fetchone()[0]
             if n in cobradas and movs != 2:
                 huerfanos.append((n[:8], "cobrada con %d asientos" % movs))
             if n not in cobradas and movs != 0:
@@ -531,6 +535,11 @@ def _llenar_bd(db: Path, hasta_paginas: int) -> int:
     cuanto el fichero llega al tope cualquier escritura suya devuelve
     SQLITE_FULL, igual que un disco lleno de verdad. Se rellena con una tabla
     de basura en una conexion aparte para no gastar peticiones ni tiempo.
+
+    Se llama solo con el Core QUIETO (auto-tareas apagadas y sin trafico en
+    vuelo), asi que durante el relleno la unica conexion que escribe es esta:
+    el escenario no depende de quien gane el bloqueo entre conexiones, ni de
+    cuanto tarde el Core en soltar la suya.
     """
     con = sqlite3.connect(str(db), timeout=30)
     try:
@@ -623,14 +632,7 @@ def prueba_disco_lleno(token: str) -> None:
             check("tarea asignada antes de llenar", tarea.get("id") == tid,
                   str(tarea.get("id"))[:12])
 
-        # 2. Disco lleno de verdad (para el Core).
-        paginas = _llenar_bd(tmp / "kukia.db", cap)
-        print(f"   base llenada hasta {paginas} paginas (tope {cap})")
-        r = requests.get(f"{base}/stats", timeout=30)
-        check("con el disco lleno el Core sigue sirviendo lecturas (/stats 200)",
-              r.status_code == 200, f"{r.status_code}")
-
-        # 3. Transferencias contra el disco lleno.
+        # 2. Transferencias contra el disco lleno.
         mejor = PS.elegir_cartera(base)
         if not mejor or mejor[0] <= 1.0:
             check("hay billetera con saldo para la prueba", False, "ninguna")
@@ -639,25 +641,47 @@ def prueba_disco_lleno(token: str) -> None:
         _s2, _p2, destino = clave_nueva()
         antes = estado_bd(tmp)
         codigos, nonces = [], []
-        for i in range(40):
+
+        def _transferir_una() -> int:
             n = secrets.token_hex(16)
             nonces.append(n)
             codigos.append(transferir(base, de, destino, 1.0, n, wseed, wpub).status_code)
-            if codigos[-1] == 507:
+            return codigos[-1]
+
+        # Con sitio: estas TIENEN que cobrarse. Se hacen ANTES de llenar para
+        # no depender de cuantas paginas queden libres despues del relleno.
+        for _ in range(3):
+            _transferir_una()
+
+        # Disco lleno de verdad (para el Core).
+        paginas = _llenar_bd(tmp / "kukia.db", cap)
+        print(f"   base llenada hasta {paginas} paginas (tope {cap})")
+        r = requests.get(f"{base}/stats", timeout=30)
+        check("con el disco lleno el Core sigue sirviendo lecturas (/stats 200)",
+              r.status_code == 200, f"{r.status_code}")
+
+        # Contra el disco lleno: hasta el primer 507. La base queda justo en el
+        # tope (freelist 0), asi que el primer INSERT que necesita pagina nueva
+        # ya no cabe: normalmente el 507 sale a la primera. El tope de 40 vueltas
+        # se queda por debajo del limite de 60/min de /transferir y solo actua
+        # si algun dia la base deja paginas sueltas.
+        for _ in range(40):
+            if _transferir_una() == 507:
                 break
         ok = [c for c in codigos if c == 200]
         llenos = [c for c in codigos if c == 507]
         check("sin espacio nada devuelve 500 (200 mientras cabe, 507 al llenarse)",
-              all(c in (200, 507) for c in codigos), f"codigos={codigos}")
+              all(c in (200, 507) for c in codigos),
+              f"{len(ok)} x200, {len(llenos)} x507, otros={[c for c in codigos if c not in (200, 507)]}")
         check("SQLite llega a decir 'disco lleno' (el escenario se probo de verdad)",
-              bool(llenos), f"{len(llenos)} respuestas 507 de {len(codigos)}")
+              bool(llenos), f"{len(llenos)} respuestas 507 de {len(codigos)} transferencias")
         if llenos:
             r = transferir(base, de, destino, 1.0, secrets.token_hex(16), wseed, wpub)
             check("el 507 lo dice claro (menciona el espacio) y no miente",
                   r.status_code == 507 and "espacio" in r.text.lower(),
                   f"{r.status_code} {r.text[:120]}")
 
-        # 4. Cobrar una tarea con el disco lleno.
+        # 3. Cobrar una tarea con el disco lleno.
         estado_pago = None
         pago_kuki = 0.0
         if tarea.get("id") == tid:
@@ -689,13 +713,13 @@ def prueba_disco_lleno(token: str) -> None:
                 check("si se pago, fue un solo asiento", filas == 1,
                       f"estado={est} asientos={filas}")
 
-        # 5. Invariantes del ledger: ni medio asiento ni dinero suelto.
+        # 4. Invariantes del ledger: ni medio asiento ni dinero suelto.
         con = sqlite3.connect(str(tmp / "kukia.db"), timeout=20)
         try:
             huerfanos = []
             for n in nonces:
-                movs = con.execute("SELECT COUNT(*) FROM ledger WHERE tarea_id=?",
-                                   (f"tx-{n[:12]}",)).fetchone()[0]
+                movs = con.execute("SELECT COUNT(*) FROM ledger WHERE tarea_id IN (?,?)",
+                                   (f"tx-{n}", f"tx-{n[:12]}")).fetchone()[0]
                 cobrada = con.execute("SELECT COUNT(*) FROM transferencias WHERE nonce=?",
                                       (n,)).fetchone()[0]
                 if movs not in (0, 2) or (movs == 2) != (cobrada == 1):
@@ -716,7 +740,7 @@ def prueba_disco_lleno(token: str) -> None:
         print(f"   transferencias: {len(ok)} cobradas, {len(llenos)} rechazadas por espacio;"
               f" pago de tarea: {estado_pago}")
 
-        # 6. Con espacio otra vez: el historial sigue bien y todo se reintenta.
+        # 5. Con espacio otra vez: el historial sigue bien y todo se reintenta.
         matar(proc)
         try:
             log.close()
