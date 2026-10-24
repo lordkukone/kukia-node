@@ -76,16 +76,18 @@ SESION_*
 # operacion de esta maquina: direcciones del Core, tuneles, Telegram, correo de
 # Search Console, planes y propaganda. El repositorio es PUBLICO, asi que estos
 # se quedan en el disco. Para versionar uno a proposito: git add -f <fichero>.
-ANCLAJE.md
-ESTRATEGIA.md
 FASE1_PROPUESTA.md
 PLAN_LANZAMIENTO.md
 PROCEDIMIENTO_PRUEBA_RECUPERACION.md
 PROPAGANDA_TODO.txt
 POST_REDDIT_URL.txt
-SEGURIDAD.md
 SEO_BUSCADORES.md
 ESTADO_BUSCADORES.txt
+
+# SI se publican (comprobado el 24-10-2026: sin IPs publicas ni tuneles reales,
+# solo loopback y la URL de la API de cloudflared): ANCLAJE.md, ESTRATEGIA.md y
+# SEGURIDAD.md. Van en el paquete, el README los enlaza y la web los cita; si se
+# ignoran, los enlaces del repositorio y de la portada quedan rotos.
 _mezcla_*/
 
 # La direccion viva del Core se GENERA y se publica en el sitio; no se versiona.
