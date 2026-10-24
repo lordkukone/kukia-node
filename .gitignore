@@ -60,3 +60,14 @@ logs/vigilante_web.json
 logs/disponibilidad_avisada.json
 logs/core_actual_cache.txt
 logs/*.err
+# Fuera del repositorio a proposito (24-10-2026): informes, medidas y
+# prototipos que se quedan en el disco de Kuki. Para volver a versionar
+# alguno, git add -f <fichero>.
+meta/
+medidas/
+cortafuegos/
+AUDITORIA_*
+INFORME_*
+KUKIA_*
+MEJORAS_*
+SESION_*

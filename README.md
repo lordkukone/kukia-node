@@ -446,4 +446,18 @@ proporcional al trabajo y no al orden de llegada (`tools/prueba_precio_minuto.py
 la telemetria no crece sin tope y el Core publica que codigo esta ejecutando en
 `/version` (`tools/huella_codigo.py`).
 
-Detalle, medidas y lo que queda pendiente: [INFORME_AUDITORIA_2026-10-23_ARREGLOS.md](INFORME_AUDITORIA_2026-10-23_ARREGLOS.md).
+Detalle, medidas y lo que queda pendiente: el informe de auditoria interno del
+proyecto, que no se publica en este repositorio.
+
+=================================================================
+
+## Derechos de autor
+
+(c) 2026 LordKukone. Todos los derechos reservados.
+
+El codigo de este repositorio se publica para que se pueda LEER y comprobar,
+no para reutilizarlo. No se concede permiso para copiarlo, modificarlo,
+redistribuirlo ni usarlo para operar otra red o servicio. El aviso completo
+esta en [LICENSE](LICENSE).
+
+KUKIA, KIA y el logo de la moneda son del autor.

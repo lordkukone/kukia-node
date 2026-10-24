@@ -1,0 +1,61 @@
+KUKIA - AVISO DE DERECHOS DE AUTOR (TODOS LOS DERECHOS RESERVADOS)
+Copyright (c) 2026 LordKukone. Todos los derechos reservados.
+=================================================================
+
+Titular: LordKukone (https://github.com/lordkukone)
+Obra: el proyecto KUKIA / KUKIA Network y todo su contenido: el Core
+(coordinator/), el minero (worker/), el ledger y las billeteras (ledger/), el
+validador (validator/), el panel (dashboard/), la web publica (docs/ y
+publico/), las herramientas (tools/), las anclas (anclas/), la documentacion,
+los textos, las imagenes, los videos y el nombre de la red.
+
+1. QUE SE PERMITE
+   Se permite LEER, descargar y estudiar el codigo a traves de GitHub para
+   comprobar como funciona el proyecto y verificar sus afirmaciones. Descargar
+   una copia para leerla no da ningun derecho sobre ella.
+
+2. QUE NO SE PERMITE
+   Sin permiso previo y por escrito del titular no se permite:
+   a) copiar, reproducir ni redistribuir el codigo, ni en todo ni en parte;
+   b) modificarlo ni crear obras derivadas;
+   c) publicarlo en otro repositorio, web o paquete;
+   d) usarlo para operar una red, un servicio, un producto o una moneda;
+   e) venderlo, alquilarlo, sublicenciarlo o incluirlo en otro producto;
+   f) quitar o cambiar este aviso ni los creditos del autor.
+
+3. MARCAS
+   Los nombres KUKIA, KIA y KUKIA Network, el logo de la moneda y la identidad
+   visual del proyecto son del titular. Este aviso no concede licencia de marca
+   alguna.
+
+4. SIN LICENCIA IMPLICITA
+   Publicar este codigo en un repositorio publico no concede ninguna licencia,
+   ni expresa ni implicita, por el simple hecho de estar visible. No se concede
+   permiso por uso, por costumbre ni por silencio.
+
+5. GARANTIAS
+   El software se entrega "TAL CUAL", sin garantia de ningun tipo, expresa o
+   implicita, incluida la de que sirva para un fin concreto. El titular no
+   responde de perdidas de datos, de KIA ni de danos derivados de su uso.
+
+6. PERMISOS
+   Para cualquier uso distinto de los permitidos en el punto 1, pide permiso al
+   titular por GitHub (https://github.com/lordkukone). Un permiso concedido
+   vale solo para lo que se conceda y por escrito.
+
+7. LEY APLICABLE
+   Este aviso se rige por la legislacion espanola y por los convenios
+   internacionales de propiedad intelectual que resulten de aplicacion.
+
+Este texto es un aviso de derechos de autor, no asesoramiento juridico.
+
+-----------------------------------------------------------------
+KUKIA - COPYRIGHT NOTICE (ALL RIGHTS RESERVED)
+Copyright (c) 2026 LordKukone. All rights reserved.
+
+Reading and studying the source code through GitHub is allowed in order to
+verify the project's claims. No permission is granted to copy, modify,
+redistribute, sublicense, sell or use this code to operate any network, service
+or product without the prior written consent of the copyright holder. The
+software is provided "AS IS", without warranty of any kind. This text is a
+copyright notice, not legal advice.
