@@ -94,6 +94,14 @@ EN_ZIP = [
     "ARRANCAR_PANEL.cmd",
     "GUIA_MINERO.md",
     "GUIA_VALIDADORES.md",
+    # 24-10-2026: la portada publica la API de cliente, pero el paquete no traia
+    # ni la guia ni el cliente de ejemplo: quien se descargaba el nodo no podia
+    # ser cliente. Misma regla que con el tunel (ver mas abajo): lo que un
+    # documento del paquete nombra, va dentro. La guia manda ejecutar
+    # tools/prueba_cliente.py para repetir las 40 comprobaciones, asi que va.
+    "GUIA_CLIENTE.md",
+    "tools/cliente_ejemplo.py",
+    "tools/prueba_cliente.py",
     "TUNEL_ESTABLE.md",
     "MINERO_EXTERNO.md",
     "SEGURIDAD.md",

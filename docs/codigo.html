@@ -87,7 +87,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>81fecd421523237cb117c9b05764ac48c66e2cecb993b5d2bc912613cf756e91</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>90508f58cac6c165adc32885b1667785cf584f368f867ab655cb880ea3f73219</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -12408,8 +12408,27 @@ PATRONES = {
     # Cualquiera de los dos túneles cuenta como &quot;el túnel&quot;: si no, al pasar a
     # dominio propio el guardia vería el rápido abierto aparte y no arrancaría
     # el suyo.
-    &quot;tunel&quot;: (&quot;tunel_estable.py&quot;, &quot;tunel_dominio.py&quot;),
+    &quot;tunel&quot;: (&quot;tunel_estable.py&quot;, &quot;tunel_dominio.py&quot;, &quot;tunel_ngrok.py&quot;),
 }
+
+
+def _tunel_ngrok() -&gt; bool:
+    &quot;&quot;&quot;True si hay un dominio de ngrok apuntado en ngrok_dominio.txt.
+
+    24/10/2026: el tunel rapido de Cloudflare cambia de nombre en cada arranque,
+    y un tunel CON NOMBRE de Cloudflare exige dominio propio (de pago). Ngrok da
+    un dominio fijo en su plan gratis, asi que si esta configurado manda el:
+    URL que no cambia sin gastar un euro. Si conviven las dos cosas, gana ngrok
+    porque el fichero de dominio es una decision explicita del usuario.
+    &quot;&quot;&quot;
+    registro = RAIZ / &quot;ngrok_dominio.txt&quot;
+    if not registro.exists():
+        return False
+    try:
+        return any(l.strip() and not l.startswith(&quot;#&quot;)
+                   for l in registro.read_text(encoding=&quot;utf-8&quot;).splitlines())
+    except Exception:
+        return False
 
 
 def _tunel_con_dominio() -&gt; bool:
@@ -12463,7 +12482,12 @@ def construir_hijos(sin_minero: bool) -&gt; dict:
         # Con dominio propio se usa el otro supervisor: es el mismo trabajo con
         # una URL que no caduca. Los dos escriben el MISMO docs/core_actual.json,
         # asi que el paquete descargado no nota el cambio.
-        script = &quot;tunel_dominio.py&quot; if _tunel_con_dominio() else &quot;tunel_estable.py&quot;
+        if _tunel_ngrok():
+            script = &quot;tunel_ngrok.py&quot;
+        elif _tunel_con_dominio():
+            script = &quot;tunel_dominio.py&quot;
+        else:
+            script = &quot;tunel_estable.py&quot;
         hijos[&quot;tunel&quot;] = Hijo(
             &quot;tunel&quot;, [_py(), &quot;-u&quot;, str(RAIZ / &quot;tools&quot; / script)],
             RAIZ, LOGS / &quot;tunel_stdout.log&quot;)
