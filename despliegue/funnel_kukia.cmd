@@ -9,6 +9,21 @@ cd /d "%~dp0"
 echo ============================================================
 echo  KUKIA - URL FIJA GRATIS (Tailscale Funnel)
 echo.
+echo  AVISO 24/10/2026: ESTE NO ES EL CAMINO POR DEFECTO.
+echo.
+echo  Funnel no se activa desde la consola: hace falta habilitar el atributo
+echo  "funnel" en el tailnet desde el panel de Tailscale con cuenta
+echo  (login.tailscale.com/f/funnel). Sin ese permiso, esto se queda en
+echo  "Funnel is not enabled on your tailnet".
+echo.
+echo  La via que funciona hoy y no pide permiso a nadie:
+echo      ARRANCAR_TUNEL.cmd   (tunel de Cloudflare, en la raiz del proyecto)
+echo.
+echo  Este .cmd se conserva por si algun dia se activa ese permiso. Ver
+echo  despliegue\LEEME.md, apartado A.
+echo.
+echo ------------------------------------------------------------
+echo.
 echo  Deja el Core publicado en una direccion que NO cambia,
 echo  sin abrir ni un puerto del router y sin comprar dominio.
 echo.

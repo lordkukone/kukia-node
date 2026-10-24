@@ -353,12 +353,14 @@ def fijar_canonico(destino: Path, canonico: str) -> int:
     tocadas = 0
     for ruta in sorted(destino.glob("*.html")):
         texto = ruta.read_text(encoding="utf-8")
-        def _sub(m):
-            actual = m.group(2)
-            partes = actual.split("://", 1)
-            resto = partes[1] if len(partes) == 2 else actual
-            camino = resto.split("/", 1)[1] if "/" in resto else ""
-            return m.group(1) + url_limpia(canonico, camino) + m.group(3)
+        def _sub(m, nombre=ruta.name):
+            # El destino sale del NOMBRE DEL FICHERO, no del camino que ya
+            # llevaba la etiqueta. Antes se reutilizaba el camino viejo y, si la
+            # canonica tiene subcarpeta (sitio de proyecto en GitHub Pages,
+            # https://usuario.github.io/kukia-node), la segunda pasada ponia
+            # /kukia-node/kukia-node/codigo. Con el nombre del fichero la
+            # operacion es idempotente y vale para dominio raiz y subcarpeta.
+            return m.group(1) + url_limpia(canonico, nombre) + m.group(3)
         nuevo, n = patron.subn(_sub, texto)
         if n and nuevo != texto:
             ruta.write_text(nuevo, encoding="utf-8")

@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<link rel="canonical" href="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/codigo">
+<link rel="canonical" href="https://lordkukone.github.io/kukia-node/codigo">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KUKIA | Codigo fuente completo - Transparencia total</title>
 <meta name="description" content="Codigo fuente completo de KUKIA: core, worker, billetera y dashboard. Todo legible y verificable.">
@@ -27,51 +27,51 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="KUKIA Network">
 <meta property="og:locale" content="es_ES">
-<meta property="og:url" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/codigo">
+<meta property="og:url" content="https://lordkukone.github.io/kukia-node/codigo">
 <meta property="og:title" content="KUKIA | Codigo fuente completo - Transparencia total">
 <meta property="og:description" content="Codigo fuente completo de KUKIA: core, worker, billetera y dashboard. Todo legible y verificable.">
-<meta property="og:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="KUKIA | Codigo fuente completo - Transparencia total">
 <meta name="twitter:description" content="Codigo fuente completo de KUKIA: core, worker, billetera y dashboard. Todo legible y verificable.">
-<meta name="twitter:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
+<meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
 <script type="application/ld+json">
 {
  "@context": "https://schema.org",
  "@graph": [
   {
    "@type": "WebSite",
-   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio",
-   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "@id": "https://lordkukone.github.io/kukia-node/#sitio",
+   "url": "https://lordkukone.github.io/kukia-node/",
    "name": "KUKIA Network",
    "alternateName": "KUKIA",
    "inLanguage": "es",
    "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
    "publisher": {
-    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion"
+    "@id": "https://lordkukone.github.io/kukia-node/#organizacion"
    }
   },
   {
    "@type": "Organization",
-   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion",
+   "@id": "https://lordkukone.github.io/kukia-node/#organizacion",
    "name": "KUKIA Network",
-   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
+   "url": "https://lordkukone.github.io/kukia-node/",
    "logo": {
     "@type": "ImageObject",
-    "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg",
+    "url": "https://lordkukone.github.io/kukia-node/moneda.jpg",
     "width": 512,
     "height": 512
    }
   },
   {
    "@type": "WebPage",
-   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/codigo#pagina",
-   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/codigo",
+   "@id": "https://lordkukone.github.io/kukia-node/codigo#pagina",
+   "url": "https://lordkukone.github.io/kukia-node/codigo",
    "name": "KUKIA | Codigo fuente completo - Transparencia total",
    "description": "Codigo fuente completo de KUKIA: core, worker, billetera y dashboard. Todo legible y verificable.",
    "inLanguage": "es",
    "isPartOf": {
-    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio"
+    "@id": "https://lordkukone.github.io/kukia-node/#sitio"
    }
   }
  ]
@@ -87,7 +87,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>7549e8624bdef21092526e55ee460585854f84fff82275e7414c20ec54811745</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>81fecd421523237cb117c9b05764ac48c66e2cecb993b5d2bc912613cf756e91</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -187,6 +187,18 @@ if SELLOS is not None:
 
 MAX_SUPPLY = 100_000_000          # techo fijo 100M
 REWARD_BASE = 10.0                # KIA por tarea base
+
+# --- Puerta de cliente (24-10-2026) ---
+# Cuenta interna donde se guarda el dinero del cliente hasta que la tarea se
+# completa. NO es una billetera: es una cuenta del ledger, y el titular no
+# tiene clave privada, asi que solo el Core puede moverla.
+CUENTA_ESCROW = os.environ.get(&quot;KUKIA_ESCROW&quot;, &quot;KUKIA_ESCROW&quot;)
+# Tope por defecto si el cliente no dice cuanto autoriza. Evita que una firma
+# vieja o un error de script vacie la billetera del cliente con una tarea cara.
+CLIENTE_TOPE_DEFECTO = abs(float(os.environ.get(&quot;KUKIA_CLIENTE_TOPE&quot;, &quot;25&quot;)))
+# Cuantas tareas puede tener en cola un cliente a la vez. Sin esto, un cliente
+# (o quien robe su clave) puede encolar mil y bloquear la cola de los mineros.
+CLIENTE_MAX_EN_COLA = max(1, int(os.environ.get(&quot;KUKIA_CLIENTE_MAX_EN_COLA&quot;, &quot;8&quot;)))
 # --- Bloque genesis fundacional (una sola vez) ---
 GENESIS_DIR = &quot;KUK77D72508BD940C9BA969B0402A3CF1F9679BE3&quot;   # wallet fundador (Kuki)
 GENESIS_MONTO = 15_000_000.0      # 15M reservados al fundador dentro del techo de 100M
@@ -563,6 +575,13 @@ def schema():
                 &quot;total REAL NOT NULL DEFAULT 0)&quot;)
     con.execute(&quot;CREATE TABLE IF NOT EXISTS registros(id INTEGER PRIMARY KEY AUTOINCREMENT, &quot;
                 &quot;nombre TEXT, email TEXT, gpu TEXT, tops TEXT, ceder TEXT, ip TEXT, ts TEXT)&quot;)
+    # CLIENTES (24-10-2026): la puerta de pago. Cada cliente tiene una clave de
+    # API (se guarda SOLO el hash) y una direccion KUK que firma los prepagos.
+    # Sin direccion no puede pagar, y sin pago no se le encola nada.
+    con.execute(&quot;CREATE TABLE IF NOT EXISTS clientes(id TEXT PRIMARY KEY, nombre TEXT, &quot;
+                &quot;token_hash TEXT UNIQUE, direccion TEXT, creado TEXT, activo INT DEFAULT 1, &quot;
+                &quot;tareas INT DEFAULT 0, gastado REAL DEFAULT 0)&quot;)
+    con.execute(&quot;CREATE INDEX IF NOT EXISTS idx_clientes_token ON clientes(token_hash)&quot;)
     # Cupo anti-Sybil de registros (IP + clave publica), persistente.
     con.execute(&quot;CREATE TABLE IF NOT EXISTS registros_nodo(ip TEXT, clave_publica TEXT, ts REAL)&quot;)
     con.execute(&quot;CREATE INDEX IF NOT EXISTS idx_registros_nodo ON registros_nodo(ip, ts)&quot;)
@@ -594,6 +613,14 @@ def schema():
         &quot;ALTER TABLE ledger ADD COLUMN hash_prev TEXT DEFAULT &#x27;&#x27;&quot;,
         &quot;ALTER TABLE ledger ADD COLUMN hash TEXT DEFAULT &#x27;&#x27;&quot;,
         &quot;ALTER TABLE registros ADD COLUMN ref TEXT DEFAULT &#x27;&#x27;&quot;,
+        # Puerta de cliente: quien pidio la tarea, cuanto dejo en deposito y el
+        # nonce del prepago (unico, para que no se pueda reutilizar la firma).
+        &quot;ALTER TABLE tareas ADD COLUMN cliente TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE tareas ADD COLUMN prepago REAL DEFAULT 0&quot;,
+        &quot;ALTER TABLE tareas ADD COLUMN nonce_cliente TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE tareas ADD COLUMN precio_cliente REAL DEFAULT 0&quot;,
+        # Lo que se pago de verdad al cerrar (puede ser menos que el deposito).
+        &quot;ALTER TABLE tareas ADD COLUMN pagado REAL DEFAULT 0&quot;,
         &quot;ALTER TABLE nodos ADD COLUMN direccion_cobro TEXT DEFAULT &#x27;&#x27;&quot;,
         # Ultima vez que el nodo pidio/entrego trabajo: para no contar en la
         # dificultad los nodos muertos (TOPS autodeclarados y fantasma).
@@ -1019,6 +1046,134 @@ def _asiento(tarea_id, nodo_id, kuki, motivo):
                 &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+excluded.valor&quot;,
                 (float(kuki),))
     return h
+
+# ============================================================
+#  PUERTA DE CLIENTE (24-10-2026)
+#
+#  Un cliente es quien PIDE trabajo: la otra mitad de la red, la que faltaba.
+#  Reglas de diseno, para que no rompan lo que ya funciona:
+#    - La clave de API se guarda hasheada; el token en claro se ensena UNA vez.
+#    - Pagar exige FIRMA Ed25519 de una billetera KUK, no solo el token: si te
+#      roban el token, no te pueden gastar el saldo.
+#    - El dinero del cliente se retiene ANTES de encolar (escrow). El minero
+#      cobra de ahi, no de la emision: un cliente que paga NO infla el
+#      suministro, porque los dos asientos se compensan.
+#    - Si la tarea falla o cuesta menos, el sobrante vuelve al cliente.
+# ============================================================
+
+def _hash_token(tok: str) -&gt; str:
+    return hashlib.sha256((tok or &quot;&quot;).strip().encode()).hexdigest()
+
+
+def _cliente_por_token(tok: str):
+    &quot;&quot;&quot;Fila del cliente dueno de ese token, o None. Compara por hash.&quot;&quot;&quot;
+    if not tok or len(tok) &gt; 200:
+        return None
+    h = _hash_token(tok)
+    return con.execute(&quot;SELECT * FROM clientes WHERE token_hash=? AND activo=1&quot;, (h,)).fetchone()
+
+
+def _crear_cliente(nombre: str, direccion: str) -&gt; dict:
+    &quot;&quot;&quot;Da de alta un cliente y devuelve el token EN CLARO una unica vez.
+
+    El token no se puede recuperar despues: en la base solo queda su sha256.
+    &quot;&quot;&quot;
+    cid = uuid.uuid4().hex[:12]
+    token = &quot;kia_&quot; + secrets.token_urlsafe(32)
+    d = (direccion or &quot;&quot;).strip().upper()
+    if d and not direccion_valida(d):
+        raise HTTPException(400, &quot;direccion invalida (formato KUK + 38 hex)&quot;)
+    # Una billetera, un cliente: dos tokens sobre el mismo saldo acabarian en
+    # dos cupos de cola distintos y nadie sabria quien gasto que.
+    if d and con.execute(&quot;SELECT 1 FROM clientes WHERE direccion=? AND activo=1&quot;, (d,)).fetchone():
+        raise HTTPException(409, &quot;esa billetera ya tiene un cliente activo&quot;)
+    with _escritura():
+        con.execute(&quot;INSERT INTO clientes(id,nombre,token_hash,direccion,creado,activo) &quot;
+                    &quot;VALUES(?,?,?,?,?,1)&quot;,
+                    (cid, (nombre or &quot;&quot;)[:80], _hash_token(token), d, time.ctime()))
+    return {&quot;id&quot;: cid, &quot;nombre&quot;: (nombre or &quot;&quot;)[:80], &quot;direccion&quot;: d,
+            &quot;token&quot;: token, &quot;aviso&quot;: &quot;Guarda el token: no se puede volver a ver.&quot;}
+
+
+def _coste_tarea_cliente(tipo: str, params: dict) -&gt; float:
+    &quot;&quot;&quot;Lo que costaria esta tarea para un cliente, antes de ejecutarla.
+
+    Usa la misma tarifa que se paga a los mineros, con tier 1: el cliente paga
+    el trabajo que cuesta, sin el multiplicador de potencia de un nodo
+    concreto (ese nodo no ha hecho nada todavia).
+    &quot;&quot;&quot;
+    try:
+        # SIMULAR: consultar el precio no puede gastar el presupuesto del
+        # minuto ni mover la bolsa. Antes, pedir precio dejaba la tarea a 0.
+        kuki, _ = pago_por_trabajo(tipo, params, 1.0, simular=True)
+        return round(max(0.0, float(kuki)), 6)
+    except Exception:
+        return 0.0
+
+
+def _retener_prepago(tid: str, cliente: str, monto: float) -&gt; None:
+    &quot;&quot;&quot;Mueve el dinero del cliente a la cuenta de escrow. Debe ir en transaccion.&quot;&quot;&quot;
+    _asiento(tid, cliente, -monto, &quot;prepago cliente&quot;)
+    _asiento(tid, CUENTA_ESCROW, monto, &quot;prepago cliente&quot;)
+
+
+def _pagar_tarea_de_cliente(tid: str, pagos, cliente: str, prepago: float) -&gt; tuple:
+    &quot;&quot;&quot;Paga desde el escrow del cliente a uno o varios mineros y devuelve el sobrante.
+
+    `pagos` es una lista de (nodo_id, kuki). Dos asientos por movimiento,
+    siempre compensados: el suministro total NO cambia, porque este dinero ya
+    existia (lo puso el cliente). Si lo que hay que pagar supera el deposito,
+    se reparte el deposito en proporcion y se avisa; nunca se emite de mas para
+    tapar el hueco.
+    &quot;&quot;&quot;
+    pagos = [(n, round(max(0.0, float(k)), 6)) for n, k in pagos if float(k) &gt; 0]
+    total = round(sum(k for _, k in pagos), 6)
+    deposito = round(max(0.0, float(prepago)), 6)
+    if total &lt;= 0 or deposito &lt;= 0:
+        if deposito &gt; 0:
+            _asiento(tid, CUENTA_ESCROW, -deposito, &quot;devolucion deposito&quot;)
+            _asiento(tid, cliente, deposito, &quot;devolucion deposito&quot;)
+            con.execute(&quot;UPDATE tareas SET prepago=0 WHERE id=?&quot;, (tid,))
+        return 0.0, {&quot;pago&quot;: 0.0, &quot;sobrante_devuelto&quot;: deposito}
+    factor = min(1.0, deposito / total)
+    pagado = 0.0
+    for nodo_id, kuki in pagos:
+        parte = round(kuki * factor, 6)
+        if parte &lt;= 0:
+            continue
+        _asiento(tid, CUENTA_ESCROW, -parte, &quot;pago a minero (cliente)&quot;)
+        _asiento(tid, _cuenta_de(nodo_id), parte, &quot;trabajo verificado&quot;)
+        pagado = round(pagado + parte, 6)
+    sobrante = round(max(0.0, deposito - pagado), 6)
+    if sobrante &gt; 0:
+        _asiento(tid, CUENTA_ESCROW, -sobrante, &quot;devolucion sobrante&quot;)
+        _asiento(tid, cliente, sobrante, &quot;devolucion sobrante&quot;)
+    # El deposito ya se consumio: a 0 para que una segunda pasada no devuelva
+    # dos veces. `pagado` guarda lo que cobraron los mineros, para el recibo.
+    con.execute(&quot;UPDATE tareas SET prepago=0, pagado=? WHERE id=?&quot;, (pagado, tid))
+    return pagado, {&quot;pago&quot;: pagado, &quot;sobrante_devuelto&quot;: sobrante,
+                    &quot;tope_alcanzado&quot;: bool(total &gt; pagado + 1e-9)}
+
+
+def _devolver_prepago(tid: str, motivo: str = &quot;tarea fallida&quot;) -&gt; float:
+    &quot;&quot;&quot;Devuelve al cliente lo retenido de una tarea que NO se llego a pagar.
+
+    Pone `prepago` a 0 en el mismo movimiento: una tarea cerrada dos veces no
+    puede devolver el dinero dos veces. Se llama dentro de la transaccion que
+    cierra la tarea, igual que `_pagar_tarea_de_cliente` en la que la paga.
+    &quot;&quot;&quot;
+    f = con.execute(&quot;SELECT cliente,prepago FROM tareas WHERE id=?&quot;, (tid,)).fetchone()
+    if f is None:
+        return 0.0
+    cliente = (f[&quot;cliente&quot;] or &quot;&quot;).strip().upper()
+    deposito = round(max(0.0, float(f[&quot;prepago&quot;] or 0.0)), 6)
+    if not cliente or deposito &lt;= 0:
+        return 0.0
+    con.execute(&quot;UPDATE tareas SET prepago=0 WHERE id=?&quot;, (tid,))
+    _asiento(tid, CUENTA_ESCROW, -deposito, &quot;devolucion prepago&quot;)
+    _asiento(tid, cliente, deposito, f&quot;devolucion prepago ({motivo})&quot;)
+    return deposito
+
 
 def genesis():
     &quot;&quot;&quot;Asignacion fundacional: se ejecuta UNA sola vez (idempotente).&quot;&quot;&quot;
@@ -1606,6 +1761,30 @@ class TareaIn(BaseModel):
     prioridad: float = 0.0  # dentro de la cola, mayor antes
     vram_min: int = 0     # VRAM minima (GB) que exige la tarea
 
+
+class ClienteAltaIn(BaseModel):
+    &quot;&quot;&quot;Alta de un cliente (solo el administrador del Core).&quot;&quot;&quot;
+    nombre: str
+    direccion: str = &quot;&quot;   # su billetera KUK... (la que firma los prepagos)
+
+
+class ClienteTareaIn(BaseModel):
+    &quot;&quot;&quot;Trabajo que pide un cliente, ya pagado por adelantado.
+
+    La firma es del cliente sobre
+        cliente:&lt;nonce&gt;:&lt;tipo&gt;:&lt;sha256(params ordenados)&gt;:&lt;tope&gt;
+    con la clave privada de la billetera `direccion`. Asi el token de API no
+    basta para gastar: hace falta la clave.
+    &quot;&quot;&quot;
+    tipo: str
+    params: dict = {}
+    nonce: str                     # unico por peticion (anti-repeticion)
+    tope: float = 0.0              # KIA maximos que autoriza para esta tarea
+    clave_publica: str = &quot;&quot;
+    firma: str = &quot;&quot;
+    vram_min: int = 0
+
+
 def tier(vram: int) -&gt; float:
     return TIER_MULT.get(vram, 1.0)
 
@@ -2152,10 +2331,17 @@ def liberar_atascadas(max_abandonos: int = MAX_ABANDONOS, forzar: bool = False):
         except Exception:
             return (0, 0)
         try:
+            _a_cerrar = [r[&quot;id&quot;] for r in con.execute(
+                &quot;SELECT id FROM tareas WHERE estado=&#x27;ejecutando&#x27; AND COALESCE(asignado,0) &lt; ? &quot;
+                &quot;AND COALESCE(intentos,0)+1 &gt;= ?&quot;, (limite, max_abandonos)).fetchall()]
             cerradas = con.execute(
                 &quot;UPDATE tareas SET estado=&#x27;fallo&#x27;, fin=? &quot;
                 &quot;WHERE estado=&#x27;ejecutando&#x27; AND COALESCE(asignado,0) &lt; ? &quot;
                 &quot;AND COALESCE(intentos,0)+1 &gt;= ?&quot;, (time.ctime(), limite, max_abandonos))
+            # Si esas tareas eran de un cliente, el dinero retenido vuelve. Sin
+            # esto, un nodo que abandona se queda el dinero del cliente.
+            for _tid in _a_cerrar:
+                _devolver_prepago(_tid, &quot;nodo abandonado&quot;)
             recuperadas = con.execute(
                 &quot;UPDATE tareas SET estado=&#x27;queued&#x27;, nodo_id=NULL, asignado=NULL, &quot;
                 &quot;intentos=COALESCE(intentos,0)+1 &quot;
@@ -2612,12 +2798,24 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                 # Contador historico: sobrevive al archivado de tareas viejas.
                 con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;tareas_ok_total&#x27;,1) &quot;
                             &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+1&quot;)
-                _asiento(tid, _cuenta_de(nodo_id), kuki, &quot;trabajo verificado&quot;)
+                # CLIENTE: el dinero sale del deposito del cliente, no de la
+                # emision. Un encargo pagado no puede inflar el suministro.
+                _de_cliente = (task2[&quot;cliente&quot;] or &quot;&quot;).strip()
+                if _de_cliente:
+                    _pagos = [(nodo_id, kuki)]
+                    if kuki_rep &gt; 0 and replica is not None:
+                        _pagos.append((replica[&quot;nodo_id&quot;], kuki_rep))
+                    _pagado, _info_c = _pagar_tarea_de_cliente(
+                        tid, _pagos, _de_cliente, float(task2[&quot;prepago&quot;] or 0.0))
+                    info_pago.update(_info_c)
+                else:
+                    _asiento(tid, _cuenta_de(nodo_id), kuki, &quot;trabajo verificado&quot;)
                 if kuki_rep &gt; 0 and replica is not None:
                     # El verificador cobra su parte: la red pago el mismo total
                     # por tarea, repartido entre los dos que la resolvieron.
-                    _asiento(tid, _cuenta_de(replica[&quot;nodo_id&quot;]), kuki_rep,
-                             &quot;verificacion redundante&quot;)
+                    if not _de_cliente:
+                        _asiento(tid, _cuenta_de(replica[&quot;nodo_id&quot;]), kuki_rep,
+                                 &quot;verificacion redundante&quot;)
                     con.execute(&quot;UPDATE nodos SET tareas_ok=tareas_ok+1, &quot;
                                 &quot;reputacion=min(5,reputacion+0.05) WHERE id=?&quot;,
                                 (replica[&quot;nodo_id&quot;],))
@@ -2651,8 +2849,15 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                             (replica[&quot;nodo_id&quot;],))
                 con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;tareas_ok_total&#x27;,1) &quot;
                             &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+1&quot;)
-                _asiento(tid, _cuenta_de(replica[&quot;nodo_id&quot;]), kuki_r,
-                         &quot;trabajo verificado (replica)&quot;)
+                _de_cliente = (task2[&quot;cliente&quot;] or &quot;&quot;).strip()
+                if _de_cliente:
+                    _pagado, _info_c = _pagar_tarea_de_cliente(
+                        tid, [(replica[&quot;nodo_id&quot;], kuki_r)], _de_cliente,
+                        float(task2[&quot;prepago&quot;] or 0.0))
+                    info_pago.update(_info_c)
+                else:
+                    _asiento(tid, _cuenta_de(replica[&quot;nodo_id&quot;]), kuki_r,
+                             &quot;trabajo verificado (replica)&quot;)
                 con.execute(&quot;UPDATE tareas_replica SET estado=&#x27;pagada&#x27; WHERE tarea_id=?&quot;,
                             (tid,))
                 _castigar_nodo(tid, nodo_id)
@@ -2674,6 +2879,8 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
                 if intentos &gt;= MAX_FALLOS:
                     con.execute(&quot;UPDATE tareas SET estado=&#x27;fallo&#x27;, fin=?, intentos=?, nodos_intento=? WHERE id=?&quot;,
                                 (time.ctime(), intentos, lista, tid))
+                    # El cliente no paga lo que no se pudo verificar.
+                    _devolver_prepago(tid, &quot;resultado no verificable&quot;)
                 else:
                     con.execute(&quot;UPDATE tareas SET estado=&#x27;queued&#x27;, nodo_id=NULL, asignado=NULL, &quot;
                                 &quot;intentos=?, nodos_intento=? WHERE id=?&quot;, (intentos, lista, tid))
@@ -3515,7 +3722,7 @@ def _redondear_kia(x: float) -&gt; float:
     return math.floor(float(x) * 1e9) / 1e9
 
 
-def pago_plano(tier: float = 1.0) -&gt; tuple:
+def pago_plano(tier: float = 1.0, simular: bool = False) -&gt; tuple:
     &quot;&quot;&quot;Pago de calendario (modo plano) DENTRO de la bolsa del minuto.
 
     POR QUE EXISTE (23-10-2026): el modo plano era la fuga de la bolsa. Con
@@ -3533,15 +3740,24 @@ def pago_plano(tier: float = 1.0) -&gt; tuple:
     pago, info = recompensa_pago(tier)
     disp = max(0.0, presu - pagado_en_minuto())
     pagado = _redondear_kia(min(pago, disp))
-    _anotar_pagado(pagado)
+    # simular=True: valorar sin gastar la bolsa (lo usa la puerta de cliente
+    # para dar un precio ANTES de cobrar). Consultar un precio no es pagar.
+    if not simular:
+        _anotar_pagado(pagado)
     return pagado, dict(info or {}, modo_pago=&quot;plano&quot;, fuente_precio=&quot;plano&quot;,
                         bolsa_kia_min=round(presu, 6),
                         pagado_por_bolsa=round(pagado, 9),
                         recortado_por_bolsa=round(max(0.0, pago - pagado), 9))
 
 
-def pago_por_trabajo(tipo: str, params, tier: float = 1.0) -&gt; tuple:
-    &quot;&quot;&quot;KIA que vale una tarea ya verificada, por los FLOPs que ha costado.&quot;&quot;&quot;
+def pago_por_trabajo(tipo: str, params, tier: float = 1.0,
+                     simular: bool = False) -&gt; tuple:
+    &quot;&quot;&quot;KIA que vale una tarea ya verificada, por los FLOPs que ha costado.
+
+    `simular=True` calcula lo que costaria SIN anotarlo en la bolsa del minuto:
+    es lo que necesita un presupuesto o un precio al cliente. Pagar de verdad
+    es `simular=False` (lo que hace `pago_de_tarea`).
+    &quot;&quot;&quot;
     restante = MAX_SUPPLY - supply_emitido()
     if restante &lt;= 0:
         return 0.0, {&quot;agotado&quot;: True, &quot;modo_pago&quot;: &quot;potencia&quot;}
@@ -3556,7 +3772,7 @@ def pago_por_trabajo(tipo: str, params, tier: float = 1.0) -&gt; tuple:
         # calendario, con el minuto cortado en un presupuesto. Aqui si manda el
         # orden de llegada: sin precio hay con que repartir por trabajo. Va por
         # `pago_plano` para no tener dos puertas a la bolsa.
-        pagado, info = pago_plano(tier)
+        pagado, info = pago_plano(tier, simular=simular)
         info[&quot;modo_pago&quot;] = &quot;plano (sin medida de red)&quot;
         info[&quot;pagado_por_fusible&quot;] = round(pagado, 9)
         return pagado, info
@@ -3570,7 +3786,8 @@ def pago_por_trabajo(tipo: str, params, tier: float = 1.0) -&gt; tuple:
     recortado = max(0.0, pago - disp)
     if recortado &gt; 0:
         pago = _redondear_kia(disp)
-    _anotar_pagado(pago)
+    if not simular:
+        _anotar_pagado(pago)
     return pago, {&quot;modo_pago&quot;: &quot;potencia&quot;,
                   &quot;gflop_tarea&quot;: round(gl, 6),
                   &quot;gflop_cobrados&quot;: round(cobrable, 6),
@@ -4618,6 +4835,186 @@ def red_telemetria():
         vistas.add(clave)
         salida.append(r)
     return {&quot;telemetria&quot;: salida}
+
+# ============================================================
+#  PUERTA DE CLIENTE - endpoints
+# ============================================================
+
+def exigir_cliente(x_cliente_token: str = Header(default=&quot;&quot;, alias=&quot;X-Cliente-Token&quot;)):
+    &quot;&quot;&quot;Dependencia: el token tiene que corresponder a un cliente activo.&quot;&quot;&quot;
+    c = _cliente_por_token(x_cliente_token)
+    if c is None:
+        raise HTTPException(401, &quot;token de cliente invalido (X-Cliente-Token)&quot;)
+    return c
+
+
+@app.post(&quot;/admin/clientes&quot;)
+def admin_alta_cliente(c: ClienteAltaIn, _ok: None = Depends(exigir_admin)):
+    &quot;&quot;&quot;Da de alta un cliente. Devuelve el token UNA sola vez.&quot;&quot;&quot;
+    return _crear_cliente(c.nombre, c.direccion)
+
+
+@app.get(&quot;/admin/clientes&quot;)
+def admin_lista_clientes(_ok: None = Depends(exigir_admin)):
+    &quot;&quot;&quot;Lista de clientes. Nunca devuelve el token ni su hash.&quot;&quot;&quot;
+    filas = con.execute(&quot;SELECT id,nombre,direccion,creado,activo,tareas,gastado &quot;
+                        &quot;FROM clientes ORDER BY creado DESC&quot;).fetchall()
+    return {&quot;clientes&quot;: [dict(f) for f in filas]}
+
+
+@app.get(&quot;/cliente/precio&quot;)
+def cliente_precio(tipo: str, _c=Depends(exigir_cliente)):
+    &quot;&quot;&quot;Cuanto costaria una tarea de este tipo (para saber que tope firmar).
+
+    El precio final depende de los params; aqui se da el de una tarea minima
+    del tipo pedido, que es el suelo que hay que autorizar.
+    &quot;&quot;&quot;
+    if tipo not in (&quot;checksum&quot;, &quot;matriz&quot;, &quot;inferencia&quot;, &quot;embeddings&quot;,
+                    &quot;lote_embeddings&quot;, &quot;difusion_calor&quot;):
+        raise HTTPException(400, &quot;tipo de tarea no soportado&quot;)
+    suelo = _coste_tarea_cliente(tipo, {} if tipo != &quot;checksum&quot; else {&quot;n&quot;: 10})
+    return {&quot;tipo&quot;: tipo, &quot;coste_minimo&quot;: suelo,
+            &quot;moneda&quot;: &quot;KIA&quot;, &quot;nota&quot;: &quot;el coste real depende de los params; &quot;
+                                      &quot;firma un tope igual o mayor&quot;}
+
+
+@app.get(&quot;/cliente/saldo&quot;)
+def cliente_saldo(c=Depends(exigir_cliente)):
+    &quot;&quot;&quot;Saldo disponible y cuanto tiene retenido en tareas en curso.&quot;&quot;&quot;
+    d = (c[&quot;direccion&quot;] or &quot;&quot;).strip().upper()
+    if not d:
+        raise HTTPException(400, &quot;este cliente no tiene billetera asociada&quot;)
+    fila = con.execute(&quot;SELECT total FROM saldos_cuenta WHERE cuenta=?&quot;, (d,)).fetchone()
+    saldo = float((fila[&quot;total&quot;] if fila else 0.0) or 0.0)
+    ret = con.execute(&quot;SELECT COALESCE(SUM(prepago),0) s FROM tareas &quot;
+                      &quot;WHERE cliente=? AND estado IN (&#x27;queued&#x27;,&#x27;ejecutando&#x27;)&quot;, (d,)).fetchone()
+    return {&quot;direccion&quot;: d, &quot;saldo&quot;: round(saldo, 6),
+            &quot;retenido&quot;: round(float(ret[&quot;s&quot;] or 0.0), 6),
+            &quot;tareas&quot;: int(c[&quot;tareas&quot;] or 0)}
+
+
+@app.post(&quot;/cliente/tareas&quot;)
+def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
+    &quot;&quot;&quot;El cliente pide trabajo: cobra por adelantado y encola.
+
+    Orden deliberado:
+      1) validar params (barato, no toca la base)
+      2) calcular el coste con la tarifa de la red
+      3) comprobar la FIRMA de la billetera del cliente
+      4) comprobar nonce, cupo de cola y saldo
+      5) en una sola transaccion: retener el dinero y encolar
+
+    La firma va sobre `cliente:&lt;nonce&gt;:&lt;tipo&gt;:&lt;sha256(params)&gt;:&lt;tope&gt;`; incluye
+    el tope para que nadie pueda cambiar el importe autorizado despues.
+    &quot;&quot;&quot;
+    dir_cliente = (c[&quot;direccion&quot;] or &quot;&quot;).strip().upper()
+    if not direccion_valida(dir_cliente):
+        raise HTTPException(400, &quot;el cliente no tiene billetera: pide al Core que la asocie&quot;)
+    params = validar_params(t.tipo, dict(t.params or {}))
+    coste = _coste_tarea_cliente(t.tipo, params)
+    tope = float(t.tope if t.tope and t.tope &gt; 0 else CLIENTE_TOPE_DEFECTO)
+    if not math.isfinite(tope) or tope &lt;= 0:
+        raise HTTPException(400, &quot;tope invalido&quot;)
+    if coste &gt; tope:
+        raise HTTPException(402, f&quot;tope insuficiente: esta tarea cuesta {coste} KIA y &quot;
+                                 f&quot;autorizaste {tope}. Sube el tope y firma de nuevo&quot;)
+    if not t.nonce or len(t.nonce) &gt; 64:
+        raise HTTPException(400, &quot;nonce invalido&quot;)
+    # 3) FIRMA del cliente sobre el tope y los params
+    pub = (t.clave_publica or &quot;&quot;).strip().lower()
+    if not pubkey_valida(pub) or direccion_de_pubkey(pub) != dir_cliente:
+        raise HTTPException(401, &quot;la clave_publica no corresponde a la billetera del cliente&quot;)
+    if not t.firma:
+        raise HTTPException(401, &quot;falta firma del cliente&quot;)
+    hash_params = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
+    mensaje = f&quot;cliente:{t.nonce}:{t.tipo}:{hash_params}:{tope}&quot;
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
+            bytes.fromhex(t.firma), mensaje.encode())
+    except Exception:
+        raise HTTPException(401, &quot;firma del cliente invalida&quot;)
+    if LEDGER_ROTO:
+        raise HTTPException(503, &quot;ledger alterado: no se aceptan encargos nuevos&quot;)
+    # 5) transaccion unica: retener y encolar
+    with _pago_lock:
+        try:
+            con.execute(&quot;BEGIN IMMEDIATE&quot;)
+        except Exception:
+            raise HTTPException(503, &quot;Core ocupado, reintentar&quot;)
+        try:
+            # nonce ya usado por este cliente (firma reutilizada)
+            if con.execute(&quot;SELECT 1 FROM tareas WHERE cliente=? AND nonce_cliente=?&quot;,
+                           (dir_cliente, t.nonce)).fetchone():
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(409, &quot;nonce ya usado por este cliente&quot;)
+            en_cola = con.execute(&quot;SELECT COUNT(*) n FROM tareas WHERE cliente=? AND &quot;
+                                  &quot;estado IN (&#x27;queued&#x27;,&#x27;ejecutando&#x27;)&quot;,
+                                  (dir_cliente,)).fetchone()[&quot;n&quot;]
+            if int(en_cola) &gt;= CLIENTE_MAX_EN_COLA:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(429, f&quot;ya tienes {en_cola} tareas en curso &quot;
+                                         f&quot;(maximo {CLIENTE_MAX_EN_COLA}); espera a que acaben&quot;)
+            saldo = con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?&quot;,
+                                (dir_cliente,)).fetchone()[&quot;s&quot;]
+            if float(saldo or 0.0) &lt; coste:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(402, f&quot;saldo insuficiente: necesitas {coste} KIA y &quot;
+                                         f&quot;tienes {round(float(saldo or 0.0), 6)}&quot;)
+            tid = uuid.uuid4().hex[:12]
+            con.execute(&quot;INSERT INTO tareas(id,tipo,params,estado,creado,cola,campana,&quot;
+                        &quot;prioridad,vram_min,cliente,prepago,nonce_cliente,precio_cliente) &quot;
+                        &quot;VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)&quot;,
+                        (tid, t.tipo, json.dumps(params), &quot;queued&quot;, time.ctime(),
+                         &quot;B&quot;, &quot;cliente&quot;, 0.0, int(t.vram_min or 0),
+                         dir_cliente, coste, t.nonce, coste))
+            _retener_prepago(tid, dir_cliente, coste)
+            con.execute(&quot;UPDATE clientes SET tareas=tareas+1, gastado=gastado+? WHERE id=?&quot;,
+                        (coste, c[&quot;id&quot;]))
+            con.commit()
+        except HTTPException:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            raise
+        except Exception as e:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            raise HTTPException(500, f&quot;no se pudo encolar: {type(e).__name__}&quot;)
+    return {&quot;tarea_id&quot;: tid, &quot;estado&quot;: &quot;queued&quot;, &quot;tipo&quot;: t.tipo,
+            &quot;coste&quot;: coste, &quot;params&quot;: params,
+            &quot;recoger_en&quot;: f&quot;/cliente/tareas/{tid}&quot;}
+
+
+@app.get(&quot;/cliente/tareas/{tid}&quot;)
+def cliente_ver_tarea(tid: str, c=Depends(exigir_cliente)):
+    &quot;&quot;&quot;Estado y resultado de una tarea del cliente. Solo de las suyas.&quot;&quot;&quot;
+    dir_cliente = (c[&quot;direccion&quot;] or &quot;&quot;).strip().upper()
+    t = con.execute(&quot;SELECT * FROM tareas WHERE id=?&quot;, (tid,)).fetchone()
+    if t is None:
+        raise HTTPException(404, &quot;tarea no encontrada&quot;)
+    if (t[&quot;cliente&quot;] or &quot;&quot;).strip().upper() != dir_cliente:
+        # No se distingue &quot;no existe&quot; de &quot;no es tuya&quot;: no se filtra informacion.
+        raise HTTPException(404, &quot;tarea no encontrada&quot;)
+    estado = t[&quot;estado&quot;]
+    salida = {&quot;tarea_id&quot;: tid, &quot;estado&quot;: estado, &quot;tipo&quot;: t[&quot;tipo&quot;],
+              &quot;creado&quot;: t[&quot;creado&quot;], &quot;coste&quot;: float(t[&quot;precio_cliente&quot;] or 0.0),
+              &quot;prepago&quot;: float(t[&quot;prepago&quot;] or 0.0),
+              &quot;pagado&quot;: float(t[&quot;pagado&quot;] or 0.0)}
+    if estado == &quot;ok&quot;:
+        salida[&quot;resultado&quot;] = t[&quot;metrica&quot;]
+        salida[&quot;hash&quot;] = t[&quot;hash&quot;]
+        salida[&quot;verificado&quot;] = bool(t[&quot;verificado&quot;])
+        salida[&quot;terminado&quot;] = t[&quot;fin&quot;]
+    elif estado == &quot;fallo&quot;:
+        salida[&quot;error&quot;] = &quot;la tarea no se pudo verificar&quot;
+    else:
+        salida[&quot;espera&quot;] = &quot;todavia en cola o ejecutandose&quot;
+    return salida
+
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300
 </code></pre>

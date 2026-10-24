@@ -2,42 +2,60 @@
 
 Dos objetivos distintos que se pueden hacer por separado:
 
-- **A. URL fija, gratis, sin mover el Core** → `funnel_kukia.cmd` (Tailscale Funnel).
+- **A. URL pública sin mover el Core** → `ARRANCAR_TUNEL.cmd` (túnel de Cloudflare).
   Sigue dependiendo de que tu PC esté encendido.
 - **B. URL fija Y sin depender de tu PC** → todo lo demás de este documento (un VPS).
 
-## A. La vía gratis: Tailscale Funnel
+## A. La vía que no pide permiso a nadie: túnel de Cloudflare
 
-Tailscale **ya está instalado** en tu equipo (1.102.2). Da una URL HTTPS **fija, gratis y
-sin abrir ni un puerto del router**, del tipo `https://kukipcwin11.TU-TAILNET.ts.net`. Lo que
-falta es solo la cuenta y dos permisos.
+El Core sigue en tu PC y `cloudflared` abre la puerta desde dentro: **ni un puerto del router
+abierto, ni cuenta de Tailscale, ni el atributo `funnel` de ningún tailnet**. Cloudflare pone
+el HTTPS delante.
 
-1. `tailscale up` y entrar con una cuenta (gratis).
-2. Panel de Tailscale → **DNS** → *HTTPS Certificates* → **Enable**.
-3. Panel → **Access Controls** → añadir al bloque `nodeAttrs`:
+Ya está montado y es lo que arranca la guardia:
 
-```json
-"nodeAttrs": [
-  { "target": ["*"], "attr": ["funnel"] }
-]
+| Pieza | Dónde |
+|---|---|
+| Binario | `tools\bin\cloudflared.exe` |
+| Lanzador | `ARRANCAR_TUNEL.cmd` (raíz del proyecto) |
+| Supervisor | `tools\tunel_estable.py`, en `127.0.0.1:8399`; relanza el túnel si se cae |
+| Comprobar | `python tools\tunel_estable.py --estado` |
+| Dirección viva | se escribe en `docs\core_actual.json` |
+
+**Dos modos, y el lanzador elige solo:**
+
+| Modo | URL | Cuándo |
+|---|---|---|
+| RÁPIDO (por defecto) | `https://algo.trycloudflare.com` | sin dominio ni cuenta. **El nombre cambia al reiniciar.** |
+| DOMINIO | `https://tu-dominio` | tras `PREPARAR_DOMINIO.cmd`. Fija, no cambia nunca. |
+
+Arrancarlo: doble clic en `ARRANCAR_TUNEL.cmd`. Si la guardia está viva, ya lo hace ella al
+encender el PC y la ventana avisará de que hay otro supervisor (no habrá dos túneles).
+
+**Comprobar sin trampa** (las dos órdenes que valen):
+
+```bash
+python tools\tunel_estable.py --estado
+curl https://TU-URL/version     # mismo JSON que http://127.0.0.1:8300/version
 ```
 
-4. **Funnel se habilita por tailnet, no por equipo.** Si al ejecutar el `.cmd`
-   sale `Funnel is not enabled on your tailnet`, abre el enlace que imprime
-   (`https://login.tailscale.com/f/funnel`) y pulsa **Enable**. Ese permiso no
-   se puede activar desde la consola: hace falta la cuenta.
-5. Doble clic en `despliegue/funnel_kukia.cmd`.
+Lo que la puerta deja hacer y lo que no, medido sobre la URL pública: `/admin/*` → **403**,
+`/cliente/*` → **401**, `POST /transferir` con firma falsa → **401**. Lectura pública
+(`/version`, `/stats`, `/nodos`, `/ledger`, `/red/serie`) responde 200: es lo que la web y los
+nodos necesitan.
 
-Comprobar sin trampa: desde el móvil **con datos móviles**, abre
-`https://TU-EQUIPO.TU-TAILNET.ts.net/stats`. Si responde, está publicado.
+### Por qué NO se usa Tailscale Funnel
 
-**Límites honestos de esta vía:** Tailscale no publica su límite de ancho de banda (existe y
-no es configurable), y el tráfico pasa por sus relays. Para una API de JSON sobra; para servir
-vídeo o ficheros grandes, no.
+Se probó el 21/10: Tailscale está instalado, pero Funnel **no se activa desde la consola**.
+Exige habilitar el atributo `funnel` en el tailnet desde el panel con cuenta
+(`login.tailscale.com/f/funnel`), y sin eso el `.cmd` se queda en
+`Funnel is not enabled on your tailnet`. `funnel_kukia.cmd` se queda en la carpeta por si
+algún día se activa ese permiso, pero **no es la vía**: la de Cloudflare funciona hoy y no
+depende de que nadie autorice nada.
 
-Alternativa con nombre reservado y límite publicado: **zrok** (gratis, 5 GB/día,
-`https://nombre.zrok.io`), a cambio de instalar otro cliente y tragarse una página
-intersticial anti-phishing en el plan gratuito.
+Con túnel rápido la URL cambia al reiniciar; con dominio es tan fija como la de Funnel.
+Límite honesto del túnel de Cloudflare: el rápido es anónimo y sin SLA; el de dominio tiene
+el límite del plan gratuito (100 MB por petición), que para JSON sobra.
 
 ---
 
@@ -108,9 +126,9 @@ Sube el ledger y las dos claves (`sello_key.txt`, `admin_token.txt`), pone permi
 ```bash
 ssh usuario@tu-servidor
 cd /srv/kukia
-cp despliegue/.env.ejemplo .env
-nano .env                 # pon tu dominio en KUKIA_ORIGENES
-nano despliegue/Caddyfile # cambia TU_DOMINIO
+cp despliegue/.env.ejemplo despliegue/.env
+nano despliegue/.env            # pon tu dominio en KUKIA_ORIGENES
+nano despliegue/Caddyfile       # cambia TU_DOMINIO
 docker compose -f despliegue/docker-compose.yml up -d
 docker compose -f despliegue/docker-compose.yml logs -f core
 ```
