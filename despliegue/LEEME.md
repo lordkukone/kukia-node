@@ -22,7 +22,11 @@ falta es solo la cuenta y dos permisos.
 ]
 ```
 
-4. Doble clic en `despliegue/funnel_kukia.cmd`.
+4. **Funnel se habilita por tailnet, no por equipo.** Si al ejecutar el `.cmd`
+   sale `Funnel is not enabled on your tailnet`, abre el enlace que imprime
+   (`https://login.tailscale.com/f/funnel`) y pulsa **Enable**. Ese permiso no
+   se puede activar desde la consola: hace falta la cuenta.
+5. Doble clic en `despliegue/funnel_kukia.cmd`.
 
 Comprobar sin trampa: desde el móvil **con datos móviles**, abre
 `https://TU-EQUIPO.TU-TAILNET.ts.net/stats`. Si responde, está publicado.

@@ -48,18 +48,37 @@ if errorlevel 1 (
 )
 
 echo [3/4] Encendiendo el tunel publico en el puerto 443...
-tailscale funnel --bg 8300
-if errorlevel 1 (
-  echo.
-  echo [AVISO] No se pudo encender. Los dos motivos habituales son:
-  echo   a^) HTTPS no esta habilitado en tu tailnet.
-  echo      Panel de Tailscale ^> DNS ^> HTTPS Certificates ^> Enable.
-  echo   b^) Funnel no esta autorizado para este equipo.
-  echo      Panel ^> Access Controls ^> anade al bloque nodeAttrs:
-  echo          "attr": ["funnel"],
-  echo      y guarda. Vuelve a ejecutar este .cmd.
-  pause & exit /b 1
-)
+rem --yes: sin esto el comando se queda esperando una confirmacion que, al
+rem ejecutarlo con doble clic, no se ve nunca (se queda colgado sin decir nada).
+rem La salida se guarda porque Tailscale avisa del permiso que falta justo ahi.
+set "LOG=%TEMP%\kukia_funnel.txt"
+tailscale funnel --bg --yes 8300 > "%LOG%" 2>&1
+type "%LOG%"
+rem Unico caso que hay que distinguir: el tailnet no tiene Funnel habilitado.
+rem Ese comando sale con exito (errorlevel 0) y solo lo dice en el texto, asi
+rem que el errorlevel no sirve: se busca la frase.
+findstr /i /c:"not enabled" "%LOG%" >nul 2>&1 && goto :falta_permiso
+tailscale funnel status >nul 2>&1
+if errorlevel 1 goto :fallo_funnel
+goto :funnel_ok
+
+:falta_permiso
+echo.
+echo [FALTA UN PERMISO] Funnel no esta activado en tu tailnet.
+echo   Abre el enlace que sale arriba ^(login.tailscale.com/f/funnel^),
+echo   pulsa Enable y vuelve a ejecutar este .cmd.
+pause & exit /b 1
+
+:fallo_funnel
+echo.
+echo [AVISO] No se pudo encender. Los motivos habituales son:
+echo   a^) HTTPS sin habilitar en el tailnet: Panel ^> DNS ^> HTTPS Certificates ^> Enable.
+echo   b^) Funnel no esta autorizado para este equipo. Panel ^> Access Controls,
+echo      anade al bloque nodeAttrs:   "attr": ["funnel"],
+echo      y guarda. Vuelve a ejecutar este .cmd.
+pause & exit /b 1
+
+:funnel_ok
 
 echo.
 echo [4/4] Comprobando desde internet...
