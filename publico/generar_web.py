@@ -292,7 +292,33 @@ def generar_version(destino: Path) -> Path:
                   html_path.read_text(encoding="utf-8"))
     if not m:
         raise SystemExit("[generar_web] index.html no declara <meta name=\"kukia-build\">")
-    dato = {"v": m.group(1), "generado": time.strftime("%Y-%m-%d %H:%M:%S")}
+    # PAQUETE VERIFICABLE (auditoria 23-10-2026, hallazgo P2): la version no
+    # basta con un nombre; se publica el SHA-256 del zip que hay en ESTA misma
+    # carpeta y la version del Core que lo genero. Asi cualquiera comprueba que
+    # lo que descarga es lo que se genero, sin creerse la fecha.
+    huella_zip = ""
+    try:
+        huella_zip = (destino / "kukia-node.zip.sha256").read_text(
+            encoding="ascii").split()[0].strip()
+    except Exception:
+        pass
+    version_core = ""
+    try:
+        m_core = re.search(r'app = FastAPI\(title="KUKIA Core", version="([^"]+)"',
+                           (RAIZ / "coordinator" / "kukia_core.py").read_text(
+                               encoding="utf-8"))
+        version_core = m_core.group(1) if m_core else ""
+    except Exception:
+        pass
+    dato = {"v": m.group(1), "generado": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "core": version_core,
+            "zip": "kukia-node.zip",
+            "zip_sha256": huella_zip,
+            "verificar": ("Descarga kukia-node.zip y ejecuta 'sha256sum kukia-node.zip' "
+                          "(Windows: 'certutil -hashfile kukia-node.zip SHA256'): tiene que "
+                          "dar el zip_sha256 de este fichero. La version del Core se ve en "
+                          "http://127.0.0.1:8300/version, que ademas publica el hash de "
+                          "cada fichero que esta ejecutando.")}
     salida = destino / "version.json"
     salida.write_text(json.dumps(dato, indent=2, ensure_ascii=False) + "\n",
                       encoding="utf-8")

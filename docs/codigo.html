@@ -87,7 +87,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>972f7e70a4ba7cd02d0376f5ad12693aca4b87dd996888788dc06c06621584a3</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>f8646231e87747403e6c37039e27e5811a79e68a0061ec7fe4b1dcc8d83bab97</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -614,6 +614,13 @@ def schema():
         # &#x27;cuda:0&#x27; o con &#x27;cpu&#x27;. El planificador necesita saberlo para no
         # mandarle difusiones a una CPU (0,8 s en GPU contra 17,3 s en CPU).
         &quot;ALTER TABLE nodos ADD COLUMN device TEXT DEFAULT &#x27;&#x27;&quot;,
+        # FIRMA GUARDADA (23-10-2026, auditoria de la billetera): la firma
+        # Ed25519 se comprobaba al entrar y se tiraba. Con esto queda en el
+        # registro y un auditor puede volver a verificarla meses despues sin
+        # creerse a nadie. Las transferencias de antes de hoy no la tienen
+        # (columna vacia): eso se dice, no se finge.
+        &quot;ALTER TABLE transferencias ADD COLUMN firma TEXT DEFAULT &#x27;&#x27;&quot;,
+        &quot;ALTER TABLE transferencias ADD COLUMN clave_publica TEXT DEFAULT &#x27;&#x27;&quot;,
     ):
         try:
             con.execute(_sql)
@@ -1356,7 +1363,79 @@ def _verificar_embeddings(tipo, params, metrica):
     except Exception:
         return False
 
-app = FastAPI(title=&quot;KUKIA Core&quot;, version=&quot;0.4.2&quot;)
+app = FastAPI(title=&quot;KUKIA Core&quot;, version=&quot;0.4.4&quot;)
+
+# ============================================================
+#  HUELLA DEL CODIGO QUE SE ESTA EJECUTANDO (23-10-2026)
+#
+#  POR QUE EXISTE: una auditoria del 23-10 contesto lo que nadie podia
+#  comprobar desde fuera: &quot;una revision de main NO demuestra que codigo se
+#  esta ejecutando&quot;. Tenia razon: el Core no decia ni que version corria ni
+#  desde cuando. Ahora publica en /stats (y en /version) el SHA-256 de los
+#  ficheros clave, la fecha de cada uno, la hora de arranque y el commit del
+#  repo si esta al lado. Cualquiera puede descargar el fichero de GitHub,
+#  calcularle el SHA-256 y compararlo con lo que responde el Core vivo.
+#
+#  Se calcula UNA vez, al importar: si el fichero cambia en disco despues, la
+#  huella sigue siendo la del codigo cargado en memoria, que es justo lo que
+#  se quiere demostrar (que no basta con editar el .py para cambiar el Core).
+# ============================================================
+FICHEROS_HUELLA = (
+    &quot;coordinator/kukia_core.py&quot;,
+    &quot;worker/kukia_worker.py&quot;,
+    &quot;ledger/kukia_wallet.py&quot;,
+    &quot;ledger/sellos.py&quot;,
+    &quot;tools/guardia.py&quot;,
+)
+
+
+def _sha256_fichero(ruta: Path) -&gt; str:
+    try:
+        return hashlib.sha256(ruta.read_bytes()).hexdigest()
+    except Exception:
+        return &quot;&quot;
+
+
+def _commit_del_repo(raiz: Path) -&gt; str:
+    &quot;&quot;&quot;Commit de HEAD leido del .git a mano: sin lanzar git ni tocar la red.&quot;&quot;&quot;
+    try:
+        git = raiz / &quot;.git&quot;
+        cabeza = (git / &quot;HEAD&quot;).read_text(encoding=&quot;utf-8&quot;).strip()
+        if cabeza.startswith(&quot;ref:&quot;):
+            ref = cabeza.split(&quot;:&quot;, 1)[1].strip()
+            fichero = git / ref
+            if fichero.exists():
+                return fichero.read_text(encoding=&quot;utf-8&quot;).strip()[:7]
+            # ref empaquetada (git pack-refs)
+            empaquetadas = git / &quot;packed-refs&quot;
+            if empaquetadas.exists():
+                for linea in empaquetadas.read_text(encoding=&quot;utf-8&quot;).splitlines():
+                    if linea.endswith(&quot; &quot; + ref):
+                        return linea.split(&quot; &quot;, 1)[0][:7]
+            return &quot;&quot;
+        return cabeza[:7]
+    except Exception:
+        return &quot;&quot;
+
+
+def _huella_codigo() -&gt; dict:
+    raiz = Path(__file__).resolve().parent.parent
+    ficheros = {}
+    for rel in FICHEROS_HUELLA:
+        f = raiz / rel
+        ficheros[rel] = {&quot;sha256&quot;: _sha256_fichero(f)[:16],
+                         &quot;mtime&quot;: (time.strftime(&quot;%Y-%m-%d %H:%M:%S&quot;,
+                                                  time.localtime(f.stat().st_mtime))
+                                   if f.exists() else &quot;&quot;)}
+    return {&quot;version&quot;: app.version,
+            &quot;commit&quot;: _commit_del_repo(raiz),
+            &quot;arranque&quot;: time.strftime(&quot;%Y-%m-%d %H:%M:%S&quot;),
+            &quot;arranque_ts&quot;: round(time.time(), 3),
+            &quot;ficheros&quot;: ficheros,
+            &quot;nota&quot;: &quot;sha256 en 16 hex: se compara con el fichero de GitHub tal cual&quot;}
+
+
+_HUELLA = _huella_codigo()
 
 # ============================================================
 #  RATE LIMIT (anti-spam)  +  AUDITORIA: un cubo POR RUTA
@@ -3256,7 +3335,8 @@ _precio_minuto = {&quot;minuto&quot;: -1, &quot;datos&quot;: None}
 # volvia a poner la bolsa a cero y se podia pagar dos veces el presupuesto del
 # mismo minuto. Y si la escritura falla, el pago se aborta: mejor no pagar una
 # tarea que emitir por fuera del presupuesto.
-_minuto_actual = {&quot;minuto&quot;: -1, &quot;pagado&quot;: 0.0, &quot;credito&quot;: 0.0}
+_minuto_actual = {&quot;minuto&quot;: -1, &quot;pagado&quot;: 0.0, &quot;credito&quot;: 0.0,
+                  &quot;presupuesto&quot;: None}
 
 
 def _guardar_bolsa() -&gt; None:
@@ -3328,12 +3408,15 @@ def _cerrar_minuto_si_toca(minuto: int) -&gt; None:
     if c[&quot;minuto&quot;] == minuto:
         return
     if c[&quot;minuto&quot;] &gt;= 0:
-        presu = presupuesto_por_minuto()
+        # Se cierra con el presupuesto que de verdad se uso en ese minuto.
+        presu = float(c.get(&quot;presupuesto&quot;) or presupuesto_por_minuto())
         c[&quot;credito&quot;] += presu - c[&quot;pagado&quot;]
         # Nunca mas de un presupuesto de credito: asi una red parada un mes no
         # se pone a pagar el doble durante dias al volver.
         c[&quot;credito&quot;] = max(-presu, min(presu, c[&quot;credito&quot;]))
     c[&quot;minuto&quot;], c[&quot;pagado&quot;] = minuto, 0.0
+    # Tope nuevo, congelado para todo el minuto (ver presupuesto_del_minuto).
+    c[&quot;presupuesto&quot;] = presupuesto_por_minuto()
 
 
 def precio_unico_minuto() -&gt; dict:
@@ -3342,7 +3425,7 @@ def precio_unico_minuto() -&gt; dict:
     if _precio_minuto[&quot;datos&quot;] is not None and _precio_minuto[&quot;minuto&quot;] == minuto:
         return _precio_minuto[&quot;datos&quot;]
     _cerrar_minuto_si_toca(minuto)
-    presu = presupuesto_por_minuto()
+    presu = presupuesto_del_minuto()
     ajuste = max(-presu, min(presu, _minuto_actual[&quot;credito&quot;]))
     objetivo = max(0.0, presu + ajuste)
     gflop = _gflop_entre((minuto - 1) * 60.0, minuto * 60.0)
@@ -3391,15 +3474,45 @@ def _anotar_pagado(kia: float) -&gt; None:
 _cargar_bolsa()          # el minuto en curso sigue donde lo dejo el reinicio
 
 
+def presupuesto_del_minuto() -&gt; float:
+    &quot;&quot;&quot;Presupuesto CONGELADO al empezar el minuto (no se recalcula por tarea).
+
+    POR QUE (auditoria 23-10-2026, hallazgo H1/H4): `presupuesto_por_minuto()`
+    sale de lo que queda por emitir dividido por los minutos que faltan hasta
+    2150. Ese numero BAJA mientras corre el minuto, asi que cada tarea veia un
+    tope un pelo menor que la anterior y, sumando, el minuto podia cerrar unas
+    diezmilesimas por encima del presupuesto que se publicaba. Nada grave, pero
+    &quot;la bolsa nunca se pasa&quot; tiene que ser cierto al decimal, no al redondeo.
+    Congelando el tope al abrir el minuto, la suma de pagos no puede pasarse ni
+    un 1e-9, y lo que se publica es exactamente lo que se reparte.
+    &quot;&quot;&quot;
+    _cerrar_minuto_si_toca(int(time.time() // 60))
+    if _minuto_actual.get(&quot;presupuesto&quot;) is None:
+        _minuto_actual[&quot;presupuesto&quot;] = presupuesto_por_minuto()
+    return float(_minuto_actual[&quot;presupuesto&quot;] or 0.0)
+
+
 def bolsa_disponible(ahora: float = None) -&gt; float:
     &quot;&quot;&quot;KIA del presupuesto de este minuto que aun no se han pagado.&quot;&quot;&quot;
-    presu = presupuesto_por_minuto()
+    presu = presupuesto_del_minuto()
     if presu &lt;= 0:
         return 0.0
     minuto = int((time.time() if ahora is None else ahora) // 60)
     if minuto != int(time.time() // 60):
         return presu                         # otro minuto: se enseña el tope
     return max(0.0, presu - pagado_en_minuto())
+
+
+def _redondear_kia(x: float) -&gt; float:
+    &quot;&quot;&quot;Redondea HACIA ABAJO a 9 decimales.
+
+    POR QUE (23-10-2026): `round(x, 9)` puede subir. Al recortar un pago a lo
+    que queda en la bolsa, redondear hacia arriba devolvia un pelin mas que el
+    presupuesto: con 25 tareas el minuto cerraba 1e-8 por encima y la promesa
+    &quot;la bolsa nunca se pasa&quot; dejaba de ser cierta al decimal. KIA no se regala
+    por redondeo: hacia abajo siempre.
+    &quot;&quot;&quot;
+    return math.floor(float(x) * 1e9) / 1e9
 
 
 def pago_plano(tier: float = 1.0) -&gt; tuple:
@@ -3416,10 +3529,10 @@ def pago_plano(tier: float = 1.0) -&gt; tuple:
     `pago_por_trabajo`: se corta en lo que le queda al minuto y se anota con
     `_anotar_pagado`. La bolsa deja de tener puertas abiertas.
     &quot;&quot;&quot;
-    presu = presupuesto_por_minuto()
+    presu = presupuesto_del_minuto()
     pago, info = recompensa_pago(tier)
     disp = max(0.0, presu - pagado_en_minuto())
-    pagado = round(min(pago, disp), 9)
+    pagado = _redondear_kia(min(pago, disp))
     _anotar_pagado(pagado)
     return pagado, dict(info or {}, modo_pago=&quot;plano&quot;, fuente_precio=&quot;plano&quot;,
                         bolsa_kia_min=round(presu, 6),
@@ -3450,13 +3563,13 @@ def pago_por_trabajo(tipo: str, params, tier: float = 1.0) -&gt; tuple:
     precio = float(pm[&quot;precio&quot;])
     # 9 decimales y no 6: el pago por tarea puede ser mucho mas pequeno que con
     # la tarifa plana, y redondear a 6 lo dejaria en cero si la red crece.
-    pago = round(min(precio * cobrable, techo, restante), 9)
+    pago = _redondear_kia(min(precio * cobrable, techo, restante))
     # FUSIBLE del minuto: solo actua si algo va muy desmadrado (de golpe, diez
     # veces el trabajo del minuto anterior). En regimen normal no toca nada.
     disp = max(0.0, pm[&quot;presupuesto_kia_min&quot;] * FUSIBLE_MINUTO_X - pagado_en_minuto())
     recortado = max(0.0, pago - disp)
     if recortado &gt; 0:
-        pago = round(disp, 9)
+        pago = _redondear_kia(disp)
     _anotar_pagado(pago)
     return pago, {&quot;modo_pago&quot;: &quot;potencia&quot;,
                   &quot;gflop_tarea&quot;: round(gl, 6),
@@ -3491,6 +3604,12 @@ def castigo_por_fallo(tier: float) -&gt; float:
     pago, _ = recompensa_pago(tier)
     return min(PENALIZACION, max(PENALIZACION_MIN, PENALIZACION_MULT * pago))
 
+@app.get(&quot;/version&quot;)
+def version():
+    &quot;&quot;&quot;Que codigo esta ejecutandose, para compararlo con el de GitHub.&quot;&quot;&quot;
+    return _HUELLA
+
+
 @app.get(&quot;/stats&quot;)
 def stats():
     # AUDITORIA 2026-10-20: total materializado; antes era un SUM de todo el
@@ -3513,6 +3632,8 @@ def stats():
     _ss = _sellos_leidos()
     return {
         &quot;version&quot;: app.version,
+        # Que codigo corre de verdad: hash de los ficheros + arranque + commit.
+        &quot;codigo&quot;: _HUELLA,
         &quot;supply_emitido&quot;: sum,
         &quot;max_supply&quot;: MAX_SUPPLY,
         # Nodos VIVOS: los retirados (nombres repetidos de identidades viejas)
@@ -3544,7 +3665,7 @@ def stats():
         # presupuesto por trabajo, no por orden de llegada. Se publica el
         # precio, de donde sale y lo que llevamos pagado en el minuto.
         &quot;bolsa_emision&quot;: {&quot;kia_disponible&quot;: round(bolsa_disponible(), 6),
-                          &quot;presupuesto_kia_min&quot;: round(presupuesto_por_minuto(), 6),
+                          &quot;presupuesto_kia_min&quot;: round(presupuesto_del_minuto(), 6),
                           &quot;pagado_en_minuto&quot;: round(pagado_en_minuto(), 6),
                           &quot;tope_min&quot;: 1,
                           &quot;precio_minuto&quot;: (round(float(precio_unico_minuto()[&quot;precio&quot;]), 12)
@@ -3746,6 +3867,69 @@ def archivar_tareas(retencion: int = None, lote: int = None) -&gt; dict:
     return {&quot;borradas&quot;: borradas, &quot;retencion&quot;: ret, &quot;lote&quot;: bat,
             &quot;archivadas_total&quot;: int(_meta_float(&quot;tareas_archivadas&quot;, 0.0))}
 
+# ============================================================
+#  PODA DE TELEMETRIA (23-10-2026)
+#  AUDITORIA 23-10, hallazgo H6: `planificador_log` y `gpu_telemetria` crecian
+#  sin tope (medido: 396.165 y 307.503 filas, base de 349 MB) y solo se
+#  limpiaban al borrar un nodo entero. Con el tiempo eso llena el disco y hace
+#  lento cada INSERT. Ahora se poda lo viejo cada pasada del archivador, y hay
+#  un tope duro de filas por si alguien inunda la telemetria en un dia.
+#  No se toca NADA del ledger, saldos, tareas ni sellos: son tablas de traza.
+# ============================================================
+PODA_TELEMETRIA_H = max(1.0, float(os.environ.get(&quot;KUKIA_PODA_TELEMETRIA_H&quot;, &quot;48&quot;)))
+PODA_TELEMETRIA_MAX = max(1000, int(os.environ.get(&quot;KUKIA_PODA_TELEMETRIA_MAX&quot;, &quot;200000&quot;)))
+
+
+def _epoch_de_ts(txt) -&gt; float | None:
+    &quot;&quot;&quot;Las tablas de traza guardan `time.ctime()` (texto), no epoch.&quot;&quot;&quot;
+    try:
+        return time.mktime(time.strptime(str(txt), &quot;%a %b %d %H:%M:%S %Y&quot;))
+    except Exception:
+        return None
+
+
+def podar_telemetria(horas: float = None, tope: int = None,
+                     lote: int = 5000) -&gt; dict:
+    &quot;&quot;&quot;Borra traza vieja de planificador_log y gpu_telemetria.
+
+    Dos limites, en este orden:
+      1. Por edad: lo mas viejo que `horas` (48 h por defecto). Se borra a
+         trozos desde el principio (los id van en orden de llegada), asi la
+         transaccion no se eterniza con 700.000 filas de golpe.
+      2. Por tamano: si aun asi quedan mas de `tope` filas (por ejemplo, un
+         dia con miles de nodos), se recorta por arriba dejando las ultimas.
+    &quot;&quot;&quot;
+    horas = PODA_TELEMETRIA_H if horas is None else max(0.0, float(horas))
+    tope = PODA_TELEMETRIA_MAX if tope is None else max(0, int(tope))
+    corte = time.time() - horas * 3600.0
+    borradas = {}
+    with _escritura():
+        for tabla in (&quot;planificador_log&quot;, &quot;gpu_telemetria&quot;):
+            total = 0
+            while True:
+                filas = con.execute(f&quot;SELECT id, ts FROM {tabla} ORDER BY id ASC LIMIT ?&quot;,
+                                    (lote,)).fetchall()
+                if not filas:
+                    break
+                viejos = [r[&quot;id&quot;] for r in filas if (_epoch_de_ts(r[&quot;ts&quot;]) or 0.0) &lt; corte]
+                if not viejos:
+                    break
+                cur = con.execute(f&quot;DELETE FROM {tabla} WHERE id &lt;= ?&quot;, (viejos[-1],))
+                total += max(0, cur.rowcount or 0)
+                if len(viejos) &lt; len(filas):
+                    break
+            # Tope duro: deja solo las ultimas `tope` filas.
+            n = con.execute(f&quot;SELECT COUNT(*) c FROM {tabla}&quot;).fetchone()[&quot;c&quot;]
+            if n &gt; tope:
+                cur = con.execute(f&quot;DELETE FROM {tabla} WHERE id NOT IN &quot;
+                                  f&quot;(SELECT id FROM {tabla} ORDER BY id DESC LIMIT ?)&quot;,
+                                  (tope,))
+                total += max(0, cur.rowcount or 0)
+            borradas[tabla] = total
+    return {&quot;horas&quot;: horas, &quot;tope&quot;: tope, &quot;borradas&quot;: borradas,
+            &quot;total&quot;: sum(borradas.values())}
+
+
 def _bucle_archivado():
     while True:
         try:
@@ -3766,6 +3950,13 @@ def _bucle_archivado():
                 print(f&quot;[KUKIA Core] podados {n} nodos que nunca trabajaron&quot;, flush=True)
         except Exception as e:
             print(f&quot;[KUKIA Core] poda de nodos error: {e}&quot;, flush=True)
+        try:
+            r = podar_telemetria()
+            if r.get(&quot;total&quot;):
+                print(f&quot;[KUKIA Core] telemetria podada: {r[&#x27;borradas&#x27;]} &quot;
+                      f&quot;(quedan los ultimos {r[&#x27;horas&#x27;]:.0f} h)&quot;, flush=True)
+        except Exception as e:
+            print(f&quot;[KUKIA Core] poda de telemetria error: {e}&quot;, flush=True)
         time.sleep(ARCHIVAR_INTERVALO)
 
 threading.Thread(target=_bucle_archivado, daemon=True).start()
@@ -3780,6 +3971,13 @@ def admin_archivar(retencion: int = -1, lote: int = -1, _ok: None = Depends(exig
 def admin_podar_nodos(horas: float = -1, _ok: None = Depends(exigir_admin)):
     &quot;&quot;&quot;Fuerza la poda de nodos que nunca trabajaron (pruebas y mantenimiento).&quot;&quot;&quot;
     return {&quot;podados&quot;: podar_nodos(None if horas &lt; 0 else horas)}
+
+@app.post(&quot;/admin/podar_telemetria&quot;)
+def admin_podar_telemetria(horas: float = -1, tope: int = -1,
+                           _ok: None = Depends(exigir_admin)):
+    &quot;&quot;&quot;Fuerza la poda de traza (planificador_log y gpu_telemetria).&quot;&quot;&quot;
+    return podar_telemetria(None if horas &lt; 0 else horas,
+                            None if tope &lt; 0 else tope)
 
 @app.post(&quot;/admin/recalcular_resumen&quot;)
 def admin_recalcular_resumen(_ok: None = Depends(exigir_admin)):
@@ -3942,13 +4140,19 @@ def transferir(t: TransferIn):
                 con.execute(&quot;ROLLBACK&quot;)
                 raise HTTPException(409, &quot;saldo insuficiente&quot;)
             try:
-                con.execute(&quot;INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts) VALUES(?,?,?,?,?)&quot;,
-                            (de, a, monto, t.nonce, time.ctime()))
+                con.execute(&quot;INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts,&quot;
+                            &quot;firma,clave_publica) VALUES(?,?,?,?,?,?,?)&quot;,
+                            (de, a, monto, t.nonce, time.ctime(), t.firma, pub))
             except Exception:
                 con.execute(&quot;ROLLBACK&quot;)
                 raise HTTPException(409, &quot;nonce ya usado (repeticion bloqueada)&quot;)
-            _asiento(f&quot;tx-{t.nonce[:12]}&quot;, de, -monto, &quot;transferencia salida&quot;)
-            _asiento(f&quot;tx-{t.nonce[:12]}&quot;, a, monto, &quot;transferencia entrada&quot;)
+            # ID COMPLETO (23-10-2026): antes era el nonce cortado a 12 letras y
+            # dos transferencias distintas podian caer en el MISMO id de asiento
+            # (paso el 19-10 con tres barridos). El importe y las cuentas estaban
+            # bien, pero emparejarlas despues era a ciegas. Con el nonce entero,
+            # cada transferencia tiene su id y su pareja de asientos.
+            _asiento(f&quot;tx-{t.nonce}&quot;, de, -monto, &quot;transferencia salida&quot;)
+            _asiento(f&quot;tx-{t.nonce}&quot;, a, monto, &quot;transferencia entrada&quot;)
             con.commit()
             return {&quot;ok&quot;: True, &quot;de&quot;: de, &quot;a&quot;: a, &quot;monto&quot;: monto,
                     &quot;supply&quot;: round(supply_emitido(), 6)}
