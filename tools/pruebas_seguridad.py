@@ -450,6 +450,30 @@ def main() -> int:
             "clave_publica": pub})
         check("saldo insuficiente rechazado", r7.status_code == 409, r7.text[:120])
 
+        # AUDITORIA 2026-10-25 (A2): el importe se redondeaba a 4 decimales ANTES
+        # de comprobar la firma, asi que la firma podia no cubrir el importe que
+        # se movia (se firmaba 0,50005 y se verificaba 0,5001). Ahora un importe
+        # con mas de 4 decimales se rechaza con 400 y NO se mueve el saldo.
+        saldo_a = float(s.get(f"{base}/saldo/{origen}").json()["saldo"])
+        nonce_cinco = "cinco-decimales-" + secrets.token_hex(4)
+        r8 = s.post(f"{base}/transferir", timeout=30, json={
+            "de_nodo": origen, "a_direccion": destino, "monto": 0.50005,
+            "nonce": nonce_cinco,
+            "firma": firmar(seed, f"transferir:{origen}:{destino}:0.50005:{nonce_cinco}"),
+            "clave_publica": pub})
+        saldo_b = float(s.get(f"{base}/saldo/{origen}").json()["saldo"])
+        check("importe con 5 decimales rechazado y sin mover saldo",
+              r8.status_code == 400 and abs(saldo_a - saldo_b) < 1e-12,
+              f"{r8.status_code} {r8.text[:80]} | saldo {saldo_a:.6f} -> {saldo_b:.6f}")
+        nonce_cuatro = "cuatro-decimales-" + secrets.token_hex(4)
+        r9 = s.post(f"{base}/transferir", timeout=30, json={
+            "de_nodo": origen, "a_direccion": destino, "monto": 0.0001,
+            "nonce": nonce_cuatro,
+            "firma": firmar(seed, f"transferir:{origen}:{destino}:0.0001:{nonce_cuatro}"),
+            "clave_publica": pub})
+        check("4 decimales (el suelo transferible) sigue valiendo",
+              r9.status_code == 200, r9.text[:120])
+
         # AUDITORIA 24-10-2026 (A1): POST /cliente/tareas aceptaba un tipo
         # inventado. _flops_tarea devolvia 0 y la tarea se cobraba al minimo
         # facturable y se quedaba en la cola para siempre, porque ningun
@@ -751,15 +775,16 @@ print("OK")
                 cuerpo = rr.json() if rr.status_code == 200 else {}
                 check("resultado verificado y pagado", rr.status_code == 200 and cuerpo.get("ok") is True,
                       rr.text[:160])
-                # CONTRATO DEL 22-10-2026 (pago por potencia): una tarea de 0
-                # FLOP (checksum) cobra 0 KIA. Antes esta prueba exigia pago>0
-                # porque la tarifa era plana; con potencia demostrada el
-                # checksum queda fuera de la mezcla y cobra cero a proposito
-                # (ver PAGO_POR_POTENCIA.md y tools/prueba_pago_potencia.py).
-                # El pago positivo de una tarea de calculo se comprueba mas
-                # abajo, con las matrices y sus replicas.
-                check("checksum (0 FLOP) cobra 0 KIA, como manda el pago por potencia",
-                      float(cuerpo.get("kuki") or 0) == 0,
+                # CONTRATO DEL 25-10-2026 (suelo transferible): una tarea de 0
+                # FLOP (checksum) cobra el SUELO, 0,0001 KIA, que es el minimo
+                # que `POST /transferir` acepta (hasta 4 decimales; desde el
+                # 25-10 con mas de 4 se rechaza, ver hallazgo A2). Antes
+                # del suelo cobraba 0, y ese trabajo no se podia mover nunca.
+                # Ojo: se sigue pagando por trabajo, el checksum solo tiene el
+                # minimo de factura. Ver PAGO_POR_POTENCIA.md y
+                # tools/prueba_suelo_transferible.py.
+                check("checksum (0 FLOP) cobra el suelo transferible (0,0001 KIA)",
+                      abs(float(cuerpo.get("kuki") or 0) - 0.0001) < 1e-12,
                       f"{cuerpo.get('kuki')} KIA")
                 tops_con_trabajo = float(s.get(f"{base}/stats", timeout=30).json()["dificultad"]["tops_red"])
                 check("un nodo con trabajo pagado SI cuenta para la dificultad",

@@ -35,6 +35,11 @@ p { color:var(--text); }
 .tile .l { display:block; color:#8fa5c6; font-size:.74rem; text-transform:uppercase; letter-spacing:.06em; }
 .tile .v { display:block; font-size:1.55rem; font-weight:800; color:#fff; margin-top:.15rem; }
 .tile .n { display:block; font-size:.75rem; color:#8fa5c6; margin-top:.2rem; }
+.pago { display:grid; grid-template-columns:repeat(2,1fr); gap:.8rem; margin:1rem 0; }
+@media (max-width:620px){ .pago { grid-template-columns:1fr; } }
+.pago .tile .v { font-size:1.25rem; letter-spacing:.01em; }
+.pago .tile .v.cod { font-family:ui-monospace,Consolas,monospace; font-size:1.02rem; word-break:break-all; }
+.pago .tile .v.vacio { color:#8fa5c6; font-size:1rem; font-weight:600; }
 .nota { border-left:3px solid var(--gold); background:rgba(212,175,55,.07); border-radius:0 10px 10px 0; padding:.8rem 1rem; font-size:.87rem; margin:1rem 0; }
 .warnbox { border-left:3px solid var(--warn); background:rgba(224,192,94,.07); border-radius:0 10px 10px 0; padding:.8rem 1rem; font-size:.87rem; margin:1rem 0; }
 .btn { display:inline-block; padding:.85rem 1.3rem; border-radius:12px; background:linear-gradient(135deg,var(--gold),#f0d060); color:var(--navy); font-weight:800; text-decoration:none; border:0; cursor:pointer; font-family:inherit; font-size:1rem; }
@@ -126,6 +131,31 @@ details p { margin-top:.5rem; font-size:.9rem; }
   <p style="margin:1rem 0 .9rem;">Mándame el audio y te digo el precio exacto en minutos antes de empezar. Si el resultado no te vale, no lo pagas.</p>
   <a class="btn" href="#pedido">Pedir una transcripción</a>
   <a class="btn sec" href="mailto:kukone510@hotmail.com?subject=Transcripci%C3%B3n%20-%20consulta">Preguntar antes</a>
+</div>
+
+<h2 id="pago">Cómo se paga: Bizum o transferencia</h2>
+<div class="panel">
+  <p>En euros, sin pasarela y sin comisiones por mi parte. El importe se cierra <strong style="color:#fff;">antes</strong> de empezar y la prueba de 10 minutos no se paga. Así va:</p>
+  <ol style="color:var(--text);padding-left:1.3rem;margin:.6rem 0 1rem;">
+    <li>Me mandas el encargo y te contesto con los <strong style="color:#fff;">minutos exactos y el precio</strong>.</li>
+    <li>Pagas por <strong style="color:#fff;">Bizum</strong> o por <strong style="color:#fff;">transferencia</strong>, poniendo el concepto que te indico.</li>
+    <li>Cuando lo veo, empiezo. Al entregar te llega la ficha del trabajo con la duración y el precio aplicado.</li>
+  </ol>
+  <div class="pago">
+    <div class="tile">
+      <span class="l">Bizum</span>
+      <span class="v" id="pago_bizum_tel">—</span>
+      <span class="n" id="pago_bizum_tit"></span>
+    </div>
+    <div class="tile">
+      <span class="l">Transferencia</span>
+      <span class="v cod" id="pago_iban">—</span>
+      <span class="n" id="pago_iban_tit"></span>
+    </div>
+  </div>
+  <p style="font-size:.9rem;">En el concepto pon <code id="pago_concepto">TRANSCRIBIR</code> y tu nombre: sirve para encontrar tu pago entre los demás y no confundir dos encargos.</p>
+  <p id="pago_pendiente" style="font-size:.88rem;color:#9fb3d1;">Los datos de cobro (número de Bizum y cuenta) se te dan por correo al confirmar el encargo, junto con los minutos y el precio: aquí no hay pago automático ni nada que se cobre sin que lo aceptes.</p>
+  <p style="font-size:.88rem;color:#9fb3d1;margin-top:.5rem;">Si el importe que te pido no coincide con lo que hablamos, <strong style="color:#fff;">no pagues</strong>: escríbeme y lo miramos. Trabajos de más de 100 € se pueden pagar por tramos, uno por bloque de audio entregado.</p>
 </div>
 
 <h2>Cuánto cuesta de verdad</h2>
@@ -222,7 +252,7 @@ details p { margin-top:.5rem; font-size:.9rem; }
 <h2>Preguntas que me hacen</h2>
 <details>
   <summary>¿Cómo se paga?</summary>
-  <p>Transferencia o Bizum, con el importe cerrado antes de empezar. Al confirmar el encargo te paso los datos de pago. Trabajos de más de 100 € se pueden pagar por tramos, uno por cada bloque de audio entregado.</p>
+  <p>Transferencia o Bizum, en euros, con el importe cerrado antes de empezar. Los datos están en <a href="#pago">Cómo se paga</a>, con el concepto que hay que poner. Trabajos de más de 100 € se pueden pagar por tramos, uno por cada bloque de audio entregado.</p>
 </details>
 <details>
   <summary>¿Cuánto tarda?</summary>
@@ -249,6 +279,44 @@ details p { margin-top:.5rem; font-size:.9rem; }
 
 <script>
 (function () {
+  /* ===== DATOS DE COBRO — RELLENAR UNA SOLA VEZ ==========================
+     Esto es lo unico que hay que tocar para publicar los datos de pago. Deja
+     vacio ('') lo que no quieras enseñar: la pagina NO se inventa nada, pone
+     "se te da al confirmar" en ese hueco y lo demas sale igual.
+
+       bizum_telefono        numero al que se manda el Bizum (con o sin espacios)
+       bizum_titular         nombre que vera el cliente en el Bizum
+       transferencia_titular titular de la cuenta
+       transferencia_iban    IBAN completo, en una sola linea
+       concepto              palabra que el cliente pone en el concepto
+     ===================================================================== */
+  var COBRO = {
+    bizum_telefono: '',
+    bizum_titular: '',
+    transferencia_titular: '',
+    transferencia_iban: '',
+    concepto: 'TRANSCRIBIR'
+  };
+
+  function pintaCobro() {
+    function poner(id, valor, vacio) {
+      var el = document.getElementById(id);
+      if (!el) return false;
+      if (valor) { el.textContent = valor; el.classList.remove('vacio'); return true; }
+      el.textContent = vacio;
+      el.classList.add('vacio');
+      return false;
+    }
+    var hayBizum = poner('pago_bizum_tel', COBRO.bizum_telefono, 'Se te da al confirmar');
+    poner('pago_bizum_tit', COBRO.bizum_titular, '');
+    var hayIban = poner('pago_iban', COBRO.transferencia_iban, 'Se te da al confirmar');
+    poner('pago_iban_tit', COBRO.transferencia_titular, '');
+    var concepto = document.getElementById('pago_concepto');
+    if (concepto) concepto.textContent = COBRO.concepto || 'TRANSCRIBIR';
+    var aviso = document.getElementById('pago_pendiente');
+    if (aviso) aviso.style.display = (hayBizum || hayIban) ? 'none' : '';
+  }
+
   var MIN = 0.15, GRATIS = 10;
   var entrada = document.getElementById('minutos');
   var salida = document.getElementById('estimado');
@@ -277,6 +345,7 @@ details p { margin-top:.5rem; font-size:.9rem; }
     }
   }
   if (entrada) { entrada.addEventListener('input', pinta); pinta(); }
+  pintaCobro();
 })();
 </script>
 </body>

@@ -141,7 +141,7 @@ division. Si alguien te ensena esta pagina como si fuera una cotizacion, te esta
 <div class="grid">
   <div class="tile"><span class="l">KIA emitidos</span><span class="v" id="tSupply">—</span><span class="n" id="tSupplyN">de 100.000.000</span></div>
   <div class="tile"><span class="l">Quedan por emitir</span><span class="v" id="tRest">—</span><span class="n">hasta el techo de 100 M</span></div>
-  <div class="tile"><span class="l">Emision de calendario</span><span class="v" id="tEmi">—</span><span class="n" id="tEmiN">KIA/dia hasta 01-01-2150</span></div>
+  <div class="tile"><span class="l">Emision de calendario</span><span class="v" id="tEmi">—</span><span class="n" id="tEmiN">KIA/dia hasta 13-04-2150</span></div>
 </div>
 <p style="margin-top:.9rem;font-size:.85rem;"><small id="tEmiMed"></small></p>
 
@@ -287,7 +287,7 @@ imprime lo comprobado y lo supuesto por separado, y tiene <code>--json</code> si
   }
 
   var datos = null;                        // {supply, max, emisionMin, emisionDia, medido}
-  var FIN = Date.UTC(2150, 0, 1, 0, 0, 0); // fin de emision, igual que el Core
+  var FIN = Date.UTC(2150, 3, 13, 0, 0, 0); // fin de emision (13-04-2150), igual que el Core
 
   function calcularEmision(supply, max){
     var restante = Math.max(0, max - supply);
@@ -302,7 +302,7 @@ imprime lo comprobado y lo supuesto por separado, y tiene <code>--json</code> si
     $('tSupplyN').textContent = 'de ' + num(datos.max, 0) + ' KIA';
     $('tRest').textContent = num(datos.restante, 0);
     $('tEmi').textContent = num(datos.emisionDia, 0);
-    $('tEmiN').textContent = 'KIA/dia (' + num(datos.emisionMin, 2) + ' KIA/min) hasta 01-01-2150';
+    $('tEmiN').textContent = 'KIA/dia (' + num(datos.emisionMin, 2) + ' KIA/min) hasta 13-04-2150';
     if(typeof datos.medido === 'number' && isFinite(datos.medido) && datos.medido > 0){
       var dia = datos.medido * 1440;
       $('tEmiMed').textContent = 'El rele mide ahora ' + num(datos.medido, 2) + ' KIA/min = '

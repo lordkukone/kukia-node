@@ -9,15 +9,21 @@ Hace todo lo que hace un cliente de verdad, en orden, y lo comprueba:
   3. Le ingresa saldo con una transferencia firmada desde la billetera del
      fundador.
   4. Pide precio de una tarea de inferencia.
-  5. Firma el encargo y lo encola: el Core retiene el prepago.
+  5. Firma el encargo y lo encola DEPOSITANDO MAS QUE EL COSTE: el Core deja
+     retenido el deposito, no el coste justo (asi se ve la devolucion).
   6. Espera a que un minero lo resuelva.
-  7. Comprueba las cuentas: el cliente paga lo trabajado y recupera el
-     sobrante, el minero cobra, y el recibo (hash + verificacion) cuadra.
+  7. Comprueba las cuentas: el minero cobra su tarifa entera, el cliente paga
+     lo trabajado y el SOBRANTE vuelve a su saldo, y el recibo (hash +
+     verificacion) cuadra.
+
+El sobrante no sale del bolsillo del minero: se paga la tarifa completa y la
+diferencia se devuelve del escrow. Con `--extra 0` el deposito es el coste
+justo y no hay sobrante (para comparar).
 
 Uso:
   python tools/demo_cliente_punta_a_punta.py
   python tools/demo_cliente_punta_a_punta.py --params '{"n": 1024, "seed": 7}'
-  python tools/demo_cliente_punta_a_punta.py --monto 0.2 --espera 600
+  python tools/demo_cliente_punta_a_punta.py --extra 0.05 --monto 0.2 --espera 600
 
 No toca ficheros del Core. Lo unico que cambia en el ledger son los asientos de
 esta prueba (unas centesimas de KIA) y los de los mineros que ya estan
@@ -115,6 +121,8 @@ def main() -> int:
     ap.add_argument("--tipo", default="inferencia")
     ap.add_argument("--params", default='{"n": 1024, "seed": 7}')
     ap.add_argument("--monto", type=float, default=0.05, help="KIA que se ingresan al cliente")
+    ap.add_argument("--extra", type=float, default=0.001,
+                    help="KIA de mas que se depositan sobre el coste (0 = coste justo)")
     ap.add_argument("--espera", type=int, default=300)
     args = ap.parse_args()
 
@@ -162,34 +170,52 @@ def main() -> int:
     if abs(saldo_ini - monto) > 1e-6:
         fallos.append("el ingreso no llego entero al saldo del cliente")
 
-    print(f"\n== 4. Precio de una tarea de {args.tipo} ==")
-    c, d = get("/cliente/precio", token, {"tipo": args.tipo})
+    print(f"\n== 4. Precio EXACTO de esta tarea de {args.tipo} ==")
+    c, d = get("/cliente/precio", token, {"tipo": args.tipo, "params": args.params})
     if c != 200:
         raise SystemExit(f"el Core no da precio: {c} {d}")
-    suelo = float(d.get("coste_minimo") or 0.0)
-    print(f"  coste minimo: {suelo:.9f} KIA   (autorizare un tope de 1.0 KIA)")
+    # Los params ya vienen normalizados por el Core: se firma justo lo que el
+    # Core va a hashear (si no, la firma no valdria).
+    params = d.get("params") or json.loads(args.params)
+    coste_prev = float(d.get("coste") or d.get("coste_minimo") or 0.0)
+    print(f"  coste: {coste_prev:.9f} KIA (suelo del tipo: "
+          f"{float(d.get('coste_minimo') or 0):.9f})   (tope autorizado: 1.0 KIA)")
 
-    print("\n== 5. Pedido firmado (el Core retiene el prepago) ==")
-    params = json.loads(args.params)
+    print("\n== 5. Pedido firmado (el Core retiene el DEPOSITO) ==")
     tope = 1.0
+    extra = max(0.0, float(args.extra))
+    deposito = round(coste_prev + extra, 12)
     h = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
     nonce = "c" + os.urandom(8).hex()
-    firma = WALLET.firmar(f"cliente:{nonce}:{args.tipo}:{h}:{tope}", w["clave_privada"])
+    mensaje = f"cliente:{nonce}:{args.tipo}:{h}:{tope}"
+    if deposito > 0:
+        # Con deposito, el importe retenido va DENTRO de la firma.
+        mensaje += f":{deposito}"
+    firma = WALLET.firmar(mensaje, w["clave_privada"])
     c, d = post("/cliente/tareas", {"tipo": args.tipo, "params": params, "tope": tope,
+                                    "deposito": deposito,
                                     "nonce": nonce, "clave_publica": w["clave_publica"],
                                     "firma": firma}, {"X-Cliente-Token": token})
     if c != 200:
         raise SystemExit(f"no se pudo encolar: {c} {d}")
     tid = d["tarea_id"]
     coste = float(d.get("coste") or 0.0)
-    print(f"  tarea {tid} encolada · prepago retenido: {coste:.9f} KIA")
+    depositado = float(d.get("deposito") or 0.0)
+    print(f"  tarea {tid} · coste {coste:.9f} KIA · depositado {depositado:.9f} KIA")
+    print(f"  (al cerrar deben volver {depositado - coste:.9f} KIA al cliente)")
+    if abs(coste - coste_prev) > 1e-12:
+        fallos.append(f"el coste al encolar ({coste:.12f}) no es el que dio el precio "
+                      f"({coste_prev:.12f})")
+    if abs(depositado - deposito) > 1e-12:
+        fallos.append(f"el Core retuvo {depositado:.12f} y se depositaron {deposito:.12f}")
 
     c, s = get("/cliente/saldo", token)
     retenido = float(s.get("retenido") or 0.0) if c == 200 else -1
-    print(f"  saldo durante la espera: {float(s.get('saldo') or 0):.6f} KIA "
+    print(f"  saldo durante la espera: {float(s.get('saldo') or 0):.9f} KIA "
           f"· retenido: {retenido:.9f}")
-    if retenido <= 0:
-        fallos.append("no se ve el prepago retenido mientras la tarea esta en cola")
+    if abs(retenido - deposito) > 1e-12:
+        fallos.append(f"mientras esta en cola deberia haber {deposito:.12f} retenidos "
+                      f"y hay {retenido:.12f}")
 
     print(f"\n== 6. Esperando al minero (max {args.espera} s) ==")
     nodos_antes = {k: float(v) for k, v in (get("/saldos")[1].get("saldos") or {}).items()}
@@ -222,22 +248,29 @@ def main() -> int:
     c, s = get("/cliente/saldo", token)
     saldo_fin = float(s.get("saldo") or 0.0)
     retenido_fin = float(s.get("retenido") or 0.0)
-    sobrante = coste - pagado
-    print(f"  cliente: {saldo_ini:.6f} -> {saldo_fin:.6f} KIA "
-          f"(pago {pagado:.9f}, devuelto {sobrante:.9f})")
-    if abs(sobrante) < 1e-12:
-        print("  (el prepago era exacto: se pago lo trabajado y no hubo sobrante. "
-              "La devolucion salta cuando la tarea cuesta menos o falla; "
-              "esta probada en tools/prueba_ancla.py con deposito de 5 y pago de 2)")
-    if abs((saldo_ini - saldo_fin) - pagado) > 1e-6:
+    devuelto = round(retenido - pagado, 12)
+    print(f"  cliente: {saldo_ini:.9f} -> {saldo_fin:.9f} KIA "
+          f"(pagado {pagado:.9f} + devuelto {devuelto:.9f} = deposito {retenido:.9f})")
+    if devuelto > 0:
+        ok(f"el sobrante vuelve: {devuelto:.9f} KIA de los {retenido:.9f} depositados")
+    elif abs(devuelto) < 1e-12:
+        print("  (depositaste el coste justo: no hay sobrante que devolver; "
+              "usa --extra para ver la devolucion)")
+    else:
+        mal(f"el pago ({pagado:.9f}) supera el deposito ({retenido:.9f}): "
+            f"el minero habria cobrado de menos")
+        fallos.append("el deposito no cubre la tarifa del minero")
+    if abs((saldo_ini - saldo_fin) - pagado) > 1e-9:
         fallos.append(f"el cliente no acaba de pagar lo trabajado: "
-                      f"{saldo_ini - saldo_fin:.9f} vs {pagado:.9f}")
+                      f"{saldo_ini - saldo_fin:.12f} vs {pagado:.12f}")
     else:
         ok(f"el cliente paga exactamente lo trabajado: {pagado:.9f} KIA")
-    if abs(retenido_fin) > 1e-9:
-        fallos.append(f"quedo dinero retenido: {retenido_fin:.9f}")
+    if abs(saldo_fin - (saldo_ini - pagado)) > 1e-9:
+        fallos.append("el saldo final no cuadra con saldo inicial menos lo pagado")
+    if abs(retenido_fin) > 1e-12:
+        fallos.append(f"quedo dinero retenido: {retenido_fin:.12f}")
     else:
-        ok("no queda nada retenido")
+        ok("no queda nada retenido en escrow")
 
     nodos_despues = {k: float(v) for k, v in (get("/saldos")[1].get("saldos") or {}).items()}
     subidas = [(k, round(v - nodos_antes.get(k, 0.0), 9)) for k, v in nodos_despues.items()
@@ -275,14 +308,29 @@ def main() -> int:
             mal("los asientos de la tarea no suman cero")
             fallos.append(f"los asientos suman {suma:.12f} en vez de 0")
         escrow = WALLET_CUENTA_ESCROW()
+        # Solo los asientos de TRABAJO: la devolucion del sobrante tambien entra
+        # en una cuenta (la del cliente) y antes se contaba como pago a minero.
+        motivos_pago = ("trabajo verificado", "verificacion redundante")
         a_mineros = sum(float(x.get("kuki") or 0.0) for x in mios
-                        if float(x.get("kuki") or 0) > 0 and x.get("nodo_id") != escrow)
+                        if float(x.get("kuki") or 0) > 0
+                        and x.get("nodo_id") != escrow
+                        and str(x.get("motivo") or "").startswith(motivos_pago))
         if abs(a_mineros - pagado) < 1e-9:
             ok(f"lo que entra en cuentas de mineros es exactamente lo pagado "
                f"({a_mineros:.9f} KIA)")
         else:
             mal(f"a los mineros entran {a_mineros:.9f} y la tarea dice {pagado:.9f}")
             fallos.append("el pago a mineros no coincide con lo que declara la tarea")
+        # La devolucion, asiento a asiento: escrow -> cliente, por el sobrante.
+        a_cliente = sum(float(x.get("kuki") or 0.0) for x in mios
+                        if float(x.get("kuki") or 0) > 0 and x.get("nodo_id") == cliente_dir)
+        if devuelto > 0:
+            if abs(a_cliente - devuelto) < 1e-9:
+                ok(f"el sobrante vuelve asentado ({a_cliente:.9f} KIA al cliente, "
+                   f"del escrow, no del minero)")
+            else:
+                mal(f"al cliente vuelven {a_cliente:.9f} y el sobrante es {devuelto:.9f}")
+                fallos.append("la devolucion del sobrante no cuadra en los asientos")
 
     print("\n== 9. El recibo ==")
     c, v = get("/ledger/verificar")

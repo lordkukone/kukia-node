@@ -24,6 +24,17 @@ USO
     python tools/avisos.py --configurar    alta (token + chat + prueba)
     python tools/avisos.py --probar        mandar un mensaje de prueba
     python tools/avisos.py --estado        si esta configurado y con que bot
+
+DARLO DE ALTA SIN QUE EL TOKEN PASE POR NINGUN SITIO
+    En una terminal, pega el token sin que se vea lo que escribes y deja que el
+    script lo recoja de ahi (el fichero se borra al leerlo):
+
+        read -rsp "token del bot: " TG; printf '%s' "$TG" > .telegram_token; unset TG; echo
+        python tools/avisos.py --configurar --token-de .telegram_token
+
+    Asi el token no queda en el historial del shell (no va en la orden), ni en la
+    salida de la terminal, ni en ningun chat: solo en
+    `coordinator/telegram_aviso.json`, que esta fuera de git.
 """
 
 from __future__ import annotations
@@ -32,6 +43,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -98,10 +110,37 @@ def enviar(titulo: str, texto: str = "") -> bool:
     return bool(r.get("ok"))
 
 
-def configurar() -> int:
-    print("Telegram: habla con @BotFather, /newbot, y copia el token que te da.")
-    import getpass
-    token = getpass.getpass("token del bot (no se muestra): ").strip()
+def token_de_fichero(ruta: str) -> str:
+    """Lee el token de un fichero y lo BORRA en el acto.
+
+    Sirve para pegarlo en una terminal con `read -s` (que no enseña lo que se
+    escribe): el token no aparece en la orden, ni en la salida, ni en el
+    historial. El fichero temporal desaparece al usarlo; queda solo en
+    `coordinator/telegram_aviso.json` (permisos del dueno, fuera de git).
+    """
+    p = Path(ruta)
+    try:
+        token = p.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        print(f"[ERROR] no se pudo leer {ruta}: {type(e).__name__}")
+        return ""
+    try:
+        p.unlink()
+    except Exception:
+        print(f"[aviso] no se pudo borrar {ruta}; borralo a mano")
+    if not token or ":" not in token or len(token) < 20:
+        print("[ERROR] eso no parece un token de bot (formato 123456789:AA...)")
+        return ""
+    return token
+
+
+def configurar(token: str = "", interactivo: bool = True) -> int:
+    if not token:
+        print("Telegram: habla con @BotFather, /newbot, y copia el token que te da.")
+        import getpass
+        token = getpass.getpass("token del bot (no se muestra): ").strip()
+    else:
+        print("Telegram: token leido del fichero (no se imprime y el fichero ya no existe).")
     if not token:
         print("[ERROR] sin token no hay bot")
         return 2
@@ -113,7 +152,8 @@ def configurar() -> int:
     print(f"bot valido: @{usuario}")
 
     chat = ""
-    for intento in range(6):
+    intentos = 6 if interactivo else 12
+    for intento in range(intentos):
         upd = pide(token, "getUpdates", {"limit": 10, "timeout": 0})
         if upd.get("ok"):
             for u in reversed(upd.get("result") or []):
@@ -125,12 +165,18 @@ def configurar() -> int:
                     break
         if chat:
             break
-        print(f"todavia no veo tu mensaje ({intento + 1}/6). Abre Telegram, "
-              f"busca @{usuario} y mandale /start.")
-        try:
-            input("pulsa Enter cuando lo hayas mandado...")
-        except EOFError:
-            break
+        if interactivo:
+            print(f"todavia no veo tu mensaje ({intento + 1}/{intentos}). Abre Telegram, "
+                  f"busca @{usuario} y mandale /start.")
+            try:
+                input("pulsa Enter cuando lo hayas mandado...")
+            except EOFError:
+                break
+        else:
+            # Sin terminal interactiva (token pasado por fichero): se espera solo.
+            print(f"esperando tu /start en @{usuario} ... ({intento + 1}/{intentos})",
+                  flush=True)
+            time.sleep(5.0)
     if not chat:
         print("[ERROR] no encontre tu chat. Manda /start al bot y repite.")
         return 2
@@ -180,9 +226,17 @@ def main() -> int:
     ap.add_argument("--configurar", action="store_true", help="alta del bot y del chat")
     ap.add_argument("--probar", action="store_true", help="mensaje de prueba")
     ap.add_argument("--estado", action="store_true", help="como esta la configuracion")
+    ap.add_argument("--token-de", metavar="FICHERO", default="",
+                    help="leer el token de un fichero (para pegarlo sin que se vea); "
+                         "el fichero se borra al leerlo")
     args = ap.parse_args()
     if args.configurar:
-        return configurar()
+        token = ""
+        if args.token_de:
+            token = token_de_fichero(args.token_de)
+            if not token:
+                return 2
+        return configurar(token=token, interactivo=not bool(args.token_de))
     if args.probar:
         return probar()
     return estado()

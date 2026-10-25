@@ -49,23 +49,39 @@ veces por lo mismo. Desde el 23-10 manda el trabajo medido.
   (medido: x8,0000 exacto). El reparto es por trabajo, no por orden de llegada.
 - **El tier no multiplica** en este modo: la prima por VRAM y la prima por
   potencia eran pagar dos veces lo mismo.
-- **Techo por tarea**: 10 KIA x halving. **Fusible del minuto**: 2x el
-  presupuesto, solo salta si algo va muy desmadrado.
+- **El precio sale del ancla GPU-minuto** (desde el 25-10-2026, 16:26, es el
+  defecto): el presupuesto del minuto (1,310592 KIA) dividido por los 900.000
+  GFLOP que da en un minuto la GPU de referencia (15.000 GFLOP/s), o sea
+  **0,000001456213 KIA/GFLOP**. Así un minuto de GPU a tope cobra 1,31 KIA y la
+  emisión del minuto paga exactamente 1,31 minutos de GPU por minuto de red: el
+  tope no muerde mientras la red no pase de esa capacidad. Con
+  `KUKIA_PRECIO_DEFINIDO=1` se vuelve a la definición de la mañana (**1 KIA = 1
+  minuto de GPU**, precio fijo 0,000001111111) y el presupuesto queda solo de
+  tope. Las dos reglas se publican en `/stats` (`bolsa_emision.modo_precio`).
+- **Techo por tarea**: 10 KIA x halving. **Fusible del minuto**: 1x el
+  presupuesto (2x hasta el 25-10), y solo corta lo que pase de la capacidad.
 - **La bolsa del minuto se congela al abrirlo** y los pagos se redondean hacia
   abajo, así que la suma del minuto no se pasa ni un decimal. Si no se puede
   anotar la bolsa en disco, **el pago se aborta**: mejor no pagar una tarea que
   emitir fuera de presupuesto.
-- **Sin suelo por defecto**: un checksum son 0 FLOPs y cobra 0 KIA. Si algún día
-  interesa un fijo pequeño por tarea: `KUKIA_GFLOP_MIN=0.5` (en GFLOP).
+- **Suelo transferible por tarea**: ninguna tarea paga menos de **0,0001 KIA**, que
+  es lo mínimo que acepta `/transferir` (redondea el monto a 4 decimales). Se aplica
+  en KIA (`KUKIA_PAGO_MIN_KIA`), no en GFLOP, así que sigue valiendo lo mismo si
+  cambia el precio y no infla los GFLOP medidos. Con el precio de hoy el suelo solo
+  muerde por debajo de **68,7 GFLOP** (5 ms de GPU; con la definición, 90 GFLOP): un
+  checksum cobra el suelo y una matriz de 137 GFLOP ya cobra por trabajo. Prueba:
+  `tools/prueba_suelo_transferible.py`.
 - **Red sin historial** (primer arranque, sin ninguna medida): cae a modo plano,
   que también pasa por la bolsa, así que tampoco puede emitir de más.
-- Tope duro de **100M KIA** intacto y fin de emisión el **2150-01-01**.
+- Tope duro de **100M KIA** intacto y fin de emisión el **2150-04-13**.
 
-Cifras de hoy (23-10, 21:20, minero parado): precio **0,003742558085 KIA/GFLOP**,
-presupuesto **1,310562 KIA/min**, referencia **700,356 GFLOP/min**. Con ese
-precio, una matriz de 0,128 GFLOP paga 0,000479 KIA y una de 1,024 GFLOP paga
-0,003832 KIA. El número cambia cada minuto con el trabajo de la red: no es una
-tabla fija.
+Cifras de hoy (25-10, 16:26, con el ancla encendida): precio
+**0,000001456213 KIA/GFLOP**, presupuesto **1,31059 KIA/min**, capacidad
+**1,31 minutos de GPU por minuto de red**. Con ese precio, una matriz de
+1,024 GFLOP paga 0,000001491 KIA y un minuto de GPU a tope paga 1,31 KIA. Si se
+entrega más de 1,31 minutos de GPU en un minuto, el fusible reparte y corta lo
+que sobra; con `KUKIA_PRECIO_DEFINIDO=1` vuelve la definición de 1 KIA = 1
+minuto y el precio fijo de 0,000001111111.
 
 Se comprueba sin creerse el panel: `GET /stats` devuelve `bolsa_emision` (precio,
 presupuesto, pagado en el minuto, fusible) y `pago_por_potencia` (interruptor y
@@ -486,10 +502,13 @@ compara el hash **en el servidor** y se para si no coincide.
 | /version | GET | Que codigo esta ejecutando: version, hora de arranque, commit y SHA-256 de los ficheros clave (comparalo con GitHub con `tools/huella_codigo.py -g`) |
 | /stats | GET | Supply, nodos, tareas, dificultad, integridad, bolsa del minuto y precio por GFLOP |
 | /admin/clientes | POST/GET | Alta y lista de clientes (solo admin). El token se devuelve UNA vez |
-| /cliente/precio | GET | Coste mínimo de una tarea antes de firmar (no gasta la bolsa) |
+| /admin/clientes/baja | POST | Baja **lógica** de clientes (`activo=0`), en bloque y sin borrar asientos ni tareas |
+| /cliente/precio | GET | Coste mínimo (o **exacto**, si mandas `params`) antes de firmar; no gasta la bolsa |
 | /cliente/saldo | GET | Saldo disponible y lo retenido en tareas en curso |
-| /cliente/tareas | POST | Encola un encargo: firma Ed25519 + cobro por adelantado |
+| /cliente/tareas | POST | Encola un encargo: firma Ed25519 + depósito por adelantado (`deposito` opcional; el sobrante vuelve) |
 | /cliente/tareas/{id} | GET | Estado y resultado; solo del cliente dueño |
+| /ingresos | GET | Dinero real cobrado (EUR): total, fecha del primer euro y últimos trabajos. Sin nombres |
+| /admin/ingresos | POST/GET | Anotar un trabajo cobrado en euros y listarlo con nombres (solo admin) |
 
 ## Pedir trabajo (clientes)
 
@@ -541,7 +560,7 @@ Sale 0 solo si pasan las 93 comprobaciones.
 - 15.000.000 KIA fundacionales al fundador en el bloque genesis
   (`KUK9E8B44CD7FE3AF178039453D3EEDF391EEC0CE`).
 - El resto sale por emision de trabajo verificado: 1,31 KIA/min hoy, con
-  halvings cada ~20,7 anos y fin de emision el 2150-01-01. Nunca se acuña por
+  halvings cada ~20,71 anos y fin de emision el 2150-04-13. Nunca se acuña por
   encima del tope: se comprueba en cada pago.
 - El reparto 25M/40M/15M/10M/10M que habia aqui era una propuesta antigua y no
   es lo que corre: el codigo no tiene esas bolsas.

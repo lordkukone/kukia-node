@@ -7,6 +7,10 @@ validator/identidad*.json
 coordinator/sello_key.txt
 coordinator/admin_token.txt
 coordinator/telegram_aviso.json
+# token pegado a mano en la terminal (read -s) para dar de alta el bot: se borra
+# al leerlo, pero si algo falla no puede acabar en git
+.telegram_token
+.telegram_token*
 searchconsole_cuenta.json
 searchconsole_cuenta*.json
 
@@ -52,6 +56,10 @@ medidas/ensayos/
 # Copias de seguridad que se quedan en el disco, no en el repositorio
 # (el 24-10-2026 se limpio ademas lo que ya estaba commiteado).
 backup_docs_*.zip
+# Copia de docs/ hecha antes de regenerar la web (25-10-2026: una de estas se
+# colo en el repositorio publico porque el publicador sube los ficheros nuevos
+# que no estan ignorados).
+docs_backup_*/
 _backup_*.py
 
 # Estado de los vigilantes: se reescribe solo cada pocos minutos. Tenerlo
@@ -113,6 +121,11 @@ esperados_tmp.json
 
 # Capturas locales de la revision (24-10-2026): no se publican.
 capturas_local/
+
+# Evidencia local del trabajo (25-10-2026): capturas comparativas de la web y
+# carpetas de auditoria. Son para revisar en el disco, no producto del repo.
+capturas/
+_auditoria_*/
 
 # CNAME local de docs/ (24-10-2026): apunta a un dominio de Surge, y si viaja al
 # repo GitHub Pages lo toma como dominio propio, no puede verificarlo y tumba el

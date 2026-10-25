@@ -52,8 +52,11 @@ def firmar(priv, msg):
     return Ed25519PrivateKey.from_private_bytes(bytes.fromhex(priv)).sign(msg.encode()).hex()
 
 def saldo(cta):
+    # 12 decimales: con la definicion (1 KIA = 1 minuto de GPU) una tarea cuesta
+    # ~4e-8 KIA y redondear a 6 lo convertia en 0, falseando las comprobaciones
+    # del escrow.
     f = C.con.execute("SELECT total FROM saldos_cuenta WHERE cuenta=?", (cta,)).fetchone()
-    return round(float(f["total"] if f else 0.0), 6)
+    return round(float(f["total"] if f else 0.0), 12)
 
 def meter_saldo(cta, monto):
     """Fondea al cliente: simula que ya compro/mino KIA antes de pedir trabajo."""
@@ -173,9 +176,15 @@ with TestClient(C.app, base_url="http://127.0.0.1") as cli:
           r.text[:200])
 
     # ---------- 5. TOPE INSUFICIENTE ------------------------------------
+    # El tope se calcula A PARTIR DEL COSTE REAL, no con un numero fijo: con la
+    # definicion (1 KIA = 1 minuto de GPU) esta tarea cuesta ~4e-8 KIA y un tope
+    # fijo de 1e-7 la dejaba pasar (con el ancla ya pasaba igual y la prueba no
+    # lo cazaba porque nunca se habia corrido con ella).
+    coste_esta = float(C._coste_tarea_cliente("matriz", params) or 0.0)
+    tope_bajo = max(coste_esta / 2.0, 1e-15) if coste_esta > 0 else 1e-15
     nonce = "n-" + os.urandom(6).hex()
-    msg = "cliente:%s:matriz:%s:%s" % (nonce, h_params, 0.0000001)
-    r = post(cli, "/cliente/tareas", json={"tipo": "matriz", "params": params, "tope": 0.0000001,
+    msg = "cliente:%s:matriz:%s:%s" % (nonce, h_params, tope_bajo)
+    r = post(cli, "/cliente/tareas", json={"tipo": "matriz", "params": params, "tope": tope_bajo,
                                           "nonce": nonce, "clave_publica": pub_c,
                                           "firma": firmar(priv_c, msg)}, headers=cli_h)
     check(r.status_code == 402 and "tope" in r.text.lower(),
@@ -207,7 +216,7 @@ with TestClient(C.app, base_url="http://127.0.0.1") as cli:
     out["tarea"] = {"id": t1, "coste": coste, "respuesta": r.json()}
     check(coste > 0, "la tarea tiene un coste positivo (%s KIA)" % coste)
 
-    check(saldo(dir_c) == round(100.0 - coste, 6),
+    check(abs(saldo(dir_c) - (100.0 - coste)) <= 1e-9,
           "el dinero sale del cliente al encolar", {"saldo": saldo(dir_c), "coste": coste})
     check(saldo(C.CUENTA_ESCROW) == coste,
           "y queda RETENIDO en escrow, no en el bolsillo de nadie", {"escrow": saldo(C.CUENTA_ESCROW)})
@@ -269,17 +278,119 @@ with TestClient(C.app, base_url="http://127.0.0.1") as cli:
     pagado = float(tarea.get("pagado") or 0.0)
     check(pagado > 0, "se le pago al minero desde el deposito (%s KIA)" % pagado)
 
-    check(saldo(dir_n) == round(pagado, 6),
+    check(abs(saldo(dir_n) - pagado) <= 1e-9,
           "el minero cobra exactamente lo pagado", {"nodo": saldo(dir_n), "pagado": pagado})
     check(abs(saldo(C.CUENTA_ESCROW) - max(0.0, coste - pagado)) < 1e-6,
           "el escrow de esa tarea queda a cero (lo demas volvio al cliente)",
           {"escrow": saldo(C.CUENTA_ESCROW), "coste": coste, "pagado": pagado})
-    check(saldo(dir_c) == round(100.0 - pagado, 6),
+    check(abs(saldo(dir_c) - (100.0 - pagado)) <= 1e-9,
           "el cliente paga SOLO lo que se trabajo, no el deposito entero",
           {"cliente": saldo(dir_c), "pagado": pagado})
     check(metricas()["supply"] == antes["supply"],
           "el ciclo completo no creo ni destruyo suministro (asientos compensados)",
           {"antes": antes["supply"], "ahora": metricas()["supply"]})
+
+    # ---------- 9b. DEPOSITO MAYOR QUE EL COSTE: VUELVE EL SOBRANTE ------
+    # Un cliente puede dejar retenido mas que el coste. El minero cobra su
+    # tarifa ENTERA y la diferencia vuelve al cliente: el sobrante sale del
+    # deposito, nunca del bolsillo del que trabajo (25-10-2026).
+    r = get(cli, "/cliente/precio", headers=cli_h,
+            params={"tipo": "matriz", "params": json.dumps(params)})
+    check(r.status_code == 200 and "coste" in (r.json() or {}),
+          "el precio con params da el coste exacto de la tarea", r.text[:200])
+    coste_ex = float((r.json() or {}).get("coste") or 0.0)
+    check(abs(coste_ex - coste) <= 1e-12,
+          "y coincide con lo que costo la misma tarea",
+          {"exacto": coste_ex, "cobrado": coste})
+
+    extra = 5.0
+    deposito_ex = round(coste_ex + extra, 12)
+    antes3 = saldo(dir_c)
+    nonce = "n-" + os.urandom(6).hex()
+    msg = "cliente:%s:matriz:%s:%s:%s" % (nonce, h_params, 50.0, deposito_ex)
+    r = post(cli, "/cliente/tareas", headers=cli_h,
+             json={"tipo": "matriz", "params": params, "tope": 50.0,
+                   "deposito": deposito_ex, "nonce": nonce,
+                   "clave_publica": pub_c, "firma": firmar(priv_c, msg)})
+    check(r.status_code == 200, "se puede depositar MAS que el coste", r.text[:300])
+    t3 = (r.json() or {}).get("tarea_id")
+    retenido3 = float((r.json() or {}).get("deposito") or 0.0)
+    out["deposito"] = {"tarea": t3, "coste": coste_ex, "depositado": retenido3,
+                       "respuesta": r.json()}
+    check(abs(retenido3 - deposito_ex) <= 1e-12,
+          "se retiene el DEPOSITO entero, no el coste",
+          {"retenido": retenido3, "deposito": deposito_ex})
+    check(abs(saldo(dir_c) - (antes3 - deposito_ex)) <= 1e-9,
+          "al cliente se le retiene el deposito", {"saldo": saldo(dir_c)})
+    check(abs(saldo(C.CUENTA_ESCROW) - deposito_ex) <= 1e-9,
+          "y queda entero en escrow", {"escrow": saldo(C.CUENTA_ESCROW)})
+    check(metricas()["supply"] == antes["supply"],
+          "depositar no emite dinero", {"supply": metricas()["supply"]})
+
+    # El deposito va firmado: firmar la cadena vieja (sin importe) no vale.
+    nonce = "n-" + os.urandom(6).hex()
+    msg_vieja = "cliente:%s:matriz:%s:%s" % (nonce, h_params, 50.0)
+    r = post(cli, "/cliente/tareas", headers=cli_h,
+             json={"tipo": "matriz", "params": params, "tope": 50.0,
+                   "deposito": deposito_ex, "nonce": nonce,
+                   "clave_publica": pub_c, "firma": firmar(priv_c, msg_vieja)})
+    check(r.status_code == 401,
+          "el deposito va firmado: firmar sin el importe se rechaza (401)", r.text[:200])
+
+    # Depositar menos que el coste dejaria al minero cobrando de menos.
+    corto = round(coste_ex / 4.0, 12)
+    nonce = "n-" + os.urandom(6).hex()
+    msg_corto = "cliente:%s:matriz:%s:%s:%s" % (nonce, h_params, 50.0, corto)
+    r = post(cli, "/cliente/tareas", headers=cli_h,
+             json={"tipo": "matriz", "params": params, "tope": 50.0,
+                   "deposito": corto, "nonce": nonce,
+                   "clave_publica": pub_c, "firma": firmar(priv_c, msg_corto)})
+    check(r.status_code == 402 and "deposito" in r.text.lower(),
+          "un deposito por debajo del coste se rechaza (el minero cobraria de menos)",
+          r.text[:200])
+
+    # El minero resuelve la tercera tarea.
+    ts = int(time.time())
+    npend = "p" + os.urandom(5).hex()
+    r = get(cli, "/tareas/pendiente", params={
+        "nodo_id": nid, "ts": ts, "nonce": npend,
+        "firma": firmar(priv_n, "pendiente:%s:%s:%s" % (nid, ts, npend))})
+    pedida3 = ((r.json() or {}).get("tarea") or {})
+    check(pedida3.get("id") == t3, "el minero recibe la tarea con deposito", pedida3.get("id"))
+    r = post(cli, "/tareas/resultado_json", json={
+        "tid": t3, "nodo_id": nid, "metrica": metrica,
+        "firma": firmar(priv_n, "%s:%s" % (t3, metrica)),
+        "device": "cpu", "duracion_ms": 12.0, "telemetria": "{}"})
+    check(r.status_code == 200, "el minero entrega el resultado", r.text[:300])
+
+    r = get(cli, "/cliente/tareas/%s" % t3, headers=cli_h)
+    t3d = r.json() or {}
+    pagado3 = float(t3d.get("pagado") or 0.0)
+    devuelto3 = round(deposito_ex - pagado3, 12)
+    out["sobrante"] = {"pagado": pagado3, "devuelto": devuelto3, "tarea": t3d}
+    check(t3d.get("estado") == "ok", "la tarea con deposito queda en ok", t3d)
+    check(pagado3 > 0, "se le pago al minero (%s KIA)" % pagado3)
+    check(abs(pagado3 - pagado) <= 1e-9,
+          "el minero cobra LO MISMO que sin deposito extra (el sobrante no sale de su pago)",
+          {"con_deposito": pagado3, "sin_deposito": pagado})
+    check(devuelto3 > 0, "hay sobrante que devolver (%s KIA)" % devuelto3)
+    check(abs(saldo(dir_c) - (antes3 - pagado3)) <= 1e-9,
+          "al cliente le vuelve el sobrante: paga solo lo trabajado",
+          {"saldo": saldo(dir_c), "esperado": antes3 - pagado3})
+    check(abs(saldo(C.CUENTA_ESCROW)) <= 1e-6,
+          "el escrow de esa tarea queda a cero", {"escrow": saldo(C.CUENTA_ESCROW)})
+    asientos3 = C.con.execute("SELECT nodo_id, kuki, motivo FROM ledger WHERE tarea_id=? "
+                              "ORDER BY id", (t3,)).fetchall()
+    dev_as = sum(float(a["kuki"]) for a in asientos3
+                 if a["motivo"] == "devolucion sobrante" and float(a["kuki"]) > 0)
+    check(abs(dev_as - devuelto3) <= 1e-9,
+          "el asiento de devolucion es exactamente el sobrante",
+          {"asiento": dev_as, "sobrante": devuelto3})
+    check(abs(sum(float(a["kuki"]) for a in asientos3)) <= 1e-9,
+          "los asientos del deposito se compensan (ni se crea ni se pierde dinero)",
+          {"suma": sum(float(a["kuki"]) for a in asientos3)})
+    check(metricas()["supply"] == antes["supply"],
+          "con deposito tampoco se emite dinero", {"supply": metricas()["supply"]})
 
     # ---------- 10. TAREA AJENA -----------------------------------------
     pub_d, priv_d = par()
@@ -301,7 +412,7 @@ with TestClient(C.app, base_url="http://127.0.0.1") as cli:
                                           "firma": firmar(priv_c, msg)}, headers=cli_h)
     t2 = (r.json() or {}).get("tarea_id")
     coste2 = float((r.json() or {}).get("coste") or 0.0)
-    check(r.status_code == 200 and saldo(dir_c) == round(antes2 - coste2, 6),
+    check(r.status_code == 200 and abs(saldo(dir_c) - (antes2 - coste2)) <= 1e-9,
           "segunda tarea: retenida igual", {"saldo": saldo(dir_c), "coste": coste2})
     ts = int(time.time())
     npend = "p" + os.urandom(5).hex()
@@ -322,6 +433,76 @@ with TestClient(C.app, base_url="http://127.0.0.1") as cli:
     # ---------- 12. EL TOKEN NO DA ADMIN ---------------------------------
     r = get(cli, "/admin/clientes", headers=cli_h)
     check(r.status_code == 403, "el token de cliente no sirve como admin (403)", r.text[:200])
+
+    # ---------- 12b. BAJA MASIVA SIN BORRAR NADA -------------------------
+    # Dar de baja = activo=0. No se borra un asiento: la cadena de hashes y los
+    # sellos seguirian valiendo aunque se editara la base, pero borrar filas los
+    # rompe, asi que aqui no se borra nada (25-10-2026).
+    cid = (out.get("cliente", {}).get("alta") or {}).get("id")
+    r = post(cli, "/admin/clientes/baja", json={"todos": True})
+    check(r.status_code == 403, "la baja masiva exige token de admin (403)", r.text[:200])
+    r = post(cli, "/admin/clientes/baja", json={}, headers=adm)
+    check(r.status_code == 400, "sin decir a quien, no se da de baja a nadie (400)", r.text[:200])
+
+    asientos0 = C.con.execute("SELECT COUNT(*) n FROM ledger").fetchone()["n"]
+    supply0 = round(C.supply_emitido(), 9)
+    r = post(cli, "/admin/clientes/baja", json={"ids": [cid]}, headers=adm)
+    check(r.status_code == 200 and (r.json() or {}).get("seco") is True,
+          "por defecto la baja es una vista previa: no escribe", r.text[:300])
+    fila = C.con.execute("SELECT activo FROM clientes WHERE id=?", (cid,)).fetchone()
+    check(fila is not None and int(fila["activo"]) == 1,
+          "tras la vista previa el cliente sigue activo", dict(fila) if fila else None)
+
+    r = post(cli, "/admin/clientes/baja", json={"ids": [cid], "seco": False}, headers=adm)
+    bajada = r.json() or {}
+    check(r.status_code == 200 and len(bajada.get("bajadas") or []) == 1,
+          "con seco=false se da de baja", r.text[:300])
+    fila = C.con.execute("SELECT activo FROM clientes WHERE id=?", (cid,)).fetchone()
+    check(fila is not None and int(fila["activo"]) == 0, "el cliente queda activo=0")
+    check(int(bajada.get("asientos_borrados", -1)) == 0, "el Core declara cero asientos borrados")
+    asientos1 = C.con.execute("SELECT COUNT(*) n FROM ledger").fetchone()["n"]
+    check(asientos1 == asientos0, "el ledger conserva TODOS sus asientos",
+          {"antes": asientos0, "despues": asientos1})
+    check(round(C.supply_emitido(), 9) == supply0, "el suministro no cambia con una baja")
+    fila = C.con.execute("SELECT COUNT(*) n FROM tareas WHERE cliente=?", (dir_c,)).fetchone()
+    check(int(fila["n"]) >= 2, "sus tareas siguen ahi (no se borra el historial)",
+          {"tareas": int(fila["n"])})
+
+    # Con la baja, el token deja de valer al instante.
+    r = get(cli, "/cliente/saldo", headers=cli_h)
+    check(r.status_code == 401, "el token de un cliente dado de baja ya no entra (401)",
+          r.text[:200])
+
+    # Y es reversible: la misma billetera se puede volver a dar de alta.
+    r = post(cli, "/admin/clientes", json={"nombre": "empresa de prueba",
+                                           "direccion": dir_c}, headers=adm)
+    check(r.status_code == 200, "se puede volver a dar de alta con la misma billetera",
+          r.text[:200])
+    tok2 = (r.json() or {}).get("token") or ""
+    # El alta crea una fila NUEVA (id nuevo) con la misma billetera.
+    cid2 = (r.json() or {}).get("id")
+    cli_h2 = {"X-Cliente-Token": tok2}
+
+    # Quien tiene tareas en curso no se da de baja sin querer.
+    params = C.validar_params("matriz", {"n": 256, "seed": 3})
+    h2 = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
+    nonce = "n-" + os.urandom(6).hex()
+    msg = "cliente:%s:matriz:%s:%s" % (nonce, h2, 50.0)
+    r = post(cli, "/cliente/tareas", headers=cli_h2,
+             json={"tipo": "matriz", "params": params, "tope": 50.0, "nonce": nonce,
+                   "clave_publica": pub_c, "firma": firmar(priv_c, msg)})
+    t4 = (r.json() or {}).get("tarea_id")
+    check(r.status_code == 200, "tras el alta puede volver a pedir trabajo", r.text[:200])
+    r = post(cli, "/admin/clientes/baja", json={"ids": [cid2], "seco": False}, headers=adm)
+    check(r.status_code == 200 and not (r.json() or {}).get("bajadas"),
+          "con una tarea en curso se SALTA la baja", r.text[:300])
+    check(len((r.json() or {}).get("saltados") or []) == 1, "y se avisa de por que")
+    r = post(cli, "/admin/clientes/baja", json={"ids": [cid2], "seco": False,
+                                                "forzar": True}, headers=adm)
+    check(r.status_code == 200 and len((r.json() or {}).get("bajadas") or []) == 1,
+          "con forzar=True si se da de baja (decision explicita)", r.text[:300])
+    out["baja"] = {"bajada": bajada, "tarea_en_curso": t4,
+                   "asientos": {"antes": asientos0, "despues": asientos1}}
 
 out["fallos"] = fallos
 out["ok"] = not fallos

@@ -10,6 +10,10 @@ Que demuestra (con el ancla GPU-minuto encendida):
   3. El fusible actua SOLO cuando toca: si en un mismo minuto se entrega mas de
      el doble del presupuesto (una rafaga), lo que sobra se recorta y el total
      del minuto no pasa de 2x el presupuesto.
+  4. DOS GPUs (las de esta maquina) trabajando a la vez un mes entero, cada una
+     un minuto de GPU por minuto de reloj: el presupuesto se reparte, cada una
+     cobra la mitad de lo que cobraria sola y entre las dos sale UNA emision,
+     no dos. Entregar el doble de GPU no emite el doble.
 
 Como se simula: cada vuelta del bucle es un minuto de reloj. Se le paga al nodo
 el trabajo de una GPU de referencia a tope (60 * 15.000 GFLOP) y se comprueba
@@ -169,6 +173,67 @@ def reparto(carga):
 salida["dos_gpus"] = reparto({"gpu_a": GPU_MIN, "gpu_b": GPU_MIN})
 salida["rapida_y_lenta"] = reparto({"rapida_3_5x": 3.5 * GPU_MIN, "lenta_1x": GPU_MIN})
 
+# --- 5: un mes entero con DOS GPUs a la vez -------------------------------
+# Las dos entregan 1 minuto de GPU en CADA minuto de reloj: 2 minutos de GPU
+# por minuto de red, muy por encima de la capacidad (~1,31). El presupuesto del
+# minuto se reparte entre las dos, asi que cada una cobra la mitad; el total del
+# mes sigue siendo UNA emision, no dos. Es el caso de esta maquina (5070 + 5060 Ti).
+NODOS2 = ("gpu_a", "gpu_b")
+DOS_GPU_MIN = 2.0 * GPU_MIN
+cobrado2 = {n: 0.0 for n in NODOS2}
+rec2 = 0.0
+minutos_rec2 = 0
+suma_presu2 = 0.0
+fuentes2 = {}
+minuto_min2, minuto_max2 = None, None
+supply_0_dos = C.supply_emitido()
+tiempo2 = time.time()
+seed_min = None
+for i in range(MINUTOS):
+    # El minuto anterior tiene que haber medido los DOS minutos de GPU, si no el
+    # precio saldria con el suelo y no habria reparto. Solo se siembra cuando
+    # cambia el minuto de reloj: el valor es el mismo todo el rato.
+    ahora = int(time.time() // 60)
+    if seed_min != ahora:
+        sembrar_previo(DOS_GPU_MIN)
+        seed_min = ahora
+    minuto_limpio()
+    pm = C.precio_unico_minuto()
+    presu_min = C.presupuesto_del_minuto()
+    fuentes2[pm.get("fuente")] = fuentes2.get(pm.get("fuente"), 0) + 1
+    pagos_min = 0.0
+    rec_min = 0.0
+    for n in NODOS2:
+        p, rec = paga(GPU_MIN)
+        with C._escritura():
+            C._asiento("mes2%05d%s" % (i, n), n, p, "trabajo verificado")
+        cobrado2[n] += p
+        pagos_min += p
+        rec_min += rec
+    rec2 += rec_min
+    if rec_min > 0:
+        minutos_rec2 += 1
+    suma_presu2 += presu_min
+    minuto_min2 = pagos_min if minuto_min2 is None else min(minuto_min2, pagos_min)
+    minuto_max2 = pagos_min if minuto_max2 is None else max(minuto_max2, pagos_min)
+salida["mes_dos_gpus"] = {
+    "minutos": MINUTOS,
+    "gflop_por_gpu": GPU_MIN,
+    "gflop_entregados_por_minuto": DOS_GPU_MIN,
+    "cobrado": cobrado2,
+    "total": sum(cobrado2.values()),
+    "suma_presupuestos": suma_presu2,
+    "recortes": rec2,
+    "minutos_con_recorte": minutos_rec2,
+    "pago_minuto_min": minuto_min2,
+    "pago_minuto_max": minuto_max2,
+    "fuentes": fuentes2,
+    "segundos": round(time.time() - tiempo2, 1),
+    "supply_0": supply_0_dos,
+    "supply_1": C.supply_emitido(),
+    "un_solo_minero_total": salida["mes"]["total"],
+}
+
 print("RESULTADO:" + json.dumps(salida))
 '''
 
@@ -187,6 +252,12 @@ def cargar(minutos: int) -> dict:
             KUKIA_DB=str(tmp / "coordinator" / "ledger" / "kukia.db"),
             KUKIA_AUTO_TAREAS="0",
             KUKIA_ANCLA_GPU_MIN="1",
+            # Esta prueba es DEL ANCLA (un mes de GPU cobra la emision del mes).
+            # Desde el 25-10-2026 el modo por defecto es la definicion
+            # (1 KIA = 1 minuto de GPU), que paga 1 KIA por minuto y no el
+            # presupuesto: aqui se apaga a proposito. La definicion se prueba en
+            # tools/prueba_kia_minuto.py.
+            KUKIA_PRECIO_DEFINIDO="0",
             KUKIA_MINUTOS_SIM=str(minutos),
             PYTHONIOENCODING="utf-8",
         )
@@ -327,12 +398,52 @@ def main() -> int:
     check(pr["recortado"] == 0.0 and pl["recortado"] == 0.0,
           "sin recortes: la parte de cada una es proporcion a su trabajo")
 
+    # --- 6. un mes entero con dos GPUs a la vez ---------------------------
+    d2 = r["mes_dos_gpus"]
+    ca, cb = d2["cobrado"]["gpu_a"], d2["cobrado"]["gpu_b"]
+    total2 = d2["total"]
+    solo = d2["un_solo_minero_total"]
+    print()
+    print(f"  un mes con DOS GPUs a la vez ({num(d2['minutos'])} minutos, "
+          f"2 minutos de GPU por minuto de red: el doble de la capacidad)")
+    print(f"    gpu_a: {num(ca, 2)} KIA    gpu_b: {num(cb, 2)} KIA    "
+          f"las dos: {num(total2, 2)} KIA")
+    print(f"    la misma maquina con UNA sola GPU habria cobrado {num(solo, 2)} KIA")
+    print(f"    simulada en {d2['segundos']} s · fuente del precio: {d2['fuentes']}")
+    check(set(d2["fuentes"]) == {"trabajo medido (reparto proporcional)"},
+          f"los {num(d2['minutos'])} minutos van por trabajo medido, no por el "
+          f"suelo: el presupuesto se reparte entre las dos")
+    check(abs(ca - cb) <= max(1e-9, max(ca, cb) * 1e-6),
+          f"las dos cobran lo mismo por el mismo trabajo: {num(ca, 2)} vs "
+          f"{num(cb, 2)} KIA (diferencia {num(abs(ca - cb), 9)})")
+    check(abs(ca - solo / 2) <= solo / 2 * 0.01,
+          f"cada una se lleva la mitad de lo que se llevaria sola: "
+          f"{num(ca, 2)} vs {num(solo / 2, 2)} KIA")
+    check(abs(total2 - solo) <= solo * 0.01,
+          f"entre las dos cobran UNA emision, no dos: {num(total2, 2)} vs "
+          f"{num(solo, 2)} KIA con una sola GPU")
+    check(total2 < solo * 1.5,
+          f"entregar el doble de GPU no emite el doble: {num(total2, 2)} < "
+          f"{num(solo * 1.5, 2)} KIA")
+    emit2 = d2["supply_1"] - d2["supply_0"]
+    check(abs(emit2 - total2) <= max(1e-6, total2 * 1e-9),
+          f"al suministro entra lo mismo que cobran entre las dos: "
+          f"{num(emit2, 2)} vs {num(total2, 2)} KIA")
+    check(d2["recortes"] <= max(1e-9, total2 * 1e-9),
+          f"el fusible no recorta nada en el reparto normal "
+          f"(recortado {d2['recortes']:.2e} en {d2['minutos']} minutos)")
+    check(d2["pago_minuto_max"] <= d2["suma_presupuestos"] / d2["minutos"] * 1.001,
+          f"ningun minuto paga por encima de su parte: el minuto mas caro "
+          f"{num(d2['pago_minuto_max'], 6)} vs presupuesto medio "
+          f"{num(d2['suma_presupuestos'] / d2['minutos'], 6)} KIA")
+
     print()
     if fallos:
         print(f"{len(fallos)} FALLO(S)")
         return 1
-    print("TODO OK: un minero a tope un mes cobra la emision del mes, y el fusible")
-    print("solo muerde en las rafagas, no en el trabajo normal.")
+    print("TODO OK: un minero a tope un mes cobra la emision del mes, dos GPUs se la")
+    print("reparten a partes iguales sin emitir de mas, y el fusible solo muerde en")
+    print("las rafagas, no en el trabajo normal.")
     return 0
 
 

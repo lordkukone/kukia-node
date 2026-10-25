@@ -18,10 +18,14 @@ whisper, se relanza solo con el interprete bueno (KUKIA_WHISPER_PY).
 
 Medido en la 5070 el 25-10-2026 con el modelo small: 5x tiempo real, o sea una
 hora de audio en unos 12 minutos de GPU. Con 0,15 EUR/min son 9 EUR por hora de
-audio y unos 3 centimos de luz.
+audio y unos 3 centimos de luz.Precio de referencia del mercado: 0,10 - 0,30 EUR por minuto de audio.
 
-Precio de referencia del mercado: 0,10 - 0,30 EUR por minuto de audio.
-"""
+AVISO AL MOVIL
+Cuando el trabajo es largo (20 minutos de audio o mas, `--avisar-desde` para
+cambiarlo, `--sin-aviso` para callarlo) se manda un mensaje por Telegram al
+terminar, con el precio, los minutos y la carpeta de entrega. Usa el bot de
+`tools/avisos.py`; si no esta configurado el trabajo sigue igual y solo se
+avisa por pantalla de que no se pudo mandar."""
 
 from __future__ import annotations
 
@@ -47,6 +51,9 @@ PY_WHISPER = os.environ.get(
 
 PRECIO_MIN = 0.15        # EUR por minuto de audio
 MINIMO_MIN = 1.0         # se cobra un minimo de 1 minuto
+# A partir de aqui el trabajo es "largo" y se avisa al movil por Telegram al
+# terminar. Corto = no molesta: se ve en la propia ventana.
+LARGO_MIN = 20.0
 WATIOS = 150.0           # consumo real transcribiendo en la 5070
 EUR_KWH = 0.22
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".wma",
@@ -88,6 +95,117 @@ def precio(minutos: float, precio_min: float, minimo: float) -> dict:
             "precio": round(eur, 2), "coste_luz": round(coste, 4),
             "margen": round(eur - coste, 2),
             "margen_x": round(eur / coste, 1) if coste > 0 else None}
+
+
+def numero(n: float, decimales: int = 1) -> str:
+    """37.42 -> 37,4: en castellano la coma va delante de los decimales."""
+    return f"{float(n):.{decimales}f}".replace(".", ",")
+
+
+def euros(n: float) -> str:
+    """5.61 -> 5,61 EUR, que es como se escribe en castellano."""
+    return numero(n, 2) + " EUR"
+
+
+def segundos_a_texto(seg: float) -> str:
+    """1 h 12 min / 37 min / 4 min 20 s, como se dice hablando."""
+    seg = max(0.0, float(seg))
+    h = int(seg // 3600)
+    m = int((seg % 3600) // 60)
+    s = int(round(seg % 60))
+    if s == 60:
+        m, s = m + 1, 0
+    if h:
+        return f"{h} h {m:02d} min"
+    if m:
+        return f"{m} min"
+    return f"{s} s"
+
+
+def mensaje_aviso(datos: dict, salida: Path, coste_luz: float | None = None) -> str:
+    """Texto del aviso de Telegram: precio, minutos y donde esta la entrega.
+
+    Se construye a partir del mismo `.json` que se le entrega al cliente, asi
+    que lo que se lee en el movil es lo que se ha cobrado de verdad.
+    """
+    minutos = float(datos.get("minutos") or 0.0)
+    precio = float(datos.get("precio_eur") or 0.0)
+    lineas = [
+        f"{datos.get('fichero', '?')}",
+        f"{numero(minutos)} min · {euros(precio)}",
+    ]
+    extra = []
+    if datos.get("palabras"):
+        extra.append(f"{int(datos['palabras']):,} palabras".replace(",", "."))
+    if datos.get("veces_tiempo_real"):
+        extra.append(f"{numero(datos['veces_tiempo_real'])}x tiempo real")
+    if coste_luz is not None:
+        extra.append(f"luz {euros(coste_luz)}")
+    if extra:
+        lineas.append(" · ".join(extra))
+    entregados = [f"{Path(datos.get('fichero', 'x')).stem}.txt"]
+    if datos.get("segmentos"):
+        entregados.append(f"{Path(datos.get('fichero', 'x')).stem}.srt")
+    entregados.append(f"{Path(datos.get('fichero', 'x')).stem}.json")
+    lineas.append("entrega: " + ", ".join(entregados))
+    lineas.append(f"carpeta: {Path(salida).resolve()}")
+    return "\n".join(lineas)
+
+
+def toca_avisar(minutos: float, desde: float, sin_aviso: bool = False) -> bool:
+    """¿Este trabajo es lo bastante largo para molestar al movil?"""
+    if sin_aviso:
+        return False
+    return float(minutos) >= float(desde)
+
+
+def avisar_telegram(titulo: str, texto: str) -> bool:
+    """Manda el aviso con tools/avisos.py. Nunca rompe el trabajo.
+
+    Si Telegram no esta configurado (o falla la red), devuelve False y el
+    trabajo sigue: el aviso es comodidad, no parte de la entrega.
+    """
+    herramientas = str(RAIZ / "tools")
+    if herramientas not in sys.path:
+        sys.path.insert(0, herramientas)
+    try:
+        import avisos  # noqa: PLC0415  (se importa aqui: no siempre hace falta)
+        return bool(avisos.enviar(titulo, texto))
+    except Exception as e:
+        print(f"[aviso] no se pudo usar Telegram: {type(e).__name__}: {e}",
+              file=sys.stderr)
+        return False
+
+
+def _anotar_cobro(datos: dict, salida: Path, cliente: str,
+                  importe: float | None = None) -> None:
+    """Apunta el trabajo como ingreso real en el ledger de KUKIA.
+
+    No emite KIA: el Core guarda una fila en `ingresos` y un asiento de 0 KIA
+    con el importe. Si el Core esta apagado, el trabajo ya esta entregado y no
+    se pierde nada: queda el .json con el precio y se puede anotar luego con
+    `python servicio/cobros.py --trabajo <json> --cliente "..."`.
+    """
+    precio = float(datos.get("precio_eur") or 0.0) if importe is None else float(importe)
+    if precio <= 0:
+        print("  cobro: 0 EUR (prueba gratis), no se anota nada en el ledger")
+        return
+    try:
+        import cobros  # esta en la misma carpeta
+        r = cobros.anotar(
+            datos.get("fichero") or "transcripcion", cliente,
+            datos.get("minutos") or 0.0, precio,
+            detalle={"fichero": datos.get("fichero"), "palabras": datos.get("palabras"),
+                     "idioma": datos.get("idioma_detectado"), "motor": datos.get("motor"),
+                     "carpeta": str(Path(salida).resolve()),
+                     "importe_calculado": datos.get("precio_eur")})
+        print("  cobro: " + ("[ok] " if r["ok"] else "[aviso] ") + r["mensaje"])
+        if not r["ok"] and not r.get("ya_estaba"):
+            print(f"         para anotarlo luego: python servicio/cobros.py "
+                  f"--trabajo \"{Path(salida).resolve() / (Path(datos.get('fichero', 'x')).stem + '.json')}\" "
+                  f"--cliente \"{cliente}\"")
+    except Exception as e:
+        print(f"  cobro: [aviso] no se pudo anotar ({type(e).__name__}: {e})")
 
 
 def srt_hora(seg: float) -> str:
@@ -226,6 +344,17 @@ def main(argv=None) -> int:
     ap.add_argument("--sin-vad", action="store_true",
                     help="no saltar silencios (por defecto se saltan)")
     ap.add_argument("--dispositivo", choices=("auto", "cuda", "cpu"), default="auto")
+    ap.add_argument("--avisar-desde", type=float, default=LARGO_MIN,
+                    help="minutos de audio a partir de los cuales se avisa por "
+                         "Telegram al terminar (por defecto 20; 0 = avisar siempre)")
+    ap.add_argument("--sin-aviso", action="store_true",
+                    help="no mandar ningun aviso por Telegram")
+    ap.add_argument("--cobrado-a", default=None,
+                    help="nombre del cliente que paga: el trabajo se anota en el "
+                         "ledger de KUKIA como ingreso real en euros")
+    ap.add_argument("--importe", type=float, default=None,
+                    help="euros cobrados, si no es el precio calculado "
+                         "(descuento, precio pactado o prueba gratis)")
     args = ap.parse_args(argv)
 
     for f in args.ficheros:
@@ -303,6 +432,21 @@ def main(argv=None) -> int:
         print(f"  precio {datos['precio_eur']:.2f} EUR | luz "
               f"{datos['coste_luz_eur']:.3f} EUR | margen {datos['margen_eur']:.2f} EUR")
         print(f"  entrega en {salida}")
+
+        # Cobrado: queda anotado en el ledger de KUKIA (ingreso real en euros).
+        if args.cobrado_a:
+            _anotar_cobro(datos, salida, args.cobrado_a, args.importe)
+
+        # Trabajo largo -> aviso al movil, con el precio y donde esta la entrega.
+        if toca_avisar(datos["minutos"], args.avisar_desde, args.sin_aviso):
+            avisado = avisar_telegram(
+                f"KUKIA · transcripción terminada · {euros(datos['precio_eur'])}",
+                mensaje_aviso(datos, salida, datos.get("coste_luz_eur")))
+            if avisado:
+                print("  aviso al movil: enviado")
+            else:
+                print("  aviso al movil: NO enviado (¿Telegram sin configurar? "
+                      "python tools/avisos.py --configurar)")
 
     if not fallos:
         print(f"\nlisto. {len(args.ficheros)} fichero(s) en {salida}")

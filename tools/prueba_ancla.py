@@ -145,6 +145,16 @@ def cargar(flag, gflop_min=GFLOP_MIN) -> dict:
             KUKIA_AUTO_TAREAS="0",
             KUKIA_GFLOP_MIN=str(gflop_min),
             KUKIA_ANCLA_GPU_MIN=flag,
+            # Esta prueba es DEL ANCLA. Desde el 25-10-2026 el modo por defecto
+            # es la definicion (1 KIA = 1 minuto de GPU), que no depende del
+            # presupuesto: aqui se apaga para poder probar el ancla. La
+            # definicion tiene su propia prueba en tools/prueba_kia_minuto.py.
+            KUKIA_PRECIO_DEFINIDO="0",
+            # El suelo transferible (0,0001 KIA por tarea, 25-10-2026) tambien
+            # se apaga: esta prueba compara pagos de tareas minusculas con el
+            # precio x GFLOP. El suelo tiene su prueba propia en
+            # tools/prueba_suelo_transferible.py.
+            KUKIA_PAGO_MIN_KIA="0",
             PYTHONIOENCODING="utf-8",
         )
         r = subprocess.run([sys.executable, "runner.py"], cwd=str(tmp), env=entorno,

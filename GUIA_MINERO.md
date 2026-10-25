@@ -98,10 +98,13 @@ Ojo a los `+0.0 KIA` en la ventana: significan que la tarea no consumió apenas
 trabajo (checksum) o que el presupuesto del minuto ya estaba repartido. No es un
 fallo: mira la línea del minuto, que es la que manda.
 
-- La red emite **~1,31 KIA por minuto** en total. Más mineros conectados = menos
+- La red emite **~1,3076 KIA por minuto** en total. Más mineros conectados = menos
   por GFLOP (más potencia NO adelanta la fecha de la última moneda).
-- La última KIA sale el **01-01-2150**: 124 años desde el inicio, en 6 eras de
-  20,67 años a la mitad cada una. `python tools\calculo_moneda.py`.
+- La última KIA sale el **13-04-2150**: 124,28 años desde el inicio, en 6 eras de
+  20,71 años a la mitad cada una. `python tools\calculo_moneda.py`.
+- El reparto del minuto se puede mirar en `/stats` (`reparto`): cuántas GPUs se
+  unieron, qué parte es de cada una y lo que cobra cada GPU si todas entregan lo
+  mismo. `python tools\prueba_adaptador_reparto.py`.
 - **KIA todavía no tiene precio ni mercado.** Minar hoy no da dinero: da posición
   en la red para cuando la haya.
 
