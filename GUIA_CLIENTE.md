@@ -200,8 +200,12 @@ Opciones: `--core URL`, `--token`, `--billetera NOMBRE`, `--tope KIA`, `--json`,
   firmar encargos tuyos: la firma demuestra posesión de la clave, no identidad.
 - **No hay reembolso automático si tú te arrepientes**: una tarea ya entregada a
   un nodo se paga. El encargo es un compromiso, no una reserva.
-- **El precio depende de la red.** Si la red produce mucho, el KIA por tarea
-  baja; si está vacía, sube (está acotado por el techo por tarea).
+- **El precio tiene un suelo desde el 25-10-2026** (ancla GPU-minuto): nunca es
+  más caro que 1 minuto de GPU de referencia por minuto de red (1,31 KIA el
+  25-10), así que no se dispara cuando la red está vacía. Si la red entrega más
+  trabajo que una GPU, el precio baja y el presupuesto se reparte entre los
+  mineros en proporción a lo que cada uno entrega. Si se apaga el ancla
+  (`KUKIA_ANCLA_GPU_MIN=0`), vuelve a subir y bajar sólo con el trabajo medido.
 
 ---
 
@@ -213,3 +217,33 @@ Opciones: `--core URL`, `--token`, `--billetera NOMBRE`, `--tope KIA`, `--json`,
 4. El minero cobra **de ese depósito**, no de la emisión.
 5. Recoges el resultado en `/cliente/tareas/<id>`; el sobrante o la devolución
    vuelven solos a tu saldo.
+
+---
+
+## 10. Comprobarlo tú mismo, de punta a punta
+
+`tools/demo_cliente_punta_a_punta.py` hace el camino entero contra el Core real
+en menos de un minuto: crea billetera, da de alta al cliente, le ingresa saldo
+desde la billetera del fundador, pide precio, firma un encargo de inferencia,
+espera al minero y verifica las cuentas.
+
+```bat
+python tools/demo_cliente_punta_a_punta.py
+python tools/demo_cliente_punta_a_punta.py --params "{\"n\": 2048, \"seed\": 11}"
+```
+
+Lo que imprime (ejecución del 25-10-2026, tarea `84274510fad2`):
+
+```
+prepago cliente          KUK4E53E98FC82211048E4B714AC94  -0.000055000 KIA
+prepago cliente          KUKIA_ESCROW                    +0.000055000 KIA
+pago a minero (cliente)  KUKIA_ESCROW                    -0.000055000 KIA
+trabajo verificado       KUKE1A0EB09FD9BF49FF41B884EDBD  +0.000055000 KIA
+suma de la tarea: +0.000000000000 KIA
+```
+
+Cuatro asientos, suma cero: el dinero del cliente pasa al minero sin crear ni
+un KIA. El recibo se verifica de dos formas: `/ledger/verificar` comprueba la
+cadena de hashes de todo el historial (`cadena_ok`, 658.950 asientos) y la
+tarea trae su `hash` con `verificado: true`, que significa que una réplica
+independiente dio el mismo resultado.

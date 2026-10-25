@@ -25,6 +25,8 @@ import time
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from copia_ledger import copiar_ledger  # noqa: E402
 COORD = RAIZ / "coordinator"
 DB_REAL = COORD / "ledger" / "kukia.db"
 
@@ -76,8 +78,11 @@ def main() -> int:
     db = tmp / "kukia.db"
     print(f"copia del ledger en {db}")
     t0 = time.time()
-    shutil.copy2(DB_REAL, db)
-    print(f"  copiada en {time.time() - t0:.1f} s ({db.stat().st_size / 1e6:.1f} MB)")
+    # VACUUM INTO: coherente aunque el Core este escribiendo (con copy2 la
+    # copia salia mal formada una de cada tres veces; medido el 25-10-2026).
+    metodo = copiar_ledger(DB_REAL, db)
+    print(f"  copiada ({metodo}) en {time.time() - t0:.1f} s "
+          f"({db.stat().st_size / 1e6:.1f} MB)")
 
     antes_traza = {t: contar(db, t) for t in ("planificador_log", "gpu_telemetria")}
     antes_dinero = huella_dinero(db)

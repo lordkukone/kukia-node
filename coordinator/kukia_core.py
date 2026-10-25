@@ -120,6 +120,17 @@ TIER_MULT = {12: 1.0, 16: 1.3, 24: 1.6}   # Rent-Tier por VRAM (mejora 1)
 # ACTIVO por defecto desde el 22-10-2026: el pago sigue a los FLOPs verificados.
 # Para volver a la tarifa plana: KUKIA_PAGO_POR_FLOP=0 (y reiniciar el Core).
 PAGO_POR_FLOP = os.environ.get("KUKIA_PAGO_POR_FLOP", "1").strip().lower() not in ("0", "", "no", "false", "off")
+# ANCLA GPU-MINUTO (25-10-2026) - ENCENDIDA POR DEFECTO.
+# El precio por GFLOP deja de salir del trabajo medido el minuto anterior y sale
+# de una GPU de referencia a tope: un minuto de GPU cuesta el presupuesto del
+# minuto, o sea la emision de un mes paga exactamente un mes de GPU. Con los
+# numeros del 25-10 son 1,3106 KIA por minuto de GPU, 78,6 KIA la hora y
+# 1,4562e-6 KIA/GFLOP (antes, sin medida de red, se cobraba ~480 veces mas).
+# Se apaga con KUKIA_ANCLA_GPU_MIN=0 (y reiniciar) y vuelve el reparto por
+# trabajo medido. Ver tools/prueba_ancla.py y PLAN_DEMANDA.md.
+ANCLA_GPU_MIN = os.environ.get("KUKIA_ANCLA_GPU_MIN", "1").strip().lower() not in ("0", "", "no", "false", "off")
+# GFLOP/s de la GPU de referencia (RTX 5070 medida en esta maquina: 15.000).
+GPU_REF_GFLOPS = max(1.0, float(os.environ.get("KUKIA_GPU_REF_GFLOPS", "15000")))
 # Suelo facturable por tarea, en GFLOP. A 0 (defecto desde el 22-10-2026) el
 # pago es ESTRICTAMENTE proporcional al trabajo: una tarea de 0,4 GFLOP cobra
 # 0,4 y un checksum (0 FLOPs) cobra 0. La decision es de Kuki: el que no tiene
@@ -313,6 +324,22 @@ def _origen_ok(origen: str) -> bool:
         return False
     return (u.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
 
+# CUANTO ESPERAR si otro programa tiene la base cogida (25-10-2026)
+# Antes: 30 s por hilo. Medido con una herramienta ajena leyendo el ledger
+# (una auditoria, una copia, /publico/verificar_sellos): el telemetraje y el
+# cobro de una transferencia se quedaron esperando el turno uno detras de
+# otro, la transferencia tardo 64,8 s y contesto 500 "error interno en
+# transferencia", que es mentira y ademas el cliente no sabe que reintentar.
+# Con 5 s (configurable con KUKIA_BUSY_TIMEOUT_MS) se contesta 503 "ocupado,
+# reintentar" en segundos y el cliente sabe que no se ha movido nada.
+def _espera_bloqueo_s() -> float:
+    texto = (os.environ.get("KUKIA_BUSY_TIMEOUT_MS") or "").strip()
+    try:
+        ms = int(texto)
+    except Exception:
+        ms = 5000
+    return max(0.2, min(60.0, ms / 1000.0))
+
 class _ConSegura:
     """Una conexion SQLite POR HILO (antes: una sola compartida por todos).
 
@@ -335,9 +362,11 @@ class _ConSegura:
     sentencia de otro. Las escrituras siguen serializadas con _pago_lock +
     BEGIN IMMEDIATE, y busy_timeout (30 s) absorbe el turno de escritura.
 
-    Nota: el modo de diario sigue siendo DELETE a proposito. WAL seria mas
-    comodo para lectores, pero entonces el .db no se puede copiar suelto (haría
-    falta el -wal) y las copias de seguridad que ya existen se romperian.
+    MODO DE DIARIO (25-10-2026): se pasa a WAL al arrancar (ver `_poner_en_wal`).
+    Antes era DELETE a proposito para que el .db se pudiera copiar suelto, pero
+    eso costaba caro: con un lector ajeno encima, un pago contestaba 503 a los
+    5,5 s. En WAL el lector no frena al escritor. A cambio, el .db YA NO se
+    puede copiar suelto: se copia con VACUUM INTO o con la API backup().
     """
 
     def __init__(self, ruta):
@@ -351,11 +380,14 @@ class _ConSegura:
             with self._lk:
                 conexion = getattr(_local_bd, "con", None)
                 if conexion is None:
-                    conexion = sqlite3.connect(self._ruta, timeout=30)
+                    espera = _espera_bloqueo_s()
+                    conexion = sqlite3.connect(self._ruta, timeout=espera)
                     conexion.row_factory = self._row_factory
-                    # Un escritor puede tardar (archivado en lote); esperar en
-                    # vez de devolver 500 por "database is locked".
-                    conexion.execute("PRAGMA busy_timeout=30000")
+                    # Esperar un poco y, si la base sigue cogida por otro
+                    # programa, contestar 503 "ocupado" en seguida (ver
+                    # _espera_bloqueo_s): esperar 30 s por hilo convertia un
+                    # bloqueo ajeno en una peticion de 65 s que acababa en 500.
+                    conexion.execute(f"PRAGMA busy_timeout={int(espera * 1000)}")
                     # SOLO PRUEBAS (tools/pruebas_caos.py, seccion DISCO LLENO):
                     # pone un tope de paginas a la base para simular un disco
                     # lleno sin llenar el disco. SQLite responde SQLITE_FULL
@@ -427,11 +459,65 @@ def _disco_lleno(e) -> bool:
             or "sqlite_full" in t)
 
 
+def _base_ocupada(e) -> bool:
+    """¿La escritura no entro porque OTRO programa tiene la base cogida?
+
+    No es un fallo interno: no se ha escrito nada y se puede reintentar. Con
+    el ledger leido por una auditoria o una copia, esto pasaba a menudo y se
+    contestaba 500 "error interno" (medido el 25-10-2026, 64,8 s de espera
+    para acabar en un 500).
+    """
+    t = str(e).lower()
+    return ("database is locked" in t or "database table is locked" in t
+            or "database schema is locked" in t or "database is busy" in t
+            or "sqlite_busy" in t)
+
+
 def _error_escritura(e, defecto="error interno escribiendo"):
     if _disco_lleno(e):
         return HTTPException(507, "sin espacio en disco: no se ha escrito nada, "
                                   "reintentar cuando haya espacio")
+    if _base_ocupada(e):
+        return HTTPException(503, "Core ocupado: otro programa esta leyendo el "
+                                  "ledger; no se ha escrito nada, reintentar",
+                             headers={"Retry-After": "2"})
     return HTTPException(500, defecto)
+
+
+def _poner_en_wal() -> str:
+    """Pone la base en modo WAL al arrancar (25-10-2026). Devuelve el modo final.
+
+    POR QUE (medido en tools/estudio_wal.py):
+      - En DELETE, cualquier otro programa leyendo el ledger (una auditoria,
+        una copia, verificar_sellos) bloquea las escrituras: un pago tardaba
+        5,5 s y contestaba 503.
+      - En WAL, el mismo pago con el mismo lector encima: 200 en 0,0 s.
+
+    LO QUE HAY QUE SABER:
+      - En WAL lo ultimo vive en `<db>-wal`. Copiar SOLO el .db pierde esos
+        asientos y el `quick_check` sigue diciendo "ok": se pierde EN SILENCIO.
+        Se copia con VACUUM INTO (tools/copia_seguridad.py) o con la API
+        backup() (tools/backup_ledger.py), que si se llevan el -wal.
+      - Las copias ANTIGUAS no se rompen: el modo va en la cabecera de cada
+        fichero. Probado: una copia de backups/ del 25-10 arranca como Core.
+      - Si no se pudiera poner en WAL, el Core sigue arrancando como antes: se
+        avisa en el log y se devuelve el modo que haya.
+    """
+    try:
+        modo = str(con.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+    except Exception as e:
+        print(f"[KUKIA] AVISO: no se pudo mirar el modo de diario ({e})", flush=True)
+        return ""
+    if modo == "wal":
+        try:
+            # ~4 MB de -wal antes de volcar a la base (no crece sin freno).
+            con.execute("PRAGMA wal_autocheckpoint=1000")
+        except Exception:
+            pass
+    else:
+        print(f"[KUKIA] AVISO: la base NO se puso en WAL (dice '{modo}'); "
+              f"sigue como antes", flush=True)
+    return modo
 
 
 def _rollback_seguro() -> None:
@@ -650,6 +736,14 @@ def schema():
     con.commit()
 
 schema()
+
+# MODO DE DIARIO: WAL desde el 25-10-2026 (lectores ajenos ya no frenan los
+# pagos). Ver `_poner_en_wal`. Si el cambio no entra, se sigue en DELETE.
+_MODO_DIARIO = _poner_en_wal()
+if _MODO_DIARIO == "wal":
+    print("[KUKIA] base en diario WAL (una auditoria o una copia ya no frenan "
+          "los pagos)", flush=True)
+
 
 def podar_nodos(horas: float = None) -> int:
     """Borra nodos que no tienen dinero ni trabajo pagado.
@@ -1034,7 +1128,10 @@ def _coste_tarea_cliente(tipo: str, params: dict) -> float:
         # SIMULAR: consultar el precio no puede gastar el presupuesto del
         # minuto ni mover la bolsa. Antes, pedir precio dejaba la tarea a 0.
         kuki, _ = pago_por_trabajo(tipo, params, 1.0, simular=True)
-        return round(max(0.0, float(kuki)), 6)
+        # 12 decimales, no 6 (25-10-2026): con el ancla una tarea minima cuesta
+        # ~1e-9 KIA y redondear a 6 la dejaba en "cuesta 0", que es mentira y
+        # ademas deja al cliente sin saber que tope firmar.
+        return round(max(0.0, float(kuki)), 12)
     except Exception:
         return 0.0
 
@@ -2692,8 +2789,13 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
                 # dejaria de ser cierta.
                 kuki_rep = 0.0
                 if replica is not None and _rep_ok:
-                    kuki_rep = round(kuki * PARTE_REPLICA, 6)
-                    kuki = round(kuki - kuki_rep, 6)
+                    # 12 decimales, no 6 (25-10-2026, ancla GPU-minuto): con el
+                    # ancla una tarea pequena paga ~1e-6 KIA, y round(...,6)
+                    # dejaba al verificador con CERO mientras el ejecutor se
+                    # llevaba todo. Con _redondear_kia cada uno cobra su parte
+                    # y el total sigue cuadrando al decimal.
+                    kuki_rep = _redondear_kia(kuki * PARTE_REPLICA)
+                    kuki = _redondear_kia(kuki - kuki_rep)
                     info_pago["parte_replica"] = kuki_rep
                 # Muestra de potencia: FLOPs de la tarea / segundos CRONOMETRADOS
                 # POR EL CORE (asignado -> ahora). El minero no puede acortarlo.
@@ -3383,11 +3485,15 @@ def precio_gflop() -> dict:
 #  acaba de cerrar, limitado a un presupuesto) y se aplica al precio del
 #  siguiente. Asi el total se queda en el presupuesto, no un 5 % arriba.
 #
-#  FUSIBLE: si un minuto se desmadra de golpe (10 veces mas trabajo), se corta
-#  en 2 presupuestos. Es una red de seguridad, no el mecanismo: en regimen
-#  normal el precio ya deja el minuto en el presupuesto.
+#  FUSIBLE: red de seguridad para que un minuto no pueda emitir de mas.
+#  Desde el 25-10-2026 esta en 1x: el minuto no puede pagar mas que su
+#  presupuesto, ni con una rafaga. Antes era 2x, o sea que una rafaga podia
+#  emitir el doble de lo que tocaba y adelantar la fecha final de la emision.
+#  Con el reparto proporcional el fusible casi nunca muerde: el precio ya deja
+#  el minuto cuadrado, y solo corta si alguien entrega de golpe mucho mas
+#  trabajo del que la red venia haciendo.
 # ============================================================
-FUSIBLE_MINUTO_X = max(1.0, float(os.environ.get("KUKIA_FUSIBLE_MINUTO_X", "2")))
+FUSIBLE_MINUTO_X = max(1.0, float(os.environ.get("KUKIA_FUSIBLE_MINUTO_X", "1")))
 
 
 def presupuesto_por_minuto() -> float:
@@ -3562,7 +3668,12 @@ def precio_unico_minuto() -> dict:
     _cerrar_minuto_si_toca(minuto)
     presu = presupuesto_del_minuto()
     ajuste = max(-presu, min(presu, _minuto_actual["credito"]))
-    objetivo = max(0.0, presu + ajuste)
+    # El credito (lo que sobro de minutos flojos) puede empujar el objetivo por
+    # encima de lo que el minuto puede pagar. Si se deja, el fusible recorta el
+    # pago por unas millonésimas y el minero ve un recorte que no es suyo
+    # (pasaba el 25-10: 4e-7 por minuto). Se recorta AQUI, en el precio: el
+    # objetivo nunca apunta mas alto de lo que el minuto puede soltar.
+    objetivo = min(max(0.0, presu + ajuste), presu * FUSIBLE_MINUTO_X)
     gflop = _gflop_entre((minuto - 1) * 60.0, minuto * 60.0)
     fuente = "minuto anterior"
     if gflop <= 0:
@@ -3574,14 +3685,46 @@ def precio_unico_minuto() -> dict:
     if gflop <= 0:
         gflop = _gflop_ventana_larga()
         fuente = "media de lo ultimo que hay (hasta 6 h)"
+    gflop_medido = gflop
+    # ANCLA GPU-MINUTO (25-10-2026, revisada el mismo dia): el ancla no es un
+    # numero fijo, es un SUELO de capacidad. El divisor es el trabajo medido,
+    # pero nunca menos que una GPU de referencia a tope durante un minuto:
+    #
+    #     divisor = max(trabajo medido, 60 * GPU_REF)
+    #
+    # Asi se cumplen las tres cosas a la vez:
+    #   1) Red parada o con poca faena: manda el suelo y el precio no se dispara
+    #      (antes, sin medida, cada GFLOP se cobraba a precio de oro y ningun
+    #      cliente podia comprar).
+    #   2) Red con mas faena que una GPU: manda lo medido, asi que el
+    #      presupuesto se reparte entre TODOS en proporcion a sus GFLOP. Una GPU
+    #      el doble de rapida cobra el doble por el mismo tiempo de reloj, que es
+    #      lo que se busca: pagar por trabajo entregado, no por modelo.
+    #   3) El total del minuto no pasa del presupuesto: el precio ya lo deja
+    #      cuadrado y el fusible (1x por defecto) lo garantiza al decimal.
+    suelo = GPU_REF_GFLOPS * 60.0
+    if ANCLA_GPU_MIN:
+        if gflop_medido < suelo:
+            gflop = suelo
+            fuente = "ancla GPU-minuto (suelo)"
+        else:
+            gflop = gflop_medido
+            fuente = "trabajo medido (reparto proporcional)"
     if presu > 0 and gflop > 0:
         datos = {"minuto": minuto, "precio": objetivo / gflop, "fuente": fuente}
     else:
         datos = {"minuto": minuto, "precio": None, "fuente": "plano"}
-    datos.update({"gflop_anterior": round(gflop, 3),
+    datos.update({"gflop_anterior": round(gflop_medido, 3),
                   "presupuesto_kia_min": round(presu, 6),
                   "credito_kia": round(_minuto_actual["credito"], 6),
-                  "objetivo_kia_min": round(objetivo, 6)})
+                  "objetivo_kia_min": round(objetivo, 6),
+                  "ancla": ANCLA_GPU_MIN,
+                  "gpu_ref_gflops": GPU_REF_GFLOPS,
+                  "gflop_divisor": round(gflop, 3),
+                  "suelo_gflop_min": round(suelo, 3),
+                  # Lo que paga un minuto de la GPU de referencia a este precio.
+                  "kia_por_minuto_gpu": (round(objetivo / gflop * suelo, 9)
+                                         if ANCLA_GPU_MIN else None)})
     _precio_minuto["minuto"], _precio_minuto["datos"] = minuto, datos
     return datos
 
@@ -3639,15 +3782,21 @@ def bolsa_disponible(ahora: float = None) -> float:
 
 
 def _redondear_kia(x: float) -> float:
-    """Redondea HACIA ABAJO a 9 decimales.
+    """Redondea HACIA ABAJO a 12 decimales.
 
     POR QUE (23-10-2026): `round(x, 9)` puede subir. Al recortar un pago a lo
     que queda en la bolsa, redondear hacia arriba devolvia un pelin mas que el
     presupuesto: con 25 tareas el minuto cerraba 1e-8 por encima y la promesa
     "la bolsa nunca se pasa" dejaba de ser cierta al decimal. KIA no se regala
     por redondeo: hacia abajo siempre.
+
+    POR QUE 12 Y NO 9 (25-10-2026, ancla GPU-minuto): con el ancla un GFLOP
+    cuesta ~1,46e-6 KIA, asi que una tarea pequena (matriz 64 = 0,0005 GFLOP)
+    vale 7,3e-10 KIA. A 9 decimales eso se cortaba a CERO y el minero trabajaba
+    gratis. A 12 decimales se cobra lo que pesa, sin regalar nada (sigue siendo
+    floor: la bolsa no se pasa). Ver tools/prueba_ancla.py.
     """
-    return math.floor(float(x) * 1e9) / 1e9
+    return math.floor(float(x) * 1e12) / 1e12
 
 
 def pago_plano(tier: float = 1.0, simular: bool = False) -> tuple:
@@ -3710,7 +3859,11 @@ def pago_por_trabajo(tipo: str, params, tier: float = 1.0,
     pago = _redondear_kia(min(precio * cobrable, techo, restante))
     # FUSIBLE del minuto: solo actua si algo va muy desmadrado (de golpe, diez
     # veces el trabajo del minuto anterior). En regimen normal no toca nada.
-    disp = max(0.0, pm["presupuesto_kia_min"] * FUSIBLE_MINUTO_X - pagado_en_minuto())
+    # El tope se toma EXACTO, sin redondear a 6 decimales: el precio se calcula
+    # con el presupuesto exacto, asi que comparandolo con el redondeado un pago
+    # de 1 minuto de GPU salia 4e-7 por encima del tope y el fusible recortaba
+    # al minero por una millonésima (visto el 25-10-2026 en prueba_minero_mes).
+    disp = max(0.0, presupuesto_del_minuto() * FUSIBLE_MINUTO_X - pagado_en_minuto())
     recortado = max(0.0, pago - disp)
     if recortado > 0:
         pago = _redondear_kia(disp)
@@ -3819,6 +3972,11 @@ def stats():
                           "gflop_minuto_anterior": precio_unico_minuto()["gflop_anterior"],
                           "credito_kia": precio_unico_minuto()["credito_kia"],
                           "objetivo_kia_min": precio_unico_minuto()["objetivo_kia_min"],
+                          "ancla_gpu_min": precio_unico_minuto()["ancla"],
+                          "gpu_ref_gflops": precio_unico_minuto()["gpu_ref_gflops"],
+                          "gflop_divisor": precio_unico_minuto()["gflop_divisor"],
+                          "suelo_gflop_min": precio_unico_minuto()["suelo_gflop_min"],
+                          "kia_por_minuto_gpu": precio_unico_minuto()["kia_por_minuto_gpu"],
                           "fusible_x": FUSIBLE_MINUTO_X},
         # Verificacion redundante (23-10-2026): desde fuera se puede comprobar
         # que reglas estan aplicando de verdad los nodos que se verifican.

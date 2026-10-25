@@ -9,6 +9,99 @@ Arranque manual, sin launcher (nada de Pinokio).
 | Panel de operaciones | 8301 | `ARRANCAR_PANEL.cmd` (o `uvicorn kukia_dash:app --port 8301` en `dashboard/`) |
 | Minero (2 GPUs) | — | `python -u kukia_worker.py kuki_minero` |
 
+## El precio: ancla GPU-minuto (cambio del 25-10-2026)
+
+El precio por GFLOP de cada minuto sale de esta regla, y solo de esta:
+
+```
+divisor = max(trabajo medido el minuto anterior, 60 * GPU_REF)
+precio  = presupuesto_del_minuto / divisor
+```
+
+O sea: **un suelo de capacidad y, por encima de ese suelo, reparto
+proporcional**. Con los datos del 25-10 (GPU_REF = 15.000 GFLOP/s):
+
+- Red con poca faena: manda el suelo y **1 minuto de GPU cuesta 1.311 KIA**
+  (78,6 KIA/hora, 0,0000014562 KIA/GFLOP). Esto es lo que evita el precio de
+  oro: sin suelo, con la red parada, el mismo trabajo se cobraba **1.125 veces
+  mas caro** y ningun cliente podia comprar.
+- Red que entrega mas que una GPU: manda lo medido. El presupuesto se reparte
+  entre todos **en proporcion a sus GFLOP**, asi que una GPU el doble de rapida
+  cobra el doble por el mismo tiempo de reloj. Dos GPUs iguales a tope cobran
+  0,65 KIA cada una por minuto (la mitad del presupuesto): el total no crece.
+- **El minuto no puede emitir de mas:** el fusible esta en **1x** desde el
+  25-10 (antes 2x, o sea que una rafaga podia emitir el doble de lo que tocaba).
+  Se cambia con `KUKIA_FUSIBLE_MINUTO_X`.
+
+Resultado medido en `tools/prueba_minero_mes.py`: un minero a tope un mes cobra
+57.488,50 KIA, la emision del mes son 57.507,95 (0,034 % de diferencia, la del
+calendario) y el fusible **no recorta nada en 43.834 minutos**; en una rafaga de
+cinco minutos de GPU en un solo minuto paga uno y corta cuatro.
+
+Se ve en `/stats` → `bolsa_emision`: `fuente_precio` dice `ancla GPU-minuto` y
+aparecen `ancla_gpu_min`, `gpu_ref_gflops` y `kia_por_minuto_gpu`.
+
+Ajustes relacionados:
+
+- `KUKIA_FUSIBLE_MINUTO_X` (defecto 1): cuanto puede pagar un minuto como maximo,
+  en multiplos de su presupuesto. **1 = nunca se pasa.**
+
+**Volver al mecanismo viejo** (sin reiniciar el codigo, solo el proceso):
+
+```bat
+set KUKIA_ANCLA_GPU_MIN=0
+REM y despues arranca el Core como siempre
+```
+
+Ajustes finos, por si algun dia hacen falta:
+
+- `KUKIA_GPU_REF_GFLOPS` (defecto 15000): GFLOP/s de la GPU de referencia. Si
+toda la red es de 5090, subirlo abarata el trabajo por GFLOP (y el KIA compra
+  mas minutos de esa GPU).
+- `KUKIA_GFLOP_MIN=15000`: suelo facturable por tarea (1 segundo de GPU en vez
+  de 0,5 ms). Con el ancla una tarea diminuta paga 7e-10 KIA, que se cobra pero
+  no llega al minimo transferible (0,0001 KIA); con el suelo paga 0,022 KIA.
+
+**Pruebas**:
+
+- `python tools/prueba_ancla.py` — 16 comprobaciones: identidad del precio,
+  identidad mensual, pago al minero, prepago del cliente con escrow y sobrante,
+  el interruptor y el suelo facturable.
+- `python tools/prueba_minero_mes.py` — simula un minero a tope **un mes entero**
+  (43.834 minutos, uno por uno, con su asiento en el ledger). Resultado del
+  25-10: cobra **57.488,49 KIA** contra una emisión de 57.507,94 (0,034 % de
+  diferencia, la del calendario), el fusible **no recorta nada** en los 43.834
+  minutos, y en una ráfaga de 5 minutos de GPU en un solo minuto paga dos y
+  corta las tres restantes. Tarda ~3 minutos; con `--minutos 600` son 3 s.
+
+## Diario de la base en WAL (cambio del 25-10-2026)
+
+El ledger arranca en **WAL** (antes, DELETE). El motivo esta medido en
+`tools/estudio_wal.py`: con DELETE, cualquier programa leyendo el ledger (una
+auditoria, una copia, `verificar_sellos`) **frenaba los pagos** (una
+transferencia contestaba 503 a los 5,5 s). En WAL el lector no bloquea al
+escritor: el mismo pago, 200 en 0,0 s. La ventana para cambiarlo fue un
+reinicio del Core (unos 10 s).
+
+Lo que cambia en el dia a dia:
+
+- `coordinator/ledger/kukia.db-wal` **es parte de la base**. Copiar solo el
+  `.db` (Ctrl+C, arrastrar el fichero, `shutil.copy2`) pierde los ultimos
+  asientos y el `quick_check` sigue diciendo "ok": se pierde **en silencio**.
+  Para copiar: `COPIAR_LEDGER.cmd` (usa la API `backup()`), `python
+  tools/backup_ledger.py --destino ...` o `tools/copia_seguridad.py`
+  (`VACUUM INTO`). Los tres se llevan el contenido del `-wal`: probado.
+- Las copias **antiguas** (hechas en DELETE) no se rompen: el modo va en la
+  cabecera de cada fichero. Probado abriendo una de `backups/` y arrancando un
+  Core con ella.
+- `tools/salud.py` ya mira la fecha del `-wal` (el `.db` solo cambia al volcar)
+  y da 240 s a la comprobacion de integridad, que con 600.000+ asientos tarda
+  mas que un `/stats`.
+- El `-wal` se vuelca solo cada ~4 MB (`wal_autocheckpoint=1000`), asi que no
+  crece sin freno.
+- Si alguna vez hay que volver atras: parar el Core y `PRAGMA
+  journal_mode=DELETE` sobre la base (con el Core parado).
+
 Logs del arranque del 19-10 (procesos lanzados en segundo plano):
 
 - Core: `coordinator/core_final.out.log` y `.err.log`
@@ -670,13 +763,27 @@ schtasks /Delete /TN "KUKIA Copia Seguridad" /F :: quitar la copia semanal
 | copia de claves | la ultima de `N:\CLAVES_KUKIA` tiene **7 dias o menos** |
 | copia integra | esa copia **revalidada**: sha256 de cada fichero + la clave del sello (una vez al dia) |
 
-Avisa **solo al cambiar**: cuando algo se cae (a la segunda pasada mala
-seguida, para no dar la lata por un fallo de un segundo) y cuando vuelve.
+Avisa **solo al cambiar**: cuando algo se cae y cuando vuelve.
+
+Las **tres webs** avisan en la misma pasada en que dejan de responder
+(25-10-2026): si el primer intento falla, se reintenta 3 veces en 10 segundos
+—un corte de tres segundos no es una caida— y si sigue mal el aviso sale en el
+momento, sin esperar a la pasada siguiente (5 minutos) ni a que vuelva. El
+resto (Core local, Core publico, copias) sigue a la **segunda pasada mala
+seguida**, porque los tuneles rebotan a menudo. Y si las tres webs fallan a la
+vez y el PC tampoco sale a internet, no se avisa de nada: el corte es de casa,
+no de las webs.
 
 ### Aviso al movil por Telegram (22-10-2026)
 
 Dos canales independientes: la notificacion de Windows y **Telegram**. Si el PC
 esta apagado o sin sesion, el toast no se ve, pero el movil suena igual.
+
+> **PENDIENTE (25-10-2026):** el bot todavia NO esta dado de alta (no existe
+> `coordinator/telegram_aviso.json`), asi que hoy los avisos solo salen en el
+> escritorio. Kuki dijo "el bot de Telegram luego me lo recuerdas": hay que
+> recordarselo y hacer los tres pasos del alta. El codigo ya manda a Telegram;
+> en cuanto haya token, funciona sin tocar nada.
 
 ```cmd
 python tools\avisos.py --configurar   :: alta: token del bot + tu chat + prueba

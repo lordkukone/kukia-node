@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+
+# Indice unico y bueno: la copia de Surge sirve su propio
+# robots.txt con Disallow: / y no se puede cambiar.
+Sitemap: https://lordkukone.github.io/kukia-node/sitemap.xml

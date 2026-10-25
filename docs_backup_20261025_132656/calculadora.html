@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<!-- Misma CSP que la portada: todo de este origen, y solo se conecta al rele
+     (https) o a un Core local en 127.0.0.1. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; form-action 'self' https://formsubmit.co; object-src 'none'; base-uri 'self'">
+<link rel="canonical" href="https://lordkukone.github.io/kukia-node/calculadora">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KUKIA | Calculadora: cuanto valdria 1 KIA, con las cuentas a la vista</title>
+<meta name="description" content="Calculadora de KUKIA con los supuestos visibles: que dice la red, que se supone y cuanto saldria 1 KIA segun la demanda real de computo. Sin promesas de precio.">
+<link rel="icon" href="moneda.jpg">
+<meta name="theme-color" content="#081a3a">
+<style>
+:root { --gold:#d4af37; --navy:#081a3a; --blue:#12305e; --line:#27487c; --text:#c3d1ea; --ok:#5ee08a; --warn:#e0c05e; --bad:#ff7b7b; }
+* { margin:0; padding:0; box-sizing:border-box; }
+/* AUDITORIA 24-10-2026: foco visible para quien navega con el teclado. */
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:3px solid #d4af37; outline-offset:2px; border-radius:4px; }
+
+body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; line-height:1.65; }
+a { color:var(--gold); }
+.wrap { max-width:980px; margin:0 auto; padding:2.5rem 1.25rem 4rem; }
+.back { display:inline-block; margin-bottom:1.5rem; color:var(--gold); text-decoration:none; font-size:.9rem; }
+.back:hover { text-decoration:underline; }
+h1 { color:var(--gold); font-size:2.05rem; line-height:1.22; }
+.sub { color:var(--text); margin:.6rem 0 1.6rem; max-width:760px; }
+h2 { color:var(--gold); font-size:1.12rem; margin:2.4rem 0 .9rem; border-bottom:1px solid var(--line); padding-bottom:.5rem; }
+h3 { font-size:.95rem; margin-bottom:.4rem; }
+p { color:var(--text); }
+small { color:#8fa5c6; }
+code, pre { font-family:'Cascadia Code',Consolas,monospace; }
+pre { background:#050f22; border:1px solid var(--line); border-radius:12px; padding:1rem; overflow-x:auto; font-size:.8rem; color:#c8d6f0; }
+.panel { background:rgba(18,48,94,.55); border:1px solid var(--line); border-radius:14px; padding:1.2rem; }
+.aviso { border-left:3px solid var(--warn); background:rgba(224,192,94,.10); border-radius:0 12px 12px 0; padding:.9rem 1.1rem; margin:1.2rem 0 0; font-size:.92rem; }
+.aviso b { color:var(--warn); }
+.estado { display:flex; align-items:center; gap:.6rem; font-size:.82rem; color:#9fb3d1; margin-bottom:1rem; flex-wrap:wrap; }
+.dot { width:10px; height:10px; border-radius:50%; background:#789; flex:0 0 auto; }
+.grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.8rem; }
+@media (max-width:760px){ .grid { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:460px){ .grid { grid-template-columns:1fr; } }
+.tile { background:rgba(8,26,58,.75); border:1px solid var(--line); border-radius:12px; padding:.9rem 1rem; }
+.tile .l { display:block; color:#8fa5c6; font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; }
+.tile .v { display:block; font-size:1.45rem; font-weight:800; color:#fff; margin-top:.15rem; word-break:break-word; }
+.tile .n { display:block; font-size:.74rem; color:#8fa5c6; margin-top:.2rem; }
+.v.ok { color:var(--ok); } .v.warn { color:var(--warn); } .v.bad { color:var(--bad); }
+.sup { border:1px solid var(--gold); border-radius:14px; padding:1.2rem; background:rgba(212,175,55,.07); }
+.sup .fila { display:grid; grid-template-columns:1fr 150px; gap:.8rem; align-items:center; margin-bottom:.7rem; }
+@media (max-width:560px){ .sup .fila { grid-template-columns:1fr; } }
+label { color:var(--text); font-size:.9rem; }
+input[type=number] { width:100%; background:#050f22; border:1px solid var(--line); color:#fff; border-radius:9px; padding:.5rem .6rem; font-size:1rem; font-family:inherit; }
+input[type=number]:focus { outline:none; border-color:var(--gold); }
+.derivacion { margin-top:.8rem; padding-top:.8rem; border-top:1px dashed var(--line); font-size:.85rem; color:#a9bede; }
+.derivacion b { color:#fff; }
+.botones { display:flex; gap:.4rem; flex-wrap:wrap; margin:.5rem 0 .9rem; }
+.botones button { background:transparent; border:1px solid var(--line); color:var(--text); border-radius:999px; padding:.3rem .75rem; font-size:.8rem; cursor:pointer; font-family:inherit; }
+.botones button:hover { border-color:var(--gold); color:var(--gold); }
+table { width:100%; border-collapse:collapse; font-size:.88rem; margin-top:.4rem; }
+th, td { text-align:right; padding:.5rem .55rem; border-bottom:1px solid rgba(39,72,124,.6); }
+th:first-child, td:first-child { text-align:left; }
+th { color:#8fa5c6; font-weight:600; font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; }
+td { color:#e7eefb; }
+tr.total td { border-bottom:none; font-weight:700; color:var(--gold); }
+ul.lista { margin:.6rem 0 0 1.1rem; color:var(--text); font-size:.92rem; }
+ul.lista li { margin-bottom:.45rem; }
+footer { margin-top:3rem; font-size:.82rem; color:#7a90b2; }
+</style>
+<!-- kukia-seo -->
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="google-site-verification" content="9d6cb22812b81092">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="KUKIA Network">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://lordkukone.github.io/kukia-node/calculadora">
+<meta property="og:title" content="KUKIA | Calculadora: cuanto valdria 1 KIA, con las cuentas a la vista">
+<meta property="og:description" content="Calculadora de KUKIA con los supuestos visibles: que dice la red, que se supone y cuanto saldria 1 KIA segun la demanda real de computo. Sin promesas de precio.">
+<meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="KUKIA | Calculadora: cuanto valdria 1 KIA, con las cuentas a la vista">
+<meta name="twitter:description" content="Calculadora de KUKIA con los supuestos visibles: que dice la red, que se supone y cuanto saldria 1 KIA segun la demanda real de computo. Sin promesas de precio.">
+<meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://lordkukone.github.io/kukia-node/#sitio",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "name": "KUKIA Network",
+   "alternateName": "KUKIA",
+   "inLanguage": "es",
+   "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
+   "publisher": {
+    "@id": "https://lordkukone.github.io/kukia-node/#organizacion"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://lordkukone.github.io/kukia-node/#organizacion",
+   "name": "KUKIA Network",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://lordkukone.github.io/kukia-node/moneda.jpg",
+    "width": 512,
+    "height": 512
+   }
+  },
+  {
+   "@type": "WebPage",
+   "@id": "https://lordkukone.github.io/kukia-node/calculadora#pagina",
+   "url": "https://lordkukone.github.io/kukia-node/calculadora",
+   "name": "KUKIA | Calculadora: cuanto valdria 1 KIA, con las cuentas a la vista",
+   "description": "Calculadora de KUKIA con los supuestos visibles: que dice la red, que se supone y cuanto saldria 1 KIA segun la demanda real de computo. Sin promesas de precio.",
+   "inLanguage": "es",
+   "isPartOf": {
+    "@id": "https://lordkukone.github.io/kukia-node/#sitio"
+   }
+  }
+ ]
+}
+</script>
+<!-- /kukia-seo -->
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="index.html">&larr; Volver a KUKIA</a>
+
+<h1>Cuanto valdria 1 KIA, con las cuentas a la vista</h1>
+<p class="sub">Esto no es una cotizacion ni una promesa: es una division. Si la red vendiera
+<em>X</em> GFLOP al dia a un precio <em>P</em> por GFLOP, y ese dinero se repartiera entre los KIA
+que se emiten ese mismo dia, cada KIA valdria <em>(X·P)/emision</em>. Los numeros que salen
+del Core se leen; los que son supuestos mios van en su propio recuadro, a la vista y cambiables.</p>
+
+<div class="aviso"><b>Sin demanda, el resultado es 0.</b> Hoy no hay ni un cliente externo
+pagando por el trabajo de la red. Un token que nadie compra no tiene precio: tiene una
+division. Si alguien te ensena esta pagina como si fuera una cotizacion, te esta mintiendo.</div>
+
+<h2>1. Lo que dice la red (leido, no supuesto)</h2>
+<div class="estado"><span class="dot" id="dot"></span><span id="estado">cargando datos de la red...</span></div>
+<div class="grid">
+  <div class="tile"><span class="l">KIA emitidos</span><span class="v" id="tSupply">—</span><span class="n" id="tSupplyN">de 100.000.000</span></div>
+  <div class="tile"><span class="l">Quedan por emitir</span><span class="v" id="tRest">—</span><span class="n">hasta el techo de 100 M</span></div>
+  <div class="tile"><span class="l">Emision de calendario</span><span class="v" id="tEmi">—</span><span class="n" id="tEmiN">KIA/dia hasta 01-01-2150</span></div>
+</div>
+<p style="margin-top:.9rem;font-size:.85rem;"><small id="tEmiMed"></small></p>
+
+<h2>2. Los supuestos (mios, no del Core)</h2>
+<div class="sup">
+  <p style="font-size:.9rem;margin-bottom:.9rem;">Tres numeros que <b>no</b> salen del ledger.
+  Cambialos y veras como cambia el resultado: si con unos supuestos razonables el valor sale
+  ridiculamente bajo, eso no es un fallo de la calculadora, es la situacion real de la red.</p>
+  <div class="fila">
+    <label for="inEurHora">Coste de una GPU de referencia <span id="lblEurHora">(0,35 EUR/hora)</span></label>
+    <input type="number" id="inEurHora" value="0.35" min="0" step="0.01" inputmode="decimal">
+  </div>
+  <div class="fila">
+    <label for="inTflops">Potencia EFECTIVA de esa GPU (no de pico)</label>
+    <input type="number" id="inTflops" value="15" min="0" step="0.5" inputmode="decimal">
+  </div>
+  <div class="fila">
+    <label for="inPrecioGflop">...o directamente EUR por GFLOP (deja 0 para usar los dos de arriba)</label>
+    <input type="number" id="inPrecioGflop" value="0" min="0" step="any" inputmode="decimal">
+  </div>
+  <div class="derivacion" id="derivacion">—</div>
+</div>
+
+<h2>3. Si la red vendiera esta demanda, 1 KIA valdria</h2>
+<div class="panel">
+  <label for="inDemanda">Demanda real: GFLOP al dia vendidos a clientes</label>
+  <input type="number" id="inDemanda" value="1000" min="0" step="any" inputmode="decimal" style="margin-top:.4rem;">
+  <div class="botones">
+    <button type="button" data-d="0">0 (hoy)</button>
+    <button type="button" data-d="1000">1.000 GFLOP</button>
+    <button type="button" data-d="1000000">1 PFLOP</button>
+    <button type="button" data-d="1000000000">1 EFLOP</button>
+  </div>
+  <p style="font-size:.85rem;margin-bottom:1rem;"><small id="nDemanda">—</small></p>
+  <div class="grid">
+    <div class="tile"><span class="l">Ingresos de la red</span><span class="v" id="tIngresos">—</span><span class="n" id="tIngresosN">EUR por dia</span></div>
+    <div class="tile"><span class="l">Valor de 1 KIA</span><span class="v" id="tKia">—</span><span class="n">EUR, a ese ancla</span></div>
+    <div class="tile"><span class="l">Todo el supply emitido</span><span class="v" id="tSupplyEur">—</span><span class="n">aritmetica, no capitalizacion</span></div>
+  </div>
+  <p style="margin-top:.9rem;font-size:.85rem;"><small id="nResultado">—</small></p>
+</div>
+
+<h2>4. Que haria falta vender para que 1 KIA valga...</h2>
+<p style="font-size:.9rem;">Con los supuestos de arriba y la emision actual, esta es la demanda
+diaria que tendria que existir de verdad (clientes pagando, no precio inventado):</p>
+<table>
+  <thead><tr><th>Si 1 KIA valiera</th><th>Trabajo vendido al dia</th><th>En unidades legibles</th><th>Coste para el cliente</th></tr></thead>
+  <tbody id="tablaInversa"><tr><td colspan="4">cargando...</td></tr></tbody>
+</table>
+
+<h2>5. Lectura honesta</h2>
+<ul class="lista">
+  <li><b>Con demanda 0 el resultado es 0.</b> No es un suelo: es que hoy nadie paga por el trabajo de la red.</li>
+  <li>La emision es un <b>presupuesto de calendario</b> (lo que queda entre los minutos hasta 2150), no lo que se emitio ayer. Si la red emite menos porque hay poco trabajo, dividir por la emision real da una cifra mas alta; las dos estan en la seccion 1.</li>
+  <li>Ese "todo el supply" es <b>aritmetica</b>: multiplicar el supply por el ancla no es una capitalizacion, porque nadie esta comprando.</li>
+  <li>El coste por GFLOP de una GPU de nube barata es lo que es: barato. Si la red entera calcula poco, el valor del trabajo entero tambien es poco. No es que el KIA sea malo: es que la red todavia calcula poquisimo.</li>
+  <li>Nada de esto es una oferta, ni una promesa de rentabilidad, ni asesoramiento financiero.</li>
+</ul>
+
+<h2>6. La misma cuenta en tu maquina</h2>
+<p style="font-size:.9rem;">Esta pagina hace exactamente la cuenta de <code>tools/calculadora_valor.py</code>,
+que va dentro del paquete <a href="kukia-node.zip">kukia-node.zip</a> y se lee entero en
+<a href="codigo.html">codigo.html</a>. Mismos datos, mismos supuestos, sin navegador de por medio:</p>
+<pre id="cmd">python tools/calculadora_valor.py --demanda 1000</pre>
+<p style="font-size:.85rem;"><small>La herramienta lee <code>/stats</code> del Core (<code>--core</code> para otro),
+imprime lo comprobado y lo supuesto por separado, y tiene <code>--json</code> si quieres engancharlo a algo.</small></p>
+
+<footer>KUKIA Network - prototipo en fase de pruebas. Sin auditoria externa todavia. Sin precio hasta demanda real.</footer>
+</div>
+
+<script src="nacl.min.js" integrity="sha384-0jQROJt6wG1AI3HmYbaU8+/kf+09BqXwTdbUCG5Hr6ASZVXXgJ/6lrRPDAqgIqEm"></script>
+<script>
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+
+  // --- Sello del ledger: se verifica AQUI, sin fiarse del rele --------------
+  // La clave publica va fijada en el codigo. Si se aceptara la que viene en el
+  // mensaje, quien controle el rele podria firmar su propia historia.
+  var CLAVE_SELLO = '2013664e12b4ac93f5a266ae5e1a4a071f51c68112e1209fae5d501ecb2f8d1c';
+  function hexBytes(h){
+    h = String(h || '').replace(/[^0-9a-f]/gi, '');
+    if(!h.length || h.length % 2) return null;
+    var out = new Uint8Array(h.length / 2);
+    for(var i=0;i<out.length;i++) out[i] = parseInt(h.substr(i*2, 2), 16);
+    return out;
+  }
+  function u8(t){ return new TextEncoder().encode(t); }
+  function numPy(v){
+    var s = String(v);
+    return (s.indexOf('.') < 0 && s.indexOf('e') < 0 && s.indexOf('E') < 0) ? s + '.0' : s;
+  }
+  // JSON canonico identico a ledger/sellos.py: claves ordenadas, sin espacios,
+  // sin `firma` ni `clave_publica` dentro del cuerpo firmado.
+  function canonicoSello(o){
+    var claves = Object.keys(o).filter(function(k){ return k !== 'firma' && k !== 'clave_publica'; }).sort();
+    var partes = [];
+    for(var i=0;i<claves.length;i++){
+      var k = claves[i], v = o[k];
+      if(k === 'legado' && v && typeof v === 'object') partes.push(JSON.stringify(k) + ':' + canonicoSello(v));
+      else if(k === 'suma') partes.push(JSON.stringify(k) + ':' + numPy(v));
+      else partes.push(JSON.stringify(k) + ':' + JSON.stringify(v));
+    }
+    return '{' + partes.join(',') + '}';
+  }
+  function verificarSello(d){
+    var a = d && d.ancla;
+    if(!a || typeof a !== 'object') return 'sin sello publicado';
+    if(String(a.clave_publica || '').toLowerCase() !== CLAVE_SELLO) return 'el sello usa una clave desconocida';
+    if(!(window.nacl && nacl.sign && nacl.sign.detached)) return 'verificador criptografico no disponible';
+    var ok = false;
+    try { ok = nacl.sign.detached.verify(u8(canonicoSello(a)), hexBytes(a.firma), hexBytes(a.clave_publica)); }
+    catch(e){ ok = false; }
+    if(!ok) return 'la firma del sello no cuadra';
+    var s = d.stats || {};
+    if(typeof s.supply_emitido === 'number' && Number(a.suma) > Number(s.supply_emitido) + 1e-6)
+      return 'el suministro publicado es menor que el del sello';
+    return '';
+  }
+
+  // --- Formato: mismas reglas que tools/calculadora_valor.py ---------------
+  function eur(n){
+    if(!isFinite(n)) return '—';
+    if(n === 0) return '0,00';
+    if(Math.abs(n) < 0.001) return n.toExponential(2).replace('e-0','e-').replace('e+0','e+').replace('.', ',');
+    if(Math.abs(n) < 1) return n.toFixed(4).replace('.', ',');
+    return n.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2});
+  }
+  function num(n, dec){
+    if(!isFinite(n)) return '—';
+    return n.toLocaleString('es-ES', {minimumFractionDigits:dec||0, maximumFractionDigits:dec||0});
+  }
+  function gflop(n){                       // base GFLOP: 1e3 TFLOP, 1e6 PFLOP, 1e9 EFLOP
+    if(!isFinite(n)) return '—';
+    if(Math.abs(n) >= 1e9) return num(n/1e9, 2) + ' EFLOP';
+    if(Math.abs(n) >= 1e6) return num(n/1e6, 2) + ' PFLOP';
+    if(Math.abs(n) >= 1e3) return num(n/1e3, 2) + ' TFLOP';
+    return num(n) + ' GFLOP';
+  }
+  function kia(n){
+    if(!isFinite(n)) return '—';
+    if(Math.abs(n) >= 1e6) return num(n/1e6, 2) + ' M';
+    return num(n, 0);
+  }
+
+  var datos = null;                        // {supply, max, emisionMin, emisionDia, medido}
+  var FIN = Date.UTC(2150, 0, 1, 0, 0, 0); // fin de emision, igual que el Core
+
+  function calcularEmision(supply, max){
+    var restante = Math.max(0, max - supply);
+    var seg = Math.max(1, (FIN - Date.now()) / 1000);
+    var min = restante / (seg / 60);
+    return {restante: restante, emisionMin: min, emisionDia: min * 1440};
+  }
+
+  function pintarDatos(){
+    if(!datos) return;
+    $('tSupply').textContent = num(datos.supply, 0);
+    $('tSupplyN').textContent = 'de ' + num(datos.max, 0) + ' KIA';
+    $('tRest').textContent = num(datos.restante, 0);
+    $('tEmi').textContent = num(datos.emisionDia, 0);
+    $('tEmiN').textContent = 'KIA/dia (' + num(datos.emisionMin, 2) + ' KIA/min) hasta 01-01-2150';
+    if(typeof datos.medido === 'number' && isFinite(datos.medido) && datos.medido > 0){
+      var dia = datos.medido * 1440;
+      $('tEmiMed').textContent = 'El rele mide ahora ' + num(datos.medido, 2) + ' KIA/min = '
+        + num(dia, 0) + ' KIA/dia emitidos de verdad. La calculadora divide por el presupuesto de '
+        + 'calendario; con la emision medida el valor por KIA sale mas alto (menos KIA que repartir).';
+    } else {
+      $('tEmiMed').textContent = 'El rele no publica la emision medida ahora mismo: se usa el presupuesto de calendario.';
+    }
+    recalcular();
+  }
+
+  function supuestos(){
+    var eurHora = Number($('inEurHora').value);
+    var tflops = Number($('inTflops').value);
+    var directo = Number($('inPrecioGflop').value);
+    if(!isFinite(eurHora) || eurHora < 0) eurHora = 0;
+    if(!isFinite(tflops) || tflops < 0) tflops = 0;
+    if(!isFinite(directo) || directo < 0) directo = 0;
+    var gflopHora = tflops * 1000 * 3600;     // 1 TFLOP/s = 1000 GFLOP/s
+    var eurGflop, origen;
+    if(directo > 0){
+      eurGflop = directo;
+      origen = 'precio por GFLOP puesto a mano (' + eur(directo) + ' EUR/GFLOP)';
+    } else {
+      eurGflop = gflopHora > 0 ? eurHora / gflopHora : 0;
+      origen = num(eurHora, 2) + ' EUR/hora entre ' + num(gflopHora, 0) + ' GFLOP/hora ('
+             + num(tflops, 1) + ' TFLOP/s efectivos x 1.000 x 3.600)';
+    }
+    return {eurHora: eurHora, tflops: tflops, eurGflop: eurGflop, origen: origen};
+  }
+
+  function recalcular(){
+    var sup = supuestos();
+      $('lblEurHora').textContent = '(' + num(sup.eurHora, 2) + ' EUR/hora)';
+    if(sup.eurGflop > 0){
+      $('derivacion').innerHTML = 'Entonces 1 GFLOP cuesta <b>' + sup.eurGflop.toExponential(3).replace('.', ',')
+        + ' EUR</b><br><small>' + sup.origen + '</small>';
+    } else {
+      $('derivacion').innerHTML = '<b class="v bad">Los supuestos dan 0 EUR/GFLOP:</b> rellena el coste por hora y la potencia, o pon un precio por GFLOP.';
+    }
+    if(!datos){ return; }
+    var demanda = Number($('inDemanda').value);
+    if(!isFinite(demanda) || demanda < 0) demanda = 0;
+    $('nDemanda').textContent = 'Son ' + gflop(demanda) + ' al dia. '
+      + (demanda === 0 ? 'Cero es la situacion de hoy: no hay clientes externos.' : 'Eso es lo que tendria que comprar alguien.');
+
+    if(sup.eurGflop <= 0 || datos.emisionDia <= 0){
+      $('tIngresos').textContent = '—'; $('tKia').textContent = '—'; $('tSupplyEur').textContent = '—';
+      $('nResultado').textContent = sup.eurGflop <= 0
+        ? 'Sin precio por GFLOP no hay nada que calcular.'
+        : 'La emision diaria es 0: no hay con que dividir.';
+      $('tablaInversa').innerHTML = '<tr><td colspan="4">sin datos suficientes</td></tr>';
+      return;
+    }
+
+    var ingresos = demanda * sup.eurGflop;
+    var eurKia = ingresos / datos.emisionDia;
+    $('tIngresos').textContent = eur(ingresos);
+    $('tKia').textContent = eur(eurKia);
+    $('tSupplyEur').textContent = eur(datos.supply * eurKia);
+    $('nResultado').textContent = demanda === 0
+      ? 'Con demanda 0 el valor es 0. Es una division, no una opinion.'
+      : 'Para que 1 KIA valga eso, alguien tiene que pagar ' + eur(ingresos)
+        + ' EUR al dia por el trabajo de la red. Si no paga nadie, el resultado vuelve a 0.';
+
+    // Tabla inversa: que demanda hace falta para cada ancla de valor.
+    var objetivos = [0.01, 0.05, 0.10, 0.50, 1.00];
+    var filas = '';
+    for(var i=0;i<objetivos.length;i++){
+      var obj = objetivos[i];
+      var nece = (obj * datos.emisionDia) / sup.eurGflop;
+      filas += '<tr><td>' + eur(obj) + ' EUR</td><td>' + gflop(nece)
+             + '</td><td>' + num(nece, 0) + ' GFLOP</td><td>' + eur(nece * sup.eurGflop)
+             + ' EUR/dia</td></tr>';
+    }
+    $('tablaInversa').innerHTML = filas;
+
+    $('cmd').textContent = 'python tools/calculadora_valor.py --demanda ' + Math.round(demanda)
+      + (Number($('inPrecioGflop').value) > 0
+          ? ' --precio-gflop ' + sup.eurGflop
+          : ' --eur-hora ' + sup.eurHora + ' --tflops ' + sup.tflops);
+  }
+
+  function estadoDot(color){ $('dot').style.background = color; }
+  function estadoTxt(t){ $('estado').textContent = t; }
+
+  var base = '', ruta = '/api/metricas', modoLocal = false;
+  async function descubrir(){
+    var q = new URLSearchParams(location.search).get('core');
+    if(q){
+      var u = null;
+      try { u = new URL(q); } catch(e){ u = null; }
+      var host = u ? String(u.hostname || '') : '';
+      if(u && (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]')){
+        modoLocal = true; ruta = '/stats'; return q.replace(/\/+$/, '');
+      }
+    }
+    try {
+      var r = await fetch('metricas.json?_=' + Date.now(), {cache:'no-store'});
+      if(r.ok){
+        var cfg = await r.json();
+        if(cfg && cfg.api){ ruta = '/api/metricas'; return String(cfg.api).replace(/\/+$/, ''); }
+      }
+    } catch(e){}
+    return '';
+  }
+
+  function aplicar(d, origen){
+    var s = (d && d.stats) ? d.stats : d;
+    if(!s || typeof s.supply_emitido !== 'number') throw new Error('sin datos utiles');
+    var max = Number(s.max_supply) || 100000000;
+    var e = calcularEmision(Number(s.supply_emitido), max);
+    var med = (d && d.salud && typeof d.salud.emision_por_min === 'number') ? d.salud.emision_por_min : null;
+    datos = {supply: Number(s.supply_emitido), max: max, restante: e.restante,
+             emisionMin: e.emisionMin, emisionDia: e.emisionDia, medido: med};
+    pintarDatos();
+    var sello = d && d.ancla && typeof d.ancla.hasta === 'number'
+      ? ' · sello hasta el asiento ' + num(d.ancla.hasta, 0) : '';
+    estadoDot(modoLocal ? '#e0c05e' : '#5ee08a');
+    estadoTxt(origen + sello + (modoLocal ? ' · Core local (sin sello)' : ' · sello verificado en tu navegador'));
+  }
+
+  async function cargar(){
+    try {
+      if(!base) base = await descubrir();
+      if(!base) throw new Error('sin rele configurado');
+      var ctl = new AbortController();
+      var to = setTimeout(function(){ ctl.abort(); }, 6000);
+      var r = await fetch(base + ruta + '?_=' + Date.now(), {cache:'no-store', signal: ctl.signal});
+      clearTimeout(to);
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      var d = await r.json();
+      if(!modoLocal){
+        var fallo = verificarSello(d);
+        if(fallo) throw new Error(fallo);
+        aplicar(d, 'EN VIVO desde el rele');
+      } else {
+        aplicar(d, 'EN VIVO desde tu Core local');
+      }
+    } catch(err){
+      estadoDot('#e0c05e');
+      estadoTxt('No he podido leer la red en vivo (' + err.message + '). Uso la instantanea firmada del dominio.');
+      try {
+        var r2 = await fetch('metricas_snapshot.json?_=' + Date.now(), {cache:'no-store'});
+        if(!r2.ok) throw new Error('sin instantanea');
+        var d2 = await r2.json();
+        var f2 = verificarSello(d2);
+        if(f2) throw new Error(f2);
+        aplicar(d2, 'RESPALDO: instantanea firmada del dominio');
+      } catch(e2){
+        estadoDot('#ff7b7b');
+        estadoTxt('Sin datos de la red: ' + e2.message + '. Los supuestos de abajo siguen siendo validos, '
+                + 'pero no puedo calcular sin saber cuanto se ha emitido.');
+      }
+    }
+  }
+
+  // --- eventos ------------------------------------------------------------
+  ['inEurHora','inTflops','inPrecioGflop','inDemanda'].forEach(function(id){
+    $(id).addEventListener('input', recalcular);
+  });
+  var bs = document.querySelectorAll('.botones button');
+  for(var i=0;i<bs.length;i++){
+    bs[i].addEventListener('click', function(){
+      $('inDemanda').value = this.getAttribute('data-d');
+      recalcular();
+    });
+  }
+  recalcular();
+  cargar();
+  setInterval(cargar, 120000);
+})();
+</script>
+</body>
+</html>

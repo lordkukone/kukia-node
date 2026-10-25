@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<link rel="canonical" href="https://lordkukone.github.io/kukia-node/whitepaper">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KUKIA | Whitepaper - El proyecto en claro</title>
+<meta name="description" content="Whitepaper de KUKIA: emision de 100M de KIA hasta 2150, verificacion por recalculo y dos nodos en las tareas caras, pago por GFLOP medidos y sin precio artificial.">
+<!-- AUDITORIA 24-10-2026: era la unica pagina sin CSP. Solo carga recursos de
+     este origen, asi que se aplica la misma politica que en el resto. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<style>
+:root { --gold:#d4af37; --navy:#081a3a; --blue:#12305e; --line:#27487c; --text:#c3d1ea; }
+* { margin:0; padding:0; box-sizing:border-box; }
+/* AUDITORIA 24-10-2026: foco visible para quien navega con el teclado. */
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:3px solid #d4af37; outline-offset:2px; border-radius:4px; }
+
+body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; line-height:1.7; }
+.wrap { max-width:860px; margin:0 auto; padding:3rem 1.5rem; }
+h1 { color:var(--gold); font-size:2.4rem; margin-bottom:.4rem; }
+.sub { color:var(--text); margin-bottom:2.5rem; font-style:italic; }
+h2 { color:var(--gold); font-size:1.35rem; margin:2.4rem 0 .8rem; border-bottom:1px solid var(--line); padding-bottom:.5rem; }
+p, li { color:var(--text); margin-bottom:.9rem; }
+ul { padding-left:1.4rem; }
+code { background:rgba(8,26,58,.9); padding:.15rem .5rem; border-radius:6px; color:var(--gold); font-size:.85rem; border:1px solid rgba(212,175,55,.2); }
+table { width:100%; border-collapse:collapse; margin:1rem 0; }
+th, td { border:1px solid var(--line); padding:.7rem 1rem; text-align:left; color:var(--text); font-size:.93rem; }
+th { color:var(--gold); background:rgba(18,48,94,.5); }
+.honest { background:rgba(18,48,94,.4); border-left:3px solid var(--gold); padding:1rem 1.3rem; border-radius:0 10px 10px 0; margin:1.2rem 0; }
+.back { display:inline-block; margin-bottom:2rem; color:var(--gold); text-decoration:none; }
+.back:hover { text-decoration:underline; }
+</style>
+<!-- kukia-seo -->
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="google-site-verification" content="9d6cb22812b81092">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="KUKIA Network">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://lordkukone.github.io/kukia-node/whitepaper">
+<meta property="og:title" content="KUKIA | Whitepaper - El proyecto en claro">
+<meta property="og:description" content="Whitepaper de KUKIA: emision de 100M de KIA hasta 2150, verificacion por recalculo y dos nodos en las tareas caras, pago por GFLOP medidos y sin precio artificial.">
+<meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="KUKIA | Whitepaper - El proyecto en claro">
+<meta name="twitter:description" content="Whitepaper de KUKIA: emision de 100M de KIA hasta 2150, verificacion por recalculo y dos nodos en las tareas caras, pago por GFLOP medidos y sin precio artificial.">
+<meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://lordkukone.github.io/kukia-node/#sitio",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "name": "KUKIA Network",
+   "alternateName": "KUKIA",
+   "inLanguage": "es",
+   "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
+   "publisher": {
+    "@id": "https://lordkukone.github.io/kukia-node/#organizacion"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://lordkukone.github.io/kukia-node/#organizacion",
+   "name": "KUKIA Network",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://lordkukone.github.io/kukia-node/moneda.jpg",
+    "width": 512,
+    "height": 512
+   }
+  },
+  {
+   "@type": "WebPage",
+   "@id": "https://lordkukone.github.io/kukia-node/whitepaper#pagina",
+   "url": "https://lordkukone.github.io/kukia-node/whitepaper",
+   "name": "KUKIA | Whitepaper - El proyecto en claro",
+   "description": "Whitepaper de KUKIA: emision de 100M de KIA hasta 2150, verificacion por recalculo y dos nodos en las tareas caras, pago por GFLOP medidos y sin precio artificial.",
+   "inLanguage": "es",
+   "isPartOf": {
+    "@id": "https://lordkukone.github.io/kukia-node/#sitio"
+   }
+  }
+ ]
+}
+</script>
+<!-- /kukia-seo -->
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="index.html">&larr; Volver a KUKIA</a>
+<h1>Whitepaper KUKIA</h1>
+<div class="sub">Version 1.0 - fase de pruebas - KIA Coin (ticker KIA)</div>
+
+<h2>1. Que es KUKIA</h2>
+<p>KUKIA es una red descentralizada de computo que conecta las GPUs de los participantes en una sola red de inteligencia artificial. Los nodos ejecutan tareas reales (inferencia, generacion de imagen y video, simulaciones) y cada resultado se verifica de forma reproducible.</p>
+
+<h2>2. La moneda: KIA</h2>
+<p>KIA es la moneda que nace del trabajo verificado. No se reparte por especulacion ni publicidad: se gana aportando computo real que la red comprueba recalculandolo (y, en las tareas caras, haciendo que dos nodos distintos lleguen al mismo resultado).</p>
+
+<h2>3. Emision y suministro</h2>
+<table>
+<tr><th>Parametro</th><th>Valor</th></tr>
+<tr><td>Techo maximo</td><td>100.000.000 KIA (nunca habra mas)</td></tr>
+<tr><td>Emision hasta</td><td>2150 (escalonada por fases)</td></tr>
+<tr><td>Asignacion fundacional</td><td>15.000.000 KIA al fundador (bloque genesis + migracion a billetera con recuperacion: <code>KUK9E8B44CD7FE3AF178039453D3EEDF391EEC0CE</code>)</td></tr>
+<tr><td>Calendario de emision</td><td>Halvings cada 20,67 anos (6 eras). Ultima moneda: <strong>01-01-2150</strong>. Tras esa fecha, emision = 0</td></tr>
+<tr><td>Resto del suministro</td><td>Se emite por trabajo verificado hasta completar los 100M</td></tr>
+<tr><td>Comisiones</td><td>0 % (no hay comision de red ni quema)</td></tr>
+<tr><td>Dificultad</td><td>Se ajusta al numero de nodos activos</td></tr>
+</table>
+
+<h2>4. Recompensas (fase de prueba)</h2>
+<table>
+<tr><th>Concepto</th><th>Valor actual de prueba</th></tr>
+<tr><td>Pago por trabajo verificado</td><td>Desde el 23-10-2026 se paga por FLOPs, no por tarea: el presupuesto del minuto (1,31 KIA) se reparte entre los GFLOP que entrego la red y cada tarea cobra <strong>precio x GFLOP</strong>. El precio del minuto lo publica el Core en <code>/stats</code> (23-10 por la noche: 0,0042 KIA/GFLOP). El ledger publica cada pago</td></tr>
+<tr><td>Tier por VRAM</td><td>12GB = x1.0 | 16GB = x1.3 | 24GB = x1.6 &mdash; solo con la tarifa plana (<code>KUKIA_PAGO_POR_FLOP=0</code>). Con el pago por trabajo <strong>no multiplica</strong>: se cobra por lo calculado, no por lo declarado</td></tr>
+<tr><td>Bonus referido</td><td>50 KIA al completar 10 tareas</td></tr>
+<tr><td>Fraude (hash invalido)</td><td>0 KIA + perdida de reputacion</td></tr>
+</table>
+<div class="honest"><strong>Aviso honesto:</strong> estas cifras son parametros de la fase de prueba. No representan ganancias economicas garantizadas. El precio de KIA no existe todavia y solo saldra segun demanda real.</div>
+
+<h2>5. Verificacion (como se evita el fraude)</h2>
+<ul>
+<li>El Core propone una tarea con parametros unicos (con seed: reproducible).</li>
+<li>El nodo la ejecuta en su GPU y devuelve el <strong>resultado exacto</strong> (no un hash propio).</li>
+<li>El Core <strong>recalcula la tarea el mismo</strong> y compara el resultado numero a numero (trustless: no se fia del minero).</li>
+<li><strong>Redundancia:</strong> las tareas caras (>= 1 GFLOP) las ejecutan DOS nodos distintos; si coinciden, el Core no recalcula. 1 de cada 10 se recalcula igualmente para detectar colusion, y 1 de cada N tareas lleva el tiempo y los FLOPs medidos por la propia GPU.</li>
+<li>Si coincide: paga al nodo y sube su reputacion. Si no: tarea rechazada, 0 KIA.</li>
+<li><strong>Anti-doble-pago:</strong> cada tarea solo se puede cobrar UNA vez (segundo intento = error 409).</li>
+<li><strong>Tope en cada pago:</strong> el pago nunca supera lo que falta hasta 100M (el ledger jamas pasa del techo).</li>
+<li><strong>Recompensa dinamica:</strong> cada pago se ajusta para agotar justo el 01-01-2150 al ritmo real de la red, dentro de bandas del halving. Lo que gana el ejecutor y lo que gana el verificador suman lo mismo por tarea: la duplicacion no infla la emision.</li>
+<li>Ademas: reputacion por nodo (max 5.0) y nonce por tarea.</li>
+</ul>
+
+<h2>6. Arquitectura tecnica</h2>
+<ul>
+<li><strong>Coordinator (Core):</strong> FastAPI + SQLite. Registra nodos, reparte tareas, verifica recalculando el mismo, lleva el ledger. Solo el fundador lo administra (token de admin).</li>
+<li><strong>Worker multi-GPU:</strong> se conecta al Core, pide tareas, ejecuta en TODAS las GPUs a la vez (un hilo por GPU), devuelve el resultado exacto.</li>
+<li><strong>Wallet con recuperacion:</strong> claves Ed25519 reales derivadas de tu contrasena + 20 palabras unicas (lista BIP39 espanol, PBKDF2 200.000 iteraciones). Con ambas recuperas la MISMA billetera en cualquier equipo. Direccion tipo <code>KUK...</code> derivada de la clave publica. Tu clave nunca sale de tu maquina.</li>
+<li><strong>Dashboard:</strong> panel web local con el estado de la red.</li>
+</ul>
+
+<h2>7. Estado actual del proyecto (transparencia)</h2>
+<div class="honest">
+<ul style="margin-bottom:0;">
+<li><strong>Fase:</strong> pruebas abiertas. El minado publico funciona desde el 20-10-2026: cualquiera descarga el nodo y cobra por el trabajo verificado que entrega (FLOPs). Durante esta fase el precio por GFLOP, la dificultad y el calendario pueden cambiar.</li>
+<li><strong>Codigo fuente:</strong> repositorio publico en <a href="https://github.com/lordkukone/kukia-node">github.com/lordkukone/kukia-node</a> y paquete descargable kukia-node.zip, con su huella SHA-256 publicada en la pagina de codigo.</li>
+<li><strong>Auditoria:</strong> el software NO tiene todavia auditoria de seguridad independiente. No se recomienda instalarlo en equipos de produccion con datos criticos durante esta fase.</li>
+<li><strong>Precio:</strong> no existe. Ni cotiza ni se vende. Saldra al mercado cuando la red tenga nodos, trabajo y clientes reales.</li>
+<li><strong>Rentabilidad:</strong> no calculable aun (sin precio, sin demanda medida, sin consumo electrico registrado).</li>
+</ul>
+</div>
+
+<h2>8. Roadmap</h2>
+<ul>
+<li><strong>Fase 1 (ahora):</strong> pruebas locales + primeros nodos invitados.</li>
+<li><strong>Fase 2:</strong> apertura publica del minado con pago por cada tarea verificada.</li>
+<li><strong>Fase 3:</strong> primeros clientes de computo. Aqui nace el precio, solo por demanda.</li>
+</ul>
+
+<h2>9. Preguntas frecuentes</h2>
+<p><strong>Puedo perder dinero?</strong> No compras nada para minar: usas la GPU que ya tienes. El coste es tu electricidad.</p>
+<p><strong>Es seguro instalar el nodo?</strong> Es un prototipo en fase de pruebas, sin auditoria externa aun. Instalalo con conocimiento de causa, idealmente en un equipo secundario.</p>
+<p><strong>Cuando vale algo mi KIA?</strong> Cuando la red cree demanda real. Las recompensas de prueba se conservaran en el ledger.</p>
+
+<p style="margin-top:3rem;color:#789;font-size:.85rem;">KUKIA Network - documento abierto a correcciones. Si detectas un error, se corrige. Todo queda registrado en el ledger.</p>
+</div>
+</body>
+</html>

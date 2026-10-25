@@ -13,7 +13,9 @@ Que comprueba, sobre una COPIA del ledger (produccion no se toca):
   4. El asiento usa el nonce COMPLETO como id (dos transferencias distintas ya
      no pueden compartir id).
   5. Repetir el nonce se rechaza (409).
-  6. El ledger de produccion no cambia ni de tamano ni de fecha.
+  6. La prueba no ha escrito en el ledger de produccion (se busca su nonce en
+     la base real, en solo-lectura). El tamano y la fecha del fichero si
+     pueden moverse: el Core de verdad esta vivo y escribe telemetria.
 
 Uso:
     python tools/prueba_firma_guardada.py
@@ -37,6 +39,8 @@ import uuid
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from copia_ledger import copiar_ledger  # noqa: E402
 COORD = RAIZ / "coordinator"
 DB_REAL = COORD / "ledger" / "kukia.db"
 DESTINO = "KUK90BA61EDA315C341434AF93CC4D82D80D9DD21"
@@ -94,8 +98,10 @@ def main() -> int:
     antes = (DB_REAL.stat().st_size, DB_REAL.stat().st_mtime)
     tmp = Path(tempfile.mkdtemp(prefix="kukia_firma_"))
     db = tmp / "kukia.db"
-    shutil.copy2(DB_REAL, db)
-    print(f"copia del ledger: {db} ({db.stat().st_size / 1e6:.1f} MB)")
+    # Copia COHERENTE con el Core escribiendo (VACUUM INTO). Con shutil.copy2
+    # la base salia mal formada una de cada tres veces: medido el 25-10-2026.
+    metodo = copiar_ledger(DB_REAL, db)
+    print(f"copia del ledger ({metodo}): {db} ({db.stat().st_size / 1e6:.1f} MB)")
 
     puerto = puerto_libre()
     base = f"http://127.0.0.1:{puerto}"
@@ -183,8 +189,29 @@ def main() -> int:
         check(codigo2 == 409, f"se rechaza la repeticion ({codigo2} esperado 409)")
 
         print("\n== 6. produccion intacta ==")
+        # Ojo: el Core de produccion esta vivo y escribe (telemetria, poda,
+        # sellos), asi que el tamano y la fecha del fichero se mueven solos y
+        # compararlos daba FALSO fallo. Lo que de verdad importa es que la
+        # transferencia de ESTA prueba no haya acabado en la base real, asi que
+        # se busca su nonce leyendo produccion en solo-lectura.
         despues = (DB_REAL.stat().st_size, DB_REAL.stat().st_mtime)
-        check(antes == despues, f"el ledger real no ha cambiado ({antes[0]} bytes, {antes[1]:.0f})")
+        nota = ""
+        if antes != despues:
+            nota = (f" (el fichero si cambio: {antes[0]} -> {despues[0]} bytes;"
+                    " es el Core vivo, no la prueba)")
+        try:
+            ro = sqlite3.connect(f"file:{DB_REAL.as_posix()}?mode=ro", uri=True)
+            try:
+                en_transf = ro.execute("SELECT 1 FROM transferencias WHERE nonce=?",
+                                       (nonce,)).fetchone()
+                en_ledger = ro.execute("SELECT 1 FROM ledger WHERE tarea_id=?",
+                                       (f"tx-{nonce}",)).fetchone()
+            finally:
+                ro.close()
+            check(en_transf is None and en_ledger is None,
+                  f"la transferencia de la prueba NO esta en el ledger real{nota}")
+        except Exception as e:
+            check(False, f"no se pudo mirar el ledger real ({type(e).__name__}: {e})")
         con.close()
     finally:
         try:

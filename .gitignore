@@ -118,3 +118,14 @@ capturas_local/
 # repo GitHub Pages lo toma como dominio propio, no puede verificarlo y tumba el
 # sitio. GitHub Pages se sirve en lordkukone.github.io/kukia-node y Surge aparte.
 docs/CNAME
+
+# Servicio de transcripcion (25-10-2026). El codigo y el lanzador SI se publican;
+# lo que se queda en el disco son los modelos descargados, los audios de prueba,
+# las entregas de clientes (audio de terceros, no puede estar en un repo publico)
+# y los documentos con precios, margenes y objetivos de facturacion.
+servicio/modelos/
+servicio/entregas/
+servicio/pruebas/
+PLAN_DEMANDA.md
+HOJA_DE_PRECIOS.md
+SERVICIO_TRANSCRIPCION.md

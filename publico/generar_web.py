@@ -563,6 +563,7 @@ def generar_seo(destino: Path, canonico: str = CANONICO):
     # prioridad y frecuencia por pagina (la portada primero: es la que importa).
     plan = {"index.html": (1.0, "daily"), "minar.html": (0.9, "weekly"),
             "whitepaper.html": (0.8, "monthly"), "wallet.html": (0.7, "weekly"),
+            "transcripcion.html": (0.7, "weekly"),
             "codigo.html": (0.6, "monthly")}
     paginas = []
     for ruta in sorted(destino.glob("*.html")):

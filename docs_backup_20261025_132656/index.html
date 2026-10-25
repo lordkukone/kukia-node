@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<!-- AUDITORIA 2026-10-21: la portada no tenia ninguna CSP. Todo lo que carga
+     es de este origen, salvo el rele de metricas (https) y el formulario de
+     contacto. Con esto una inyeccion externa no puede cargar scripts ni
+     mandar datos a un dominio que no sea el nuestro. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; form-action 'self' https://formsubmit.co; object-src 'none'; base-uri 'self'">
+<link rel="canonical" href="https://lordkukone.github.io/kukia-node/">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KUKIA | Red de computo GPU: gana KIA por trabajo verificado</title>
+<meta name="description" content="KUKIA Network: red descentralizada de computo GPU. Conecta tu grafica y gana KIA por trabajo verificado. Sin precio hasta movimiento real. 100M maximo hasta 2150.">
+<meta name="keywords" content="KUKIA, KIA, KUKI, GPU, computo distribuido, IA descentralizada, criptomoneda GPU, mining GPU, decentralized AI, render network, computo verificado, verificación por recalculo">
+<!-- Version del HTML: se compara con version.json para que nadie se quede
+     viendo una copia vieja de la web por la cache del navegador. -->
+<meta name="kukia-build" content="v1.2.3-pago">
+<style>
+:root { --gold:#d4af37; --gold2:#f0d060; --navy:#081a3a; --navy2:#0a1f44; --blue:#12305e; --line:#27487c; --soft:#9db6dd; --text:#c3d1ea; }
+* { margin:0; padding:0; box-sizing:border-box; }
+/* AUDITORIA 24-10-2026: no habia NI UN estilo de foco en toda la web. Quien
+   navega con el tabulador no veia donde estaba. Con esto, el elemento activo
+   lleva un anillo dorado visible (y no cambia nada para el raton). */
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, video:focus-visible { outline:3px solid var(--gold); outline-offset:2px; border-radius:4px; }
+/* AUDITORIA 24-10-2026: se quito el scroll suave global. La pagina mide 24.000 px
+   y saltar a FAQ desde la barra se quedaba a medias (medido: se paraba a 144 px
+   de 15.000). Ahora el salto es directo, que es lo que espera quien pulsa.
+   Ademas, la barra es fija: sin scroll-margin los titulos quedaban tapados. */
+section[id], div[id], header[id] { scroll-margin-top:86px; }
+body { font-family:'Segoe UI',system-ui,-apple-system,sans-serif; background:var(--navy); color:#fff; overflow-x:hidden; }
+nav { position:fixed; top:0; left:0; right:0; z-index:100; padding:1rem 2rem; display:flex; justify-content:space-between; align-items:center; background:rgba(8,26,58,.85); backdrop-filter:blur(12px); border-bottom:1px solid rgba(212,175,55,.15); }
+nav .logo { font-weight:800; letter-spacing:.15em; color:var(--gold); font-size:1.2rem; }
+/* El distintivo no debe partirse en dos lineas (se vio a 1440: "ABIERTAS"
+   caia debajo y la barra crecia). */
+nav .logo span { white-space:nowrap; }
+nav ul { display:flex; gap:1.6rem; list-style:none; }
+nav a { color:var(--text); text-decoration:none; font-size:.9rem; transition:.2s; }
+nav a:hover { color:var(--gold); }
+.hero { min-height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; padding:6rem 2rem 4rem; background:radial-gradient(ellipse at 50% -10%, #1a3f7a 0%, var(--navy2) 45%, var(--navy) 100%); position:relative; overflow:hidden; }
+.stars { position:absolute; inset:0; background-image:radial-gradient(1.5px 1.5px at 20% 30%, rgba(212,175,55,.6), transparent),radial-gradient(1px 1px at 70% 20%, rgba(255,255,255,.5), transparent),radial-gradient(1.5px 1.5px at 40% 70%, rgba(212,175,55,.4), transparent),radial-gradient(1px 1px at 85% 60%, rgba(255,255,255,.4), transparent),radial-gradient(1.5px 1.5px at 10% 85%, rgba(212,175,55,.5), transparent),radial-gradient(1px 1px at 55% 45%, rgba(255,255,255,.3), transparent); animation:twinkle 6s infinite alternate; }
+@keyframes twinkle { from { opacity:.5; } to { opacity:1; } }
+@keyframes float { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-14px); } }
+@keyframes spin-slow { from { transform:rotate(0deg); } to { transform:rotate(360deg); } }
+@keyframes pulse-glow { 0%,100% { box-shadow:0 0 60px rgba(212,175,55,.5); } 50% { box-shadow:0 0 110px rgba(212,175,55,.9); } }
+@keyframes rise { from { opacity:0; transform:translateY(30px); } to { opacity:1; transform:translateY(0); } }
+.coin-wrap { position:relative; margin-bottom:2rem; animation:float 5s ease-in-out infinite; }
+.coin { width:220px; height:220px; border-radius:50%; object-fit:cover; border:4px solid var(--gold); animation:pulse-glow 4s ease-in-out infinite; display:block; }
+.coin-ring { position:absolute; inset:-18px; border:2px dashed rgba(212,175,55,.5); border-radius:50%; animation:spin-slow 30s linear infinite; }
+h1 { font-size:clamp(3rem,8vw,5.5rem); letter-spacing:.14em; color:var(--gold); text-shadow:0 0 40px rgba(212,175,55,.5); animation:rise .8s ease both; }
+.tag { font-size:clamp(.85rem,2vw,1.15rem); letter-spacing:.35em; color:var(--soft); margin-top:.5rem; animation:rise .9s ease both; }
+.slogan { font-size:clamp(1.1rem,2.5vw,1.6rem); color:#fff; margin:1.4rem 0; font-style:italic; animation:rise 1s ease both; }
+.cta-row { display:flex; gap:1rem; flex-wrap:wrap; justify-content:center; margin-top:1rem; animation:rise 1.1s ease both; }
+.btn { display:inline-block; padding:.95rem 2.6rem; background:linear-gradient(135deg,var(--gold),var(--gold2)); color:var(--navy); font-weight:800; border-radius:50px; text-decoration:none; transition:.3s; box-shadow:0 0 35px rgba(212,175,55,.45); border:none; cursor:pointer; font-size:1rem; }
+.btn:hover { transform:translateY(-3px) scale(1.03); box-shadow:0 0 55px rgba(212,175,55,.8); }
+.btn2 { background:transparent; border:2px solid var(--gold); color:var(--gold); box-shadow:none; }
+.btn2:hover { background:rgba(212,175,55,.1); }
+#hashtags { margin-top:2rem; color:var(--soft); font-size:.85rem; word-spacing:.6rem; animation:rise 1.3s ease both; }
+section { padding:5rem 1.5rem; max-width:1100px; margin:auto; }
+.charts { display:grid; grid-template-columns:repeat(2,1fr); gap:1rem; margin-top:1.5rem; }
+@media (max-width:820px){ .charts { grid-template-columns:1fr; } }
+.chart { background:rgba(8,26,58,.6); border:1px solid var(--line); border-radius:14px; padding:1rem; }
+.chartCab { display:flex; justify-content:space-between; align-items:baseline; gap:.6rem; margin-bottom:.5rem; font-size:.85rem; color:var(--text); }
+.chartHoy { color:var(--gold); font-weight:700; font-size:.8rem; }
+.chart canvas { width:100%; height:170px; display:block; }
+.chartAncho { grid-column:1 / -1; }
+.chartPie { margin-top:.45rem; font-size:.75rem; color:#9db6dd; text-align:center; letter-spacing:.2px; }
+.chartPie b { font-weight:700; }
+h2 { color:var(--gold); font-size:clamp(1.6rem,4vw,2.3rem); margin-bottom:2.5rem; text-align:center; }
+h2::after { content:''; display:block; width:70px; height:3px; background:linear-gradient(90deg,transparent,var(--gold),transparent); margin:.8rem auto 0; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:1.5rem; }
+.card { background:linear-gradient(160deg,rgba(18,48,94,.9),rgba(10,31,68,.9)); border:1px solid var(--line); border-radius:16px; padding:1.8rem 1.5rem; transition:.35s; position:relative; overflow:hidden; }
+.card::before { content:''; position:absolute; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg,transparent,var(--gold),transparent); opacity:0; transition:.35s; }
+.card:hover { transform:translateY(-6px); border-color:var(--gold); box-shadow:0 15px 45px rgba(0,0,0,.5); }
+.card:hover::before { opacity:1; }
+.card .ico { margin-bottom:.8rem; height:56px; display:flex; align-items:center; justify-content:center; }.card .ico svg { transition:transform .3s; }.card:hover .ico svg { transform:scale(1.15) rotate(-4deg); }
+.card h3 { color:var(--gold); margin-bottom:.6rem; font-size:1.1rem; }
+.card p { color:var(--text); font-size:.93rem; line-height:1.6; }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:1.5rem; max-width:800px; margin:0 auto; }
+.stat { text-align:center; padding:1.8rem 1rem; background:rgba(18,48,94,.5); border:1px solid var(--line); border-radius:16px; container-type:inline-size; }
+/* El numero se ajusta al ancho de SU tarjeta, no al de la ventana: con cinco
+   tarjetas en fila, 15.083.759 a 2,9rem se salia del cuadro y pisaba la de al
+   lado (visto 20-10-2026). Los digitos son tabulares para que no baile el ancho
+   cada vez que cambia la cifra en vivo. */
+.stat .n { font-size:clamp(1.35rem,4.4vw,2.4rem); color:var(--gold); font-weight:800; display:block;
+           white-space:nowrap; font-variant-numeric:tabular-nums; letter-spacing:-.02em; line-height:1.05; }
+/* 13cqw: el numero crece con SU tarjeta. El tamaño final NO depende de esto:
+   la funcion encajarNumeros() mide el texto real y lo baja hasta que cabe,
+   asi que un navegador sin container queries, un zoom alto o una fuente mas
+   ancha tampoco rompen la tarjeta (visto 21-10-2026: 15.053.428 se salia). */
+@supports (font-size:1cqw) { .stat .n { font-size:clamp(1.05rem,13cqw,2.6rem); } }
+.stat .l { overflow-wrap:anywhere; }
+.stat .l { color:var(--soft); font-size:.88rem; margin-top:.3rem; display:block; }
+.timeline { position:relative; max-width:760px; margin:0 auto; padding-left:2.2rem; }
+.timeline::before { content:''; position:absolute; left:8px; top:0; bottom:0; width:2px; background:linear-gradient(180deg,var(--gold),rgba(212,175,55,.1)); }
+.tl-item { position:relative; padding:0 0 2.4rem 1.3rem; }
+.tl-item::before { content:''; position:absolute; left:-2.2rem; top:.35rem; width:18px; height:18px; border-radius:50%; background:var(--navy); border:3px solid var(--gold); box-shadow:0 0 18px rgba(212,175,55,.6); }
+.tl-item h3 { color:var(--gold); font-size:1.05rem; margin-bottom:.35rem; }
+.tl-item p { color:var(--text); font-size:.92rem; line-height:1.55; }
+.tl-item.live::before { background:var(--gold); animation:pulse-glow 2s infinite; }
+.hashlist { list-style:none; max-width:720px; margin:0 auto; }
+.hashlist li { padding:.9rem 1.1rem; margin-bottom:.7rem; background:rgba(18,48,94,.45); border:1px solid var(--line); border-radius:12px; color:var(--text); display:flex; gap:.8rem; align-items:flex-start; font-size:.95rem; }
+.hashlist li strong { color:#fff; }
+code { background:rgba(8,26,58,.9); padding:.25rem .6rem; border-radius:8px; color:var(--gold); font-size:.85rem; border:1px solid rgba(212,175,55,.2); }
+pre { background:rgba(8,26,58,.9); border:1px solid rgba(0,229,255,.18); border-radius:10px;
+      padding:1rem 1.1rem; margin:.9rem 0; overflow-x:auto; color:#cfe9ff; font-size:.8rem;
+      line-height:1.65; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre; }
+.faq { max-width:760px; margin:0 auto; }
+.qa { margin-bottom:1.2rem; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:rgba(18,48,94,.35); }
+.qa summary { cursor:pointer; padding:1.1rem 1.3rem; color:var(--gold); font-weight:600; list-style:none; position:relative; font-size:.98rem; }
+.qa summary::after { content:'+'; position:absolute; right:1.3rem; top:50%; transform:translateY(-50%); font-size:1.3rem; transition:.3s; }
+.qa[open] summary::after { transform:translateY(-50%) rotate(45deg); }
+.qa p { padding:0 1.3rem 1.2rem; color:var(--text); line-height:1.6; font-size:.93rem; }
+.register-box { max-width:560px; margin:0 auto; background:linear-gradient(160deg,rgba(18,48,94,.95),rgba(8,26,58,.95)); border:1px solid var(--gold); border-radius:20px; padding:2.5rem 2rem; text-align:center; box-shadow:0 0 60px rgba(212,175,55,.15); }
+.register-box input { width:100%; padding:1rem 1.2rem; margin-bottom:1rem; border-radius:12px; border:1px solid var(--line); background:rgba(8,26,58,.9); color:#fff; font-size:1rem; outline:none; transition:.3s; }
+.register-box input:focus { border-color:var(--gold); box-shadow:0 0 20px rgba(212,175,55,.25); }
+.register-box small { color:var(--soft); display:block; margin-top:1rem; font-size:.8rem; }
+.wp { text-align:center; }
+.wp img { max-width:340px; width:88%; border-radius:14px; border:1px solid var(--line); box-shadow:0 20px 60px rgba(0,0,0,.5); }
+.reveal { opacity:0; transform:translateY(35px); transition:opacity .8s ease, transform .8s ease; }
+.reveal.visible { opacity:1; transform:translateY(0); }
+footer { text-align:center; padding:3rem 1.5rem; color:#789; font-size:.85rem; border-top:1px solid rgba(212,175,55,.15); background:rgba(8,26,58,.6); }
+footer .hashes { margin-top:.8rem; color:var(--soft); word-spacing:.5rem; font-size:.8rem; }
+/* AUDITORIA 24-10-2026: en movil la barra escondia el menu y NO habia forma de
+   navegar (ni FAQ, ni wallet, ni minar). Ahora hay boton de menu que despliega
+   los mismos enlaces; sin JS el boton no aparece y nada se rompe. */
+nav .menu-btn { display:none; background:none; border:1px solid rgba(212,175,55,.5); color:var(--gold); font-size:1.05rem; padding:.35rem .7rem; border-radius:8px; cursor:pointer; line-height:1; }
+@media (max-width:700px){
+  nav { padding:.7rem 1rem; }
+  nav .logo { font-size:.92rem; }
+  /* El distintivo "v1.0 · EN VIVO · PRUEBAS ABIERTAS" no cabe a 390 px: partia
+     en dos lineas y empujaba la barra. En movil se oculta; el hero ya lo dice. */
+  nav .logo span { display:none; }
+  nav ul { display:none; position:absolute; top:100%; left:0; right:0; max-height:70vh; overflow-y:auto; flex-direction:column; gap:0; padding:.4rem 1rem 1rem; background:#04120b; border-bottom:1px solid rgba(212,175,55,.25); }
+  nav ul.abierto { display:flex; }
+  nav ul li { border-top:1px solid rgba(255,255,255,.07); }
+  nav ul li a { display:block; padding:.8rem .2rem; font-size:1rem; }
+  nav .menu-btn { display:block; }
+}
+</style>
+<!-- kukia-seo -->
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="google-site-verification" content="9d6cb22812b81092">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="KUKIA Network">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://lordkukone.github.io/kukia-node/">
+<meta property="og:title" content="KUKIA | Red de computo GPU: gana KIA por trabajo verificado">
+<meta property="og:description" content="KUKIA Network: red descentralizada de computo GPU. Conecta tu grafica y gana KIA por trabajo verificado. Sin precio hasta movimiento real. 100M maximo hasta 2150.">
+<meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="KUKIA | Red de computo GPU: gana KIA por trabajo verificado">
+<meta name="twitter:description" content="KUKIA Network: red descentralizada de computo GPU. Conecta tu grafica y gana KIA por trabajo verificado. Sin precio hasta movimiento real. 100M maximo hasta 2150.">
+<meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://lordkukone.github.io/kukia-node/#sitio",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "name": "KUKIA Network",
+   "alternateName": "KUKIA",
+   "inLanguage": "es",
+   "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
+   "publisher": {
+    "@id": "https://lordkukone.github.io/kukia-node/#organizacion"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://lordkukone.github.io/kukia-node/#organizacion",
+   "name": "KUKIA Network",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://lordkukone.github.io/kukia-node/moneda.jpg",
+    "width": 512,
+    "height": 512
+   }
+  },
+  {
+   "@type": "WebPage",
+   "@id": "https://lordkukone.github.io/kukia-node/#pagina",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "name": "KUKIA | Red de computo GPU: gana KIA por trabajo verificado",
+   "description": "KUKIA Network: red descentralizada de computo GPU. Conecta tu grafica y gana KIA por trabajo verificado. Sin precio hasta movimiento real. 100M maximo hasta 2150.",
+   "inLanguage": "es",
+   "isPartOf": {
+    "@id": "https://lordkukone.github.io/kukia-node/#sitio"
+   }
+  }
+ ]
+}
+</script>
+<!-- /kukia-seo -->
+</head>
+<body>
+
+<nav>
+  <div class="logo">KUKIA <span style="font-size:.62rem;letter-spacing:.12em;padding:.16rem .5rem;border:1px solid #00ff88;border-radius:999px;color:#00ff88;vertical-align:middle;margin-left:.35rem;">v1.0 · EN VIVO · PRUEBAS ABIERTAS</span></div>
+  <ul id="menuPrincipal">
+    <li><a href="#como">Como funciona</a></li>
+    <li><a href="#ciencia">Ciencia</a></li>
+    <li><a href="#tokenomics">Tokenomics</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#faq">FAQ</a></li>
+    <li><a href="#seguridad">Seguridad</a></li><li><a href="#cliente-api">API cliente</a></li><li><a href="#despliegue">Tu Core</a></li><li><a href="#graficas">En vivo</a></li><li><a href="calculadora.html">Calculadora</a></li><li><a href="codigo.html">Codigo</a></li><li><a href="minar.html">Minar</a></li><li><a href="transcripcion.html">Transcripci&oacute;n</a></li><li><a href="wallet.html" style="color:var(--gold);font-weight:700;">Wallet</a></li>
+    <li><a href="#registro" style="color:var(--gold);font-weight:700;">Registro</a></li>
+  </ul>
+  <button class="menu-btn" id="menuBtn" aria-expanded="false" aria-controls="menuPrincipal" aria-label="Abrir menu">&#9776;</button>
+</nav>
+
+<header class="hero" style="background:radial-gradient(ellipse at 50% -10%, #03140c 0%, #010806 55%, #000 100%);">
+  <canvas id="netcanvas" style="position:absolute;inset:0;width:100%;height:100%;opacity:.85;"></canvas>
+  <div class="stars"></div>
+  <div class="coin-wrap">
+    <div class="coin-ring" style="border-color:rgba(0,255,136,.5);"></div>
+    <img class="coin" src="moneda.jpg" alt="KIA Coin (KUKIA)" style="border-color:#00ff88;box-shadow:0 0 60px rgba(0,255,136,.55);">
+  </div>
+  <h1 style="font-size:clamp(3.5rem,10vw,6.5rem);color:#00ff88;text-shadow:0 0 20px rgba(0,255,136,.8),0 0 60px rgba(0,255,136,.4);">KUKIA</h1>
+  <div class="tag" style="color:#00e5ff;">RED DE COMPUTO GPU // TRABAJO VERIFICADO</div>
+  <div class="slogan">Every GPU. One intelligence network.</div>
+  <div style="margin-top:1rem;color:#8fe6b8;font-size:.92rem;line-height:1.6;">Red v1.0 en vivo desde el 20-10-2026 · minero público · pagos verificados<br><span style="color:var(--soft);">Sin precio ni mercado todavía: KIA se gana minando y se puede enviar, nada más por ahora.</span></div>
+  <div class="hero-video" style="margin:1.8rem auto 0.5rem;max-width:820px;width:94%;">
+    <video id="heroVideo" controls autoplay loop playsinline style="width:100%;border-radius:16px;border:2px solid var(--gold);box-shadow:0 0 60px rgba(212,175,55,.35);display:block;">
+      <source src="promo_web.mp4" type="video/mp4">
+      Tu navegador no soporta video HTML5.
+    </video>
+    <div style="color:var(--soft);font-size:.85rem;margin-top:.6rem;">Presentacion KUKIA</div>
+  </div>
+  <div class="cta-row">
+    <a class="btn" href="minar.html" style="background:linear-gradient(135deg,#00ff88,#00e5ff);color:#010806;box-shadow:0 0 35px rgba(0,255,136,.45);">Empezar a minar</a>
+    <a class="btn btn2" href="#como" style="border-color:#00e5ff;color:#00e5ff;">Como funciona</a>
+  </div>
+  <div id="hashtags">#KUKIA #KIA #EveryGPUOneNetwork #ComputeCoin #DecentralizedAI #GPUcomputing #VerificadoNoFake</div>
+</header>
+
+<section id="como" class="reveal">
+  <h2>Tu GPU puede generar inteligencia y KIA</h2>
+  <div class="grid">
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-con" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><rect x="6" y="10" width="40" height="26" rx="3" fill="none" stroke="url(#g-con)" stroke-width="3"/><circle cx="17" cy="23" r="4" fill="url(#g-con)"/><circle cx="35" cy="23" r="4" fill="url(#g-con)"/><line x1="17" y1="23" x2="35" y2="23" stroke="url(#g-con)" stroke-width="2"/><line x1="26" y1="36" x2="26" y2="44" stroke="url(#g-con)" stroke-width="3"/><line x1="18" y1="44" x2="34" y2="44" stroke="url(#g-con)" stroke-width="3"/></svg></div><h3>Conecta</h3><p>Usas la GPU que ya tienes: cada tarea declara la VRAM que necesita y el minero no la ejecuta si no cabe (desde <strong>2 GB</strong> para las pequenas; <strong>6-8 GB</strong> cubre casi todo lo que la red encola hoy). Sin grafica tambien se mina en <strong>CPU sola</strong>, cobrando mucho menos. Nunca compras hardware.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-gen" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#d4af37"/></linearGradient></defs><polygon points="29,4 12,30 24,30 22,48 40,21 28,21" fill="url(#g-gen)" stroke-linejoin="round"/></svg></div><h3>Genera</h3><p>Ejecuta trabajo real de calculo cientifico: ecuaciones de difusion, algebra matricial, convoluciones de inferencia y simulaciones. Todo el calculo sirve —nada de mineria tonta que solo quema energia— y el Core lo verifica: recalcula las tareas baratas y, en las caras, exige que dos nodos distintos coincidan.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-ver" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><path d="M26 4 L42 18 V26 C42 36 35 43 26 48 C17 43 10 36 10 26 V18 Z" fill="none" stroke="url(#g-ver)" stroke-width="3"/><polyline points="19,26 24,31 33,20" fill="none" stroke="url(#g-ver)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Verifica</h3><p>El Core no se fia del minero: las tareas baratas las recalcula enteras y las caras las resuelven dos nodos distintos, con 1 de cada 10 recalculada igualmente. Si no coincide, no se paga: hay perdida de reputacion y unos minutos sin trabajar.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #d4af3766);"><defs><linearGradient id="g-kia" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#d4af37"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><circle cx="26" cy="26" r="18" fill="none" stroke="url(#g-kia)" stroke-width="3"/><circle cx="26" cy="26" r="12" fill="url(#g-kia)" opacity="0.35"/><text x="26" y="32" font-size="16" font-weight="bold" text-anchor="middle" fill="url(#g-kia)">K</text></svg></div><h3>Gana KIA</h3><p>Cada trabajo verificado acuna moneda. 100 millones maximo, hasta 2150. Sin inflacion vacia.</p></div>
+  </div>
+</section>
+
+<section id="ciencia" class="reveal">
+  <h2>Toda la potencia, para fines cientificos</h2>
+  <p style="text-align:center;color:var(--text);max-width:780px;margin:0 auto 2rem;line-height:1.75;">
+    <strong>El 100% del computo de la red se destina a fines cientificos.</strong> Aqui no se quema energia en hashes decorativos:
+    cada tarea es calculo de verdad &mdash;simulaciones numericas, algebra de matrices, convoluciones de inferencia y modelos de IA&mdash;
+    ycada resultado se verifica antes de pagarse (recalculo en el Core para las tareas baratas, dos nodos coincidentes para las caras). Si un trabajo no sirve para calcular o para verificar integridad, no se encola y no se paga.</p>
+  <div class="grid">
+    <div class="card"><h3>Simulacion numerica</h3><p>Ecuaciones de difusion y calor resueltas paso a paso en precision doble: el mismo calculo que hay detras de la fisica de materiales, el clima o la difusion de fluidos.</p></div>
+    <div class="card"><h3>Algebra de matrices</h3><p>Productos de matrices de gran tamano, el corazon de la estadistica, la criptografia y el ajuste de modelos. Resultado exacto y reproducible en cualquier maquina.</p></div>
+    <div class="card"><h3>Inferencia de IA</h3><p>Convoluciones y propagacion de redes neuronales. El trabajo que la red paga hoy es el mismo que necesitara manana quien quiera ejecutar un modelo sin alquilar una nube.</p></div>
+  </div>
+  <p style="text-align:center;color:#789;font-size:.85rem;max-width:760px;margin:1.6rem auto 0;line-height:1.7;">
+    Y todo se puede comprobar: cada tarea pagada queda en el ledger publico con su resultado, y el Core (o un validador independiente) vuelve a calcularla cuando toca auditoria.
+    Ciencia verificable, no una promesa en una web.
+  </p>
+</section>
+
+<section id="clientes" class="reveal">
+  <h2>Para clientes: cómputo verificado a tu alcance</h2>
+  <p style="text-align:center;color:var(--text);max-width:720px;margin:0 auto 2rem;line-height:1.7;">¿Necesitas generar imágenes, video o inferencia de IA? La red KUKIA lo ejecuta en GPUs reales y cada resultado llega <strong style="color:#fff;">verificado</strong>. Sin nube cara, sin humo.</p>
+  <div class="grid">
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-img" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#7b5cff"/></linearGradient></defs><rect x="8" y="12" width="36" height="28" rx="4" fill="none" stroke="url(#g-img)" stroke-width="3"/><circle cx="18" cy="21" r="3" fill="url(#g-img)"/><polygon points="10,36 22,24 30,32 36,26 44,34 44,38 10,38" fill="url(#g-img)" opacity="0.8"/></svg></div><h3>Imagen y video IA</h3><p>Generación fotorrealista con modelos de última generación, verificada por la red.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-bot" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><rect x="14" y="8" width="24" height="30" rx="5" fill="none" stroke="url(#g-bot)" stroke-width="3"/><circle cx="21" cy="20" r="2.5" fill="url(#g-bot)"/><circle cx="31" cy="20" r="2.5" fill="url(#g-bot)"/><line x1="20" y1="29" x2="32" y2="29" stroke="url(#g-bot)" stroke-width="2.5" stroke-linecap="round"/><line x1="26" y1="38" x2="26" y2="44" stroke="url(#g-bot)" stroke-width="3"/><line x1="18" y1="44" x2="34" y2="44" stroke="url(#g-bot)" stroke-width="3"/></svg></div><h3>Inferencia a escala</h3><p>Reparte tu carga entre decenas de GPUs. Pagas solo el trabajo entregado y verificado.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-ch" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><line x1="10" y1="42" x2="42" y2="42" stroke="url(#g-ch)" stroke-width="2.5"/><rect x="13" y="26" width="7" height="16" fill="url(#g-ch)"/><rect x="23" y="18" width="7" height="24" fill="url(#g-ch)"/><rect x="33" y="10" width="7" height="32" fill="url(#g-ch)"/></svg></div><h3>Simulaciones</h3><p>Cálculo científico y simulaciones con resultado reproducible y auditable.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #d4af3766);"><defs><linearGradient id="g-key" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#d4af37"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><circle cx="18" cy="26" r="9" fill="none" stroke="url(#g-key)" stroke-width="3"/><line x1="25" y1="26" x2="42" y2="26" stroke="url(#g-key)" stroke-width="4" stroke-linecap="round"/><line x1="36" y1="26" x2="36" y2="32" stroke="url(#g-key)" stroke-width="3"/><line x1="41" y1="26" x2="41" y2="31" stroke="url(#g-key)" stroke-width="3"/></svg></div><h3>Garantía total</h3><p>Si el resultado no verifica, no pagas. Así de simple. El ledger público lo demuestra.</p></div>
+  </div>
+  <p style="text-align:center;color:var(--text);max-width:760px;margin:1.6rem auto 0;line-height:1.7;font-size:.92rem;">Hoy la red ejecuta y verifica trabajo de sus propios nodos. El <strong style="color:#fff;">pago de clientes externos (depósito y facturación)</strong> es la fase 3: hasta entonces no hay precio de KIA ni forma de comprarlo. Cuando lo haya, se anunciará aquí y solo por demanda real.</p>
+  <div class="stats" id="liveStats" style="margin-top:2.5rem;">
+    <div class="stat"><span class="n" id="stSupply">15.085.705</span><span class="l" id="stSupplyLabel">KIA emitidos · +—/min</span></div>
+    <div class="stat"><span class="n" id="stNodes">20</span><span class="l">Nodos registrados</span></div>
+    <div class="stat"><span class="n" id="stTasks">290.323</span><span class="l">Tareas verificadas</span></div>
+    <div class="stat"><span class="n" id="stQueue">—</span><span class="l">Tareas en cola</span></div>
+    <div class="stat"><span class="n" id="stRate">—</span><span class="l">Tareas por minuto</span></div>
+    <div class="stat"><span class="n" id="stSeal">—</span><span class="l" id="stSealLabel">Último sello firmado</span></div>
+    <div class="stat"><span class="n">100%</span><span class="l">Código abierto</span></div>
+  </div>
+  <p style="text-align:center;color:#789;font-size:.82rem;margin-top:1rem;">
+    <span id="liveDot" style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#789;vertical-align:middle;margin-right:.45rem;"></span><span id="liveText">Conectando con la red…</span>
+  </p>
+  <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.3rem;">Cifras del ledger real, refrescadas cada minuto mientras el minero está encendido. Si el relé se cae, la web usa una instantánea servida desde este mismo dominio (y, si tampoco hay, el último dato guardado en tu navegador) y lo avisa. El ledger público manda.<br>Los KIA emitidos incluyen los <strong style="color:var(--text);">15.000.000 de asignación fundacional</strong> del bloque genesis; lo minado por trabajo verificado es el resto (detalle en el whitepaper).</p>
+  <p style="text-align:center;margin-top:2rem;"><a class="btn" href="#cliente-api">Como pedir trabajo</a></p>
+</section>
+
+<section id="cliente-api" class="reveal">
+  <h2>Pedir trabajo: la API de cliente</h2>
+  <p style="text-align:center;color:var(--text);max-width:780px;margin:0 auto 2rem;line-height:1.7;">
+    El <strong style="color:#fff;">cliente</strong> pide trabajo y paga; el minero cobra por calcular. Hacen falta dos cosas:
+    un <strong style="color:#fff;">token</strong> <code>kia_...</code> (lo da el administrador del Core y en la base solo queda su SHA-256)
+    y una <strong style="color:#fff;">billetera KUK</strong> con saldo, que <em>firma</em> cada encargo.
+    Sin token no hay acceso; sin billetera no se puede cobrar nada.
+  </p>
+  <div class="faq">
+    <details class="qa" open><summary>1 &#183; Consultar precio y saldo (no gasta nada)</summary>
+      <pre>curl "http://127.0.0.1:8300/cliente/precio?tipo=matriz" -H "X-Cliente-Token: kia_..."
+# {"tipo":"matriz","coste_minimo":1.311919,"moneda":"KIA",
+#  "nota":"el coste real depende de los params; firma un tope igual o mayor"}
+
+curl http://127.0.0.1:8300/cliente/saldo -H "X-Cliente-Token: kia_..."
+# {"direccion":"KUK...","saldo":48.688081,"retenido":1.311919,"tareas":1}</pre>
+      <p>Pedir precio va en <strong>modo simulacion</strong>: no toca la bolsa del minuto ni tu saldo, no reserva KIA y no modifica el presupuesto global.</p>
+      <p>Las cifras de estos ejemplos salen de una ejecucion real del 23-10-2026; la tarifa por GFLOP se recalcula cada minuto, asi que el numero de hoy sera otro (el bueno, en <code>/stats</code>). En <code>/cliente/precio</code>, <code>coste_minimo</code> es el suelo de una tarea minima de ese tipo, <strong>no</strong> el coste final: el coste real depende de los GFLOP que pida tu tarea.</p>
+      <p>
+      El coste real crece con los GFLOP de la tarea, no con el tamano del JSON. <code>saldo</code> es lo disponible; <code>retenido</code> es lo reservado en tareas que aun no han terminado (si una falla, vuelve solo).</p>
+    </details>
+    <details class="qa"><summary>2 &#183; Encolar una tarea (la firma es obligatoria)</summary>
+      <p>Se firma exactamente <code>cliente:&lt;nonce&gt;:&lt;tipo&gt;:&lt;sha256 de los params&gt;:&lt;tope&gt;</code>.
+      El <code>tope</code> es el maximo en KIA que autorizas y va <strong>dentro</strong> de la firma: subirlo despues devuelve <code>401</code>.
+      El <code>nonce</code> es anti-repeticion.</p>
+      <pre>curl -X POST http://127.0.0.1:8300/cliente/tareas \
+  -H "X-Cliente-Token: kia_..." -H "Content-Type: application/json" \
+  -d '{"tipo":"matriz","params":{"n":256,"seed":7},"tope":2.0,
+       "nonce":"c-2026-10-24-001","clave_publica":"&lt;hex&gt;","firma":"&lt;hex&gt;"}'
+
+# {"tarea_id":"b2ebb51161bf","estado":"queued","coste":1.311919,
+#  "recoger_en":"/cliente/tareas/b2ebb51161bf"}</pre>
+      <p>En una sola transaccion: se valida la tarea, se calcula el coste, se comprueba la firma, se miran nonce y saldo
+      y <strong>se retiene el coste</strong>. Ese dinero va a la cuenta de custodia y <strong>no se emite moneda nueva</strong>.</p>
+    </details>
+    <details class="qa"><summary>3 &#183; Recoger el resultado</summary>
+      <pre>curl http://127.0.0.1:8300/cliente/tareas/b2ebb51161bf -H "X-Cliente-Token: kia_..."
+
+# {"estado":"ok","resultado":"-37092","verificado":true,"pagado":1.311919}</pre>
+      <p><code>verificado: true</code> significa que el Core <strong>comprobo</strong> el resultado antes de pagar: lo recalculo, o lo confirmo un segundo nodo con el mismo resultado. Nunca se paga solo porque el minero lo diga.
+      Si <code>pagado</code> es menor que <code>coste</code>, la diferencia ya volvio a tu saldo. Si la tarea falla, se te devuelve todo.</p>
+    </details>
+    <details class="qa"><summary>Que se rechaza, y con que codigo</summary>
+      <ul style="margin:1rem 0 0 1.2rem;color:var(--text);">
+        <li>Tipo o params invalidos (fuera de rango, demasiado grandes) &#8594; <code>400</code></li>
+        <li>Token invalido o ausente &#8594; <code>401</code></li>
+        <li>Falta la firma, es de otra clave, o el tope se cambio tras firmar &#8594; <code>401</code></li>
+        <li>Tope por debajo del coste, o saldo insuficiente &#8594; <code>402</code> (dice cuanto cuesta)</li>
+        <li>Tarea de otro cliente &#8594; <code>404</code> (no se filtra si existe)</li>
+        <li>Mismo nonce otra vez &#8594; <code>409</code></li>
+        <li>8 tareas en curso &#8594; <code>429</code></li>
+        <li>Ledger alterado o Core ocupado &#8594; <code>503</code></li>
+        <li>Fallo interno al encolar &#8594; <code>500</code> (la transaccion no se completo: no se retuvo nada)</li>
+      </ul>
+    </details>
+  </div>
+  <p style="text-align:center;color:var(--text);max-width:780px;margin:1.6rem auto 0;line-height:1.7;font-size:.92rem;">
+    Guia completa, con el calculo del coste y el modo simulacion:
+    <a href="https://github.com/lordkukone/kukia-node/blob/main/GUIA_CLIENTE.md" target="_blank" style="color:var(--gold);">GUIA_CLIENTE.md</a>.
+    Cliente de referencia que firma, encola y recoge contra un Core real:
+    <a href="https://github.com/lordkukone/kukia-node/blob/main/tools/cliente_ejemplo.py" target="_blank" style="color:var(--gold);">cliente_ejemplo.py</a>.
+  </p>
+</section>
+
+<section id="graficas" class="reveal">
+  <h2>La red, minuto a minuto</h2>
+  <p style="text-align:center;color:var(--text);max-width:760px;margin:0 auto 2rem;line-height:1.7;">Gráficas con datos reales del ledger, una muestra por minuto. Si el minero se apaga, las líneas se quedan planas: eso también es información. Las de potencia y latencia salen de lo que cada GPU tardó de verdad en cada tarea, no de una media declarada.</p>
+  <p id="potenciaNota" style="display:none;text-align:center;color:#789;font-size:.8rem;max-width:760px;margin:0 auto 1.5rem;line-height:1.6;">La potencia no es una estimación ni lo que el nodo declara al registrarse: es <strong style="color:var(--text);">FLOPs de cada tarea verificada ÷ segundos que tardó la GPU</strong> que la resolvió, medidos por GPU. Si una gráfica baja, es que se está calculando menos, no que el número esté maquillado.</p>
+  <div class="charts">
+    <div class="chart">
+      <div class="chartCab"><span>KIA emitidos</span><span class="chartHoy" id="chSupplyInfo">recopilando…</span></div>
+      <canvas id="chSupply" height="170"></canvas>
+    </div>
+    <div class="chart">
+      <div class="chartCab"><span>Tareas por minuto</span><span class="chartHoy" id="chRateInfo">recopilando…</span></div>
+      <canvas id="chRate" height="170"></canvas>
+    </div>
+    <div class="chart chartAncho" id="bloquePotencia" style="display:none">
+      <div class="chartCab"><span>Potencia medida (GFLOPS)</span><span class="chartHoy" id="chPowerInfo">recopilando…</span></div>
+      <canvas id="chPower" height="170"></canvas>
+      <div class="chartPie" id="chPowerPie"></div>
+    </div>
+    <div class="chart chartAncho" id="bloqueLatencia" style="display:none">
+      <div class="chartCab"><span>Latencia medida por GPU (ms por tarea)</span><span class="chartHoy" id="chLatInfo">recopilando…</span></div>
+      <canvas id="chLat" height="170"></canvas>
+      <div class="chartPie" id="chLatPie"></div>
+    </div>
+    <div class="chart chartAncho" id="bloqueMezcla" style="display:none">
+      <div class="chartCab"><span>Trabajo real de la red (última hora)</span><span class="chartHoy" id="chMixInfo">recopilando…</span></div>
+      <div id="chMixBars"></div>
+      <p style="color:#789;font-size:.76rem;margin:.7rem 0 0;line-height:1.5;">Un checksum no son FLOPs y su tiempo es casi cero: por eso cuenta como tarea pero no entra en la potencia ni en la latencia. Cada minuto sin tareas de cómputo se deja en hueco, no en cero.</p>
+    </div>
+  </div>
+  <p style="text-align:center;color:#789;font-size:.78rem;margin-top:.8rem;">El histórico lo guarda el relé público, no el ledger. La gráfica arranca en cuanto hay dos muestras (≈2 min).</p>
+</section>
+
+<section id="tokenomics" class="reveal">
+  <h2>El dinero del computo</h2>  <div class="stats">
+    <div class="stat"><span class="n" data-count="100">100M</span><span class="l">KIA maximo total</span></div>
+    <div class="stat"><span class="n">2150</span><span class="l">Ultima moneda emitida</span></div>
+    <div class="stat"><span class="n">0%</span><span class="l">Precio artificial</span></div>
+    <div class="stat"><span class="n">0%</span><span class="l">Comision por transferencia</span></div>
+  </div>
+  <p style="text-align:center;color:var(--text);margin-top:2.5rem;max-width:720px;margin-left:auto;margin-right:auto;line-height:1.7;">
+    KIA sale a precio <strong style="color:#fff;">segun demanda real</strong> cuando la red tenga nodos, trabajo y clientes de verdad. Ni antes, ni despues. Ahora: fase de pruebas abierta, con el minado publico ya funcionando.
+  </p>
+</section>
+
+<section class="reveal">
+  <h2>Modelo economico</h2>
+  <div class="grid">
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-gpu" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#d4af37"/></linearGradient></defs><rect x="16" y="14" width="20" height="16" rx="2" fill="none" stroke="url(#g-gpu)" stroke-width="3"/><circle cx="22" cy="22" r="2.5" fill="url(#g-gpu)"/><circle cx="30" cy="22" r="2.5" fill="url(#g-gpu)"/><line x1="10" y1="38" x2="42" y2="38" stroke="url(#g-gpu)" stroke-width="3" stroke-linecap="round"/></svg></div><h3>Minado util</h3><p>Prestas tu GPU y ganas KIA por el trabajo que entregas: se paga por <strong>FLOPs verificados</strong>, no por tarea. Trabajo real de IA, no hashes vacios.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-cli" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><rect x="10" y="14" width="32" height="26" rx="3" fill="none" stroke="url(#g-cli)" stroke-width="3"/><line x1="10" y1="21" x2="42" y2="21" stroke="url(#g-cli)" stroke-width="2.5"/><rect x="22" y="11" width="8" height="5" rx="1.5" fill="url(#g-cli)"/></svg></div><h3>Clientes</h3><p>Quien necesita imagenes, videos o simulaciones paga en KIA por el servicio de la red.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #35e08a66);"><defs><linearGradient id="g-free" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#35e08a"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><path d="M26 4 L42 18 V26 C42 36 35 43 26 48 C17 43 10 36 10 26 V18 Z" fill="none" stroke="url(#g-free)" stroke-width="3"/><polyline points="19,25 24,30 33,19" fill="none" stroke="url(#g-free)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Sin comisiones</h3><p>Enviar KIA no cobra comision: lo que envias es lo que llega. Nada de quema anunciada que el codigo no haga.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-cal" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#d4af37"/></linearGradient></defs><rect x="10" y="12" width="32" height="30" rx="3" fill="none" stroke="url(#g-cal)" stroke-width="3"/><line x1="10" y1="20" x2="42" y2="20" stroke="url(#g-cal)" stroke-width="2.5"/><line x1="18" y1="8" x2="18" y2="15" stroke="url(#g-cal)" stroke-width="3" stroke-linecap="round"/><line x1="34" y1="8" x2="34" y2="15" stroke="url(#g-cal)" stroke-width="3" stroke-linecap="round"/><circle cx="26" cy="31" r="5" fill="none" stroke="url(#g-cal)" stroke-width="2.5"/><line x1="26" y1="31" x2="26" y2="27" stroke="url(#g-cal)" stroke-width="2.5" stroke-linecap="round"/><line x1="26" y1="31" x2="29" y2="33" stroke="url(#g-cal)" stroke-width="2.5" stroke-linecap="round"/></svg></div><h3>Emision programada</h3><p>Escalonada hasta 2150 con dificultad ajustada al numero de nodos activos de la red.</p></div>
+  </div>
+</section>
+
+<section class="reveal">
+  <h2>El presente: ya funciona</h2>
+  <ul class="hashlist">
+    <li><span>&#9989;</span><span><strong>Nucleo:</strong> coordinador de nodos y tareas con ledger propio e inmutable</span></li>
+    <li><span>&#9989;</span><span><strong>Worker:</strong> minero real en GPU (matrices, checksums, inferencia)</span></li>
+    <li><span>&#9989;</span><span><strong>Verificacion:</strong> recalculo en el Core, dos nodos coincidentes en las tareas caras y rechazo automatico de resultados falsos</span></li>
+    <li><span>&#9989;</span><span><strong>Billetera:</strong> segura, con clave criptografica y contrase&ntilde;a</span></li>
+    <li><span>&#9989;</span><span><strong>Dashboard:</strong> estado de la red en vivo</span></li>
+    <li><span>&#9989;</span><span><strong>Prueba real superada:</strong> 3 tareas verificadas (+30 KIA) y 1 fraude rechazado (0 KIA)</span></li>
+  </ul>
+</section>
+
+<section id="roadmap" class="reveal">
+  <h2>Roadmap</h2>
+  <div class="timeline">
+    <div class="tl-item live"><h3>v1.0 · red en vivo <span style="color:#00ff88;">— hecho (20-10-2026)</span></h3><p>Minero público con la GPU medida de verdad, verificación redundante de las tareas caras, anclas en Bitcoin de cada sello y wallet que mueve saldo. Casi 500.000 tareas verificadas en el ledger (medido el 24-10-2026).</p></div>
+    <div class="tl-item"><h3>Fase 1: primeros nodos <span style="color:#00ff88;">— hecho</span></h3><p>Reputación, tiers por VRAM y potencia demostrada: la prima se pagaba con trabajo verificado, no con lo que declaraba el minero. Desde el 23-10 el pago va directo por FLOPs y el tier ya no multiplica.</p></div>
+    <div class="tl-item"><h3>Fase 2: apertura pública <span style="color:#00ff88;">— hecho (20-10-2026)</span></h3><p>Minado abierto: cualquiera descarga el nodo y cobra por el trabajo verificado que entrega.</p></div>
+    <div class="tl-item"><h3>Fase 3: demanda real</h3><p>Primeros clientes de cómputo con depósito. <strong style="color:#fff;">Aquí sale el precio, solo por demanda.</strong> Todavía no está: no hay mercado ni precio.</p></div>
+  </div>
+</section>
+
+<section class="reveal">
+  <h2>Instala el nodo (prototipo)</h2>
+  <ul class="hashlist">
+    <li><span>&#128229;</span><span><a href="kukia-node.zip" style="color:var(--gold);font-weight:700;">Descargar KUKIA Node (zip)</a> - el paquete completo con el coordinador, el minero y tu billetera</span></li>
+    <li><span>&#128187;</span><span><code>pip install fastapi uvicorn pydantic requests torch</code></span></li>
+    <li><span>&#9654;&#65039;</span><span><code>cd worker &amp;&amp; python kukia_worker.py tu_nombre</code> &mdash; o doble clic en <code>ARRANCAR_MINERO.cmd</code> (Windows): abre una ventana y mina <strong>a la vista</strong></span></li>
+    <li><span>&#128065;</span><span><code>VER_MINERO.cmd</code> mina en ventana y aparta el minero oculto de la guardia. Cada minuto imprime tareas/min, KIA/min, KIA/h y KIA/h por GFLOPS. <strong>Un solo minero:</strong> si ya hay uno trabajando no lanza otro, te dice que PID manda (dos en la misma GPU se reparten el cupo y rinden la mitad).</span></li>
+    <li><span>&#9989;</span><span>Listo. Tu GPU ya esta minando y tu billetera KUK... se crea sola. El pago va <strong>por FLOPs verificados</strong>: un checksum cobra 0.</span></li>
+  </ul>
+</section>
+
+<section id="faq" class="reveal">
+  <h2>Preguntas frecuentes</h2>
+  <div class="faq">
+    <details class="qa"><summary>Cuanto cuesta KIA?</summary><p>No hay precio todavia. Sale al mercado segun demanda real cuando la red funcione de verdad, con nodos y clientes.</p></details>
+    <details class="qa"><summary>Cuanto puedo ganar minando?</summary><p>Depende de tu GPU y del trabajo que entregue. Desde el 23-10-2026 <strong>se paga por trabajo</strong>: el presupuesto del minuto (~1,31 KIA) se reparte entre los GFLOP que ha calculado la red, y cada tarea cobra en proporción a sus FLOPs. El precio por GFLOP <strong>no es fijo</strong>: el 23-10 eran 0,0042 KIA y el 24-10 ronda 0,001, porque baja según la red calcula más. Cambia cada minuto; el dato bueno, con la hora, está en <code>/stats</code> (<code>bolsa_emision.precio_minuto</code>). El <strong>tier por VRAM ya no multiplica</strong>: se cobra por lo que se calcula, no por lo que se declara. El ledger público muestra cada pago.</p></details>
+    <details class="qa"><summary>Necesito comprar hardware?</summary><p>No: usas la grafica que ya tienes, y sin grafica tambien se puede minar en <strong>CPU sola</strong> (mas lento, y cobra menos porque el pago va por FLOPs calculados). Lo que <strong>no</strong> es cierto es que valga cualquier GPU para cualquier tarea: cada tarea declara la VRAM minima que necesita (<code>vram_min</code>) y el worker no la ejecuta si tu tarjeta no llega. Una GPU de <strong>2 GB</strong> sirve tareas pequenas (checksums, matrices pequenas, difusiones cortas); las difusiones grandes y la inferencia con modelos grandes piden mas memoria y en una tarjeta corta no arrancan. Como referencia practica: <strong>6-8 GB</strong> hace casi todo lo que la red encola hoy; <strong>12-16 GB</strong> es lo comodo para las tareas caras. La compatibilidad depende de la tarea, del backend y de la memoria, no de una cifra de folleto.</p></details>
+    <details class="qa"><summary>Para que sirve el calculo de la red?</summary><p>Para ciencia y para IA. Cada tarea es calculo de verdad: resolver una ecuacion de difusion, multiplicar matrices, convoluciones de inferencia o simulaciones. No se quema energia en hashes vacios: el resultado se puede usar. Y el Core no se fia del hash del minero: recalcula por muestreo todo lo que se paga y, en las tareas caras, exige que <strong>dos nodos distintos</strong> lleguen al mismo resultado. Lo que no cuadra no se paga. Para que dos nodos cuenten como dos, no pueden compartir IP ni cuenta de cobro: si comparten, es el mismo dueno y no vale como segunda opinion (se recalcula en el Core). En la practica la red es un ordenador cientifico repartido entre todos los nodos.</p></details>
+    <details class="qa"><summary>Que diferencia a KUKIA de otras criptos de computo?</summary><p>Verificacion por recalculo (muestra obligatoria en todo, y dos nodos coincidentes en las tareas caras), trabajo UTIL (IA real, no hashes vacios), emision honesta hasta 2150 y precio que nace de demanda real, no de especulacion.</p></details>
+    <details class="qa"><summary>Cuando puedo empezar?</summary><p>Ya esta abierto: descarga el nodo y empieza hoy. El minado publico funciona desde el 20-10-2026 y estamos en fase de pruebas, asi que el precio por GFLOP y los parametros pueden cambiar. La lista de registro queda para avisos, no hace falta esperar.</p></details>
+    <details class="qa"><summary>Necesito billetera para registrarme?</summary><p>No. El registro es solo la lista de espera. Cuando instales el nodo, tu billetera se crea con <strong>tu contrasena + 20 palabras unicas de recuperacion</strong>: una direccion KUK unica con criptografia Ed25519 real. Escribelas en papel: con ambas recuperas la MISMA billetera en cualquier equipo. Tu clave nunca sale de tu PC.</p></details>
+    <details class="qa"><summary>Como instalo y ejecuto un nodo?</summary><p>Cuatro pasos, todos en <a href="minar.html" style="color:var(--gold);">Ponte a minar</a>: descargar el ZIP (trae Core, minero, billetera y rele), <code>pip install -r requirements.txt</code>, arrancar el Core en <code>127.0.0.1:8300</code> y arrancar el minero en otra ventana. Necesitas <strong>Python 3.10 o superior</strong> (probado con 3.12) y unos 3 GB con torch. GPU NVIDIA opcional: con CUDA mina en todas a la vez, sin ella cae a CPU. Windows y Linux; macOS no esta probado.</p></details>
+    <details class="qa"><summary>Como se mide la potencia de mi equipo?</summary><p>Con un <strong>benchmark real</strong> de tu GPU (o CPU) al arrancar, no con lo que declares. El Core guarda cuantas <strong>muestras verificadas</strong> respaldan esa medida (<code>potencia_muestras</code>) y, mientras un nodo es nuevo, la red recalcula siempre sus tareas antes de fiarse: un nodo sin historial no vale como "segunda opinion" barata. Se paga por FLOPs efectivamente calculados y verificados, asi que una cifra inflada no cobra mas: cobra menos, porque su trabajo no cuadra y no se paga.</p></details>
+    <details class="qa"><summary>Que tareas acepta la red hoy y cuales son futuras?</summary><p><strong>Hoy, de verdad:</strong> <code>checksum</code>, <code>matriz</code>, <code>inferencia</code>, <code>embeddings</code>, <code>lote_embeddings</code> y <code>difusion_calor</code> (resolver la ecuacion del calor de forma numerica; <strong>no</strong> es generar imagenes). Cualquier otra cosa que pidas se rechaza con <code>400</code>: no se acepta trabajo que la red no sabe hacer. <strong>Futuro, no hoy:</strong> trabajos de imagen y video con modelos grandes, y entrenamiento de modelos. Estan en el roadmap, no en la cola.</p></details>
+    <details class="qa"><summary>Que significa saldo disponible y saldo retenido?</summary><p><code>saldo</code> es lo que puedes gastar ahora. <code>retenido</code> es dinero <strong>reservado</strong> en tareas tuyas que todavia no han terminado: no esta perdido ni gastado, esta en custodia hasta que la tarea se liquida. Si la tarea acaba bien, se paga al minero lo que costó (lo demas vuelve); si no se puede verificar, <strong>vuelve entero</strong> a tu saldo. Los dos campos salen de <code>GET /cliente/saldo</code>.</p></details>
+    <details class="qa"><summary>Como pago una tarea de cliente y cuando me devuelven el dinero?</summary><p>Al encolar, el Core <strong>retiene</strong> el coste de tu saldo y lo mueve a una cuenta de custodia (no se emite moneda nueva). Cuando el resultado se verifica, se paga al minero o mineros que lo calcularon y el <strong>sobrante vuelve</strong> a tu cuenta. Si el resultado no se puede verificar o el nodo abandona la tarea, el prepago se devuelve completo. Todo queda escrito en el ledger, asiento por asiento.</p></details>
+    <details class="qa"><summary>Como se protege mi billetera y como la recupero?</summary><p>Tu clave privada Ed25519 se deriva de tu contrasena mas 20 palabras unicas (lista BIP39 en espanol) con <strong>PBKDF2-HMAC-SHA512, 200.000 iteraciones</strong>. El fichero de la billetera <strong>no guarda la clave ni las palabras en claro</strong>: van cifradas con DPAPI de Windows, atadas a tu usuario (copiar el archivo a otro PC no da la llave). Para recuperarla en cualquier equipo hacen falta <strong>la contrasena y las 20 palabras</strong>; con una sola de las dos, no. El paquete de copia de seguridad de claves se cifra aparte con <strong>AES-256-GCM + scrypt</strong>. Si pierdes las dos cosas, no hay recuperacion posible: nadie mas tiene tu clave.</p></details>
+    <details class="qa"><summary>Que esta comprobado y que falta por auditar?</summary><p><strong>Comprobado y en marcha:</strong> pagos solo tras recalculo (o tras coincidir dos nodos en las tareas caras), ledger con cadena de sellos y anclas OpenTimestamps en Bitcoin, firmas en cada encargo de cliente, el Core escuchando solo en <code>127.0.0.1</code> y la web con CSP sin scripts de terceros. <strong>Falta:</strong> una auditoria de seguridad independiente (no la hay, y se dice), y la rotacion de credenciales de operacion. Mientras eso no pase, esto es una red en pruebas: no metas dinero real.</p></details>
+    <details class="qa"><summary>Como participo, aviso de un fallo o miro el codigo?</summary><p>Para minar, empieza en <a href="minar.html" style="color:var(--gold);">Ponte a minar</a>. Para pedir trabajo, la <a href="#cliente-api" style="color:var(--gold);">API de cliente</a> y la <a href="https://github.com/lordkukone/kukia-node/blob/main/GUIA_CLIENTE.md" target="_blank" style="color:var(--gold);">guia del cliente</a>. Un fallo se cuenta en <a href="https://github.com/lordkukone/kukia-node/issues" target="_blank" style="color:var(--gold);">las issues del repositorio</a> (mejor con la version, el comando y lo que esperabas ver). El codigo esta entero en <a href="codigo.html" style="color:var(--gold);">codigo fuente</a> y en GitHub: Core, minero, validador, billetera y sellos, sin partes cerradas.</p></details>
+    <details class="qa"><summary>Estado real y transparencia</summary><p><strong>Fase de pruebas.</strong> Codigo 100% abierto: <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">GitHub</a> + ZIP descargable. Sin auditoria de seguridad independiente todavia (declarado). Recompensas = parametros de prueba con calendario hasta 01-01-2150, no ganancias garantizadas. Precio: no existe aun (<a href="calculadora.html" style="color:var(--gold);">las cuentas, a la vista</a>). Rentabilidad: no calculable sin precio/demanda/consumo medido. <a href="whitepaper.html" style="color:var(--gold);">Leer whitepaper completo</a>.</p></details>
+  </div>
+</section>
+
+<section id="seguridad" class="reveal">
+  <h2>Seguridad verificable y proteccion al cliente</h2>
+  <div class="faq">
+    <details class="qa" open><summary>&#9989; Seguridad verificada en pruebas (resultado real)</summary>
+      <p><strong>Comprobado con pruebas reproducibles (auditoria interna, 19-10-2026):</strong></p>
+      <ul style="margin:1rem 0 0 1.2rem;color:var(--text);">
+        <li><strong>Verificacion trustless probada:</strong> el Core recalcula cada tarea; correcto paga, falso rechaza (0 KIA). Anti-doble-pago activo (409). Tope de 100M aplicado en cada pago.</li>
+        <li><strong>Billetera que de verdad puede gastar:</strong> la pestana <em>Enviar</em> firma en tu navegador y el Core comprueba que la clave derive en tu direccion. Sin comision. La clave privada no se envia ni se guarda.</li>
+        <li><strong>Historial con sellos firmados (Ed25519):</strong> cada pocos minutos se firma un resumen del ledger con una clave que no esta en la base de datos. Si alguien edita el historial a mano, el Core deja de pagar y lo publica en <code>/ledger/integridad</code>.</li>
+        <li><strong>Billetera con recuperacion:</strong> se crea con tu contrasena + 20 palabras unicas (Ed25519 real, PBKDF2 200.000 iteraciones). Guardalas en papel: sin ellas no se recupera. La clave jamas sale de tu PC.</li>
+        <li><strong>Sin permisos peligrosos:</strong> el worker no pide administrador, no toca archivos del sistema y no abre puertos entrantes.</li>
+        <li><strong>Codigo 100% abierto:</strong> revisalo en un clic antes de instalar: <a href="codigo.html" style="color:var(--gold);">codigo fuente</a> o <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">GitHub</a>.</li>
+        <li><strong>Recomendacion honesta:</strong> es un prototipo en fase de pruebas; para maxima tranquilidad instalalo en un equipo secundario.</li>
+        <li><strong>Limite honesto:</strong> ya existen validadores independientes que recalculan el trabajo y firman su conformidad, pero hoy corren en el mismo PC. La seguridad de Bitcoin viene de miles de nodos independientes que validan lo mismo; KUKIA aun no tiene eso. Los sellos firmados permiten <em>detectar</em> un historial editado, no impedirlo si alguien controla el PC. Esta explicado en <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">SEGURIDAD.md</a> y en <a href="https://github.com/lordkukone/kukia-node/blob/main/GUIA_VALIDADORES.md" target="_blank" style="color:var(--gold);">GUIA_VALIDADORES.md</a>.</li>
+      </ul>
+    </details>
+    <details class="qa"><summary>&#128274; Proteccion al cliente (como te cuidamos)</summary>
+      <p>La red KUKIA protege a quien mina y a quien compra computo:</p>
+      <ul style="margin:1rem 0 0 1.2rem;color:var(--text);">
+        <li><strong>Verificacion por recalculo:</strong> ningun resultado falso se paga. El Core no confia en el hash del minero: recalcula una muestra de todo y, en las tareas caras, exige que dos nodos distintos coincidan.</li>
+        <li><strong>Reputacion y castigo:</strong> los nodos que fallan o mienten pierden reputacion, reciben una penalizacion en KIA (acotada a su saldo) y no pueden pedir trabajo unos minutos.</li>
+        <li><strong>Billetera local:</strong> tu clave nunca viaja por la red. Nadie puede robarte el saldo desde fuera.</li>
+        <li><strong>Sin pagos por adelantado:</strong> minar no cuesta dinero. Nunca te pediremos dinero para participar.</li>
+        <li><strong>Aviso claro:</strong> si algo es experimental, se dice. Si no hay precio, se dice. Todo transparente.</li>
+      </ul>
+    </details>
+    <details class="qa"><summary>&#128737;&#65039; Como verificar tu mismo el nodo (paso a paso)</summary>
+      <p>1. Descarga el ZIP y descomprimelo.<br>
+      2. Abre los archivos .py con cualquier editor de texto y leelos (son cortos: 40-90 lineas cada uno).<br>
+      3. Busca llamadas de red: solo veras peticiones al Core de KUKIA (tu propia maquina o la que configures).<br>
+      4. Busca permisos: no hay comandos de administrador ni accesos fuera de su carpeta.<br>
+      5. Si algo no te cuadra, no lo ejecutes y reportalo. Preferimos una critica honesta a un usuario enganado.</p>
+    </details>
+  </div>
+</section>
+
+<section id="despliegue" class="reveal">
+  <h2>Monta tu propio Core</h2>
+  <p style="text-align:center;color:var(--text);max-width:780px;margin:0 auto 2rem;line-height:1.7;">
+    El Core es el coordinador: reparte tareas, <strong style="color:#fff;">verifica cada resultado</strong> (recalculo en CPU de las baratas; dos nodos en las caras) y firma el historial.
+    No necesita GPU. En un servidor de 5&#8211;20 &#8364;/mes y un dominio de ~10 &#8364;/a&#241;o tienes la red publicada sin depender de ningun PC encendido.
+  </p>
+  <div class="grid">
+    <div class="card"><h3>2 vCPU y 4 GB, minimo</h3><p>No es un servidor web pasivo: verificar es recalcular. Con 1 vCPU y 1 GB la cola se atasca y el proceso se queda sin memoria. 4 vCPU / 8 GB si va a haber trafico de verdad.</p></div>
+    <div class="card"><h3>El 8300 no se abre</h3><p>El Core escucha en loopback. Quien da la cara es Caddy con HTTPS automatico (o un tunel con nombre de Cloudflare, sin abrir ni un puerto).</p></div>
+    <div class="card"><h3>El ledger no va en la imagen</h3><p>La base y las claves se montan como volumen. Si se hornean dentro, cada despliegue pisaria el ledger vivo.</p></div>
+    <div class="card"><h3>Copia desde el primer dia</h3><p>Un VPS sin backup es un ledger que algun dia se pierde. <code>tools/backup_ledger.py</code> ya existe y usa la API de backup de SQLite.</p></div>
+  </div>
+  <div class="faq" style="margin-top:2rem;">
+    <details class="qa" open><summary>&#128230; Los cuatro pasos</summary>
+      <pre># 1. copia el ledger EN CALIENTE (usa la API de SQLite, no copia el fichero a pelo)
+python despliegue/copiar_ledger_seguro.py
+
+# 2. subelo con el ledger y las dos claves, y compara el sha256 en el servidor
+./despliegue/subir_al_servidor.sh usuario@tu-servidor /srv/kukia
+
+# 3. en el servidor
+cp despliegue/.env.ejemplo despliegue/.env   # compose lee el .env EN SU carpeta
+nano despliegue/.env                         # KUKIA_ORIGENES con tu dominio
+nano despliegue/Caddyfile                    # cambia TU_DOMINIO
+docker compose -f despliegue/docker-compose.yml up -d
+
+# 4. comprueba desde fuera, con el tunel de tu PC apagado
+curl https://TU_DOMINIO/version
+curl https://TU_DOMINIO/ledger/integridad     # cadena_ok: true</pre>
+    </details>
+    <details class="qa"><summary>&#9888;&#65039; Lo que este despliegue NO resuelve</summary>
+      <ul style="margin:1rem 0 0 1.2rem;color:var(--text);">
+        <li><strong>Sigue habiendo un solo Core.</strong> Que este en un servidor lo hace fiable, no descentralizado: si cae, la red cae. Dos Cores con dos bases son dos redes distintas.</li>
+        <li><strong>La clave de los sellos viaja al servidor.</strong> En un VPS esta en una maquina que no controlas fisicamente. Se asume, o se monta como secreto del proveedor.</li>
+        <li><strong>Las billeteras cifradas con DPAPI de Windows no se descifran en Linux.</strong> Al Core no le hacen falta; solo afecta a gastar desde el servidor.</li>
+        <li><strong>Apagar el PC no basta para probar.</strong> La prueba honesta es abrir <code>https://TU_DOMINIO/stats</code> desde el movil con datos y ver que responde y que la emision sube.</li>
+      </ul>
+    </details>
+  </div>
+  <p style="text-align:center;color:var(--text);max-width:780px;margin:1.6rem auto 0;line-height:1.7;font-size:.92rem;">
+    Paso a paso completo, con Docker, systemd, Caddy y el tunel con nombre:
+    <a href="https://github.com/lordkukone/kukia-node/blob/main/despliegue/LEEME.md" target="_blank" style="color:var(--gold);">despliegue/LEEME.md</a>.
+    Tambien esta en el repositorio el <code>Dockerfile</code>, el <code>docker-compose.yml</code>, el <code>Caddyfile</code> y la unidad de <code>systemd</code>.
+  </p>
+</section>
+
+<section id="registro" class="reveal">
+  <h2>Avisos de la red</h2>
+  <div class="register-box">
+    <p style="color:var(--text);margin-bottom:1rem;line-height:1.6;"><strong style="color:#fff;">La red ya esta abierta: no hace falta apuntarse a nada para minar.</strong> Descarga el nodo y empieza hoy (<a href="minar.html" style="color:var(--gold);">Ponte a minar</a>). Este formulario es solo para que te avisemos por correo de las fases nuevas y del acceso de clientes.</p>
+    <div style="background:rgba(212,175,55,.08);border:1px solid var(--gold);border-radius:12px;padding:1rem 1.2rem;margin-bottom:1.5rem;text-align:left;">
+      <p style="color:var(--gold);font-weight:700;margin-bottom:.5rem;">&#128274; Tu billetera: maxima seguridad</p>
+      <p style="color:var(--text);font-size:.9rem;line-height:1.6;">Al instalar el nodo recibiras tu <strong>contrasena + 20 palabras unicas</strong>. <strong>Escríbelas en papel y guardalas en 2 sitios distintos.</strong> En caso de perdida del equipo, SOLO con ambas recuperas tu billetera y tus KIA en cualquier otro equipo. Sin ellas, nadie —ni siquiera nosotros— puede recuperarlas. No las guardes en fotos del movil ni en la nube sin cifrar.</p>
+    </div>
+    <form action="https://formsubmit.co/kukone510@hotmail.com" method="POST">
+      <input type="hidden" name="_subject" value="Avisos KUKIA - nuevo interesado">
+      <input type="hidden" name="_captcha" value="false">
+      <input type="hidden" name="_template" value="table">
+      <input type="hidden" name="_autoresponse" value="Gracias por dejar tu correo en KUKIA. La red YA esta abierta: puedes minar hoy sin esperar a nada (instrucciones en la web, seccion Ponte a minar). Este correo es solo un aviso de fases nuevas y del acceso de clientes. Para darte de baja, responde a este mensaje con la palabra BAJA y se borra tu dato. - Equipo KUKIA">
+      <input type="text" name="nombre" placeholder="Tu nombre" required>
+      <input type="email" name="email" placeholder="Tu email" required>
+      <input type="text" name="gpu" placeholder="Tu tarjeta grafica (opcional, ej: RTX 3060 12GB)">
+      <input type="text" name="tops" placeholder="TOPS de IA de tu GPU (opcional, ej: RTX 4070 = 466 TOPS)" list="tops_ref">
+      <datalist id="tops_ref">
+        <option value="RTX 3060 = 102 TOPS">
+        <option value="RTX 3060 Ti = 130 TOPS">
+        <option value="RTX 3080 = 238 TOPS">
+        <option value="RTX 3090 = 285 TOPS">
+        <option value="RTX 4060 = 121 TOPS">
+        <option value="RTX 4060 Ti = 176 TOPS">
+        <option value="RTX 4070 = 466 TOPS">
+        <option value="RTX 4070 Ti = 561 TOPS">
+        <option value="RTX 4080 = 780 TOPS">
+        <option value="RTX 4090 = 1321 TOPS">
+        <option value="RTX 5060 = 614 TOPS">
+        <option value="RTX 5060 Ti = 759 TOPS">
+        <option value="RTX 5070 = 988 TOPS">
+        <option value="RTX 5070 Ti = 1406 TOPS">
+        <option value="RTX 5080 = 1801 TOPS">
+        <option value="RTX 5090 = 3352 TOPS">
+      </datalist>
+      <small style="display:block;text-align:left;color:var(--soft);font-size:.78rem;margin:-0.5rem 0 1rem;">Los TOPS son la medida comercial de potencia IA (valores oficiales NVIDIA con FP8/INT8) y sirven solo como referencia: <strong style="color:var(--text);">no son la potencia que se paga</strong>. El pago va por GFLOP realmente calculados y verificados por el Core.</small>
+      <label style="display:flex;gap:.7rem;align-items:center;justify-content:center;margin:1rem 0;color:var(--text);font-size:.95rem;cursor:pointer;">
+        <input type="checkbox" name="ceder_potencia" value="SI - quiere ceder su potencia IA" checked style="width:auto;margin:0;transform:scale(1.3);accent-color:var(--gold);">
+        <span>Quiero que me <strong style="color:var(--gold);">aviseis</strong> de nuevas fases y del acceso de clientes</span>
+      </label>
+      <button class="btn" type="submit" style="width:100%;">Avisadme</button>
+    </form>
+    <small style="display:block;text-align:left;line-height:1.6;margin-top:.8rem;">
+      <strong style="color:var(--text);">Que datos se piden:</strong> nombre, email y, si quieres, modelo de GPU y TOPS. <strong style="color:var(--text);">Para que:</strong> avisarte de fases nuevas y del acceso de clientes; nada mas. <strong style="color:var(--text);">Quien lo trata:</strong> el formulario lo envia el servicio FormSubmit directamente al correo del proyecto; no se guarda en esta web ni se usa para perfilarte. <strong style="color:var(--text);">Baja:</strong> responde BAJA a cualquier correo y se borra tu dato. <strong style="color:var(--text);">Cuando queda registrado:</strong> solo si te llega el correo de confirmacion; si no llega, no te has apuntado (revisa spam). Sin spam y sin cesion a terceros.
+    </small>
+  </div>
+</section>
+
+<section id="apoyar" class="reveal">
+  <h2>Apoya el proyecto</h2>
+  <div class="grid">
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-sh" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><circle cx="17" cy="20" r="6" fill="none" stroke="url(#g-sh)" stroke-width="3"/><circle cx="35" cy="20" r="6" fill="none" stroke="url(#g-sh)" stroke-width="3"/><path d="M8 42 C14 32 22 30 26 30 C30 30 38 32 44 42" fill="none" stroke="url(#g-sh)" stroke-width="3" stroke-linecap="round"/></svg></div><h3>Cede tu GPU</h3><p>Instala el nodo y mina hoy mismo: no hace falta registrarse ni esperar. Los nodos nuevos empiezan con la reputacion a cero (sus tareas se recalculan siempre al principio) y cobran cada tarea verificada. Si ademas quieres avisos, deja tu correo abajo.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #d4af3766);"><defs><linearGradient id="g-star" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#d4af37"/><stop offset="100%" stop-color="#fff3b0"/></linearGradient></defs><polygon points="26,5 31,19 46,20 34,29 38,44 26,35 14,44 18,29 6,20 21,19" fill="url(#g-star)" stroke-linejoin="round"/></svg></div><h3>Danos una estrella</h3><p>El codigo es publico: <a href="https://github.com/lordkukone/kukia-node" target="_blank" style="color:var(--gold);">github.com/lordkukone/kukia-node</a>. Una estrella ayuda a que mas gente lo encuentre.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00e5ff66);"><defs><linearGradient id="g-meg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00e5ff"/><stop offset="100%" stop-color="#00ff88"/></linearGradient></defs><path d="M8 36 L8 22 L26 10 L26 24 Z" fill="none" stroke="url(#g-meg)" stroke-width="3" stroke-linejoin="round"/><polygon points="26,10 44,18 26,26" fill="url(#g-meg)" opacity="0.85"/><line x1="12" y1="40" x2="12" y2="46" stroke="url(#g-meg)" stroke-width="3" stroke-linecap="round"/></svg></div><h3>Comparte</h3><p>Comparte la web en tus redes con los hashtags del proyecto. Cuanta mas gente conozca KUKIA, antes nace la demanda real.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #00ff8866);"><defs><linearGradient id="g-src" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#00ff88"/><stop offset="100%" stop-color="#00e5ff"/></linearGradient></defs><circle cx="22" cy="22" r="13" fill="none" stroke="url(#g-src)" stroke-width="3.5"/><line x1="32" y1="32" x2="44" y2="44" stroke="url(#g-src)" stroke-width="4.5" stroke-linecap="round"/><polyline points="17,22 21,26 29,17" fill="none" stroke="#010806" stroke-width="2.5" stroke-linecap="round"/></svg></div><h3>Audita el codigo</h3><p>Todo el codigo esta publicado y es verificable: <a href="codigo.html" style="color:var(--gold);">revisalo aqui</a> o en GitHub. Si eres desarrollador, reporta mejoras.</p></div>
+    <div class="card"><div class="ico"><svg width="52" height="52" viewBox="0 0 52 52" style="filter:drop-shadow(0 0 10px #d4af3766);"><defs><linearGradient id="g-calc" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#d4af37"/><stop offset="100%" stop-color="#fff3b0"/></linearGradient></defs><rect x="12" y="6" width="28" height="40" rx="5" fill="none" stroke="url(#g-calc)" stroke-width="3"/><rect x="18" y="12" width="16" height="7" rx="2" fill="url(#g-calc)"/><circle cx="19" cy="27" r="2.2" fill="url(#g-calc)"/><circle cx="26" cy="27" r="2.2" fill="url(#g-calc)"/><circle cx="33" cy="27" r="2.2" fill="url(#g-calc)"/><circle cx="19" cy="34" r="2.2" fill="url(#g-calc)"/><circle cx="26" cy="34" r="2.2" fill="url(#g-calc)"/><circle cx="33" cy="34" r="2.2" fill="url(#g-calc)"/><circle cx="19" cy="41" r="2.2" fill="url(#g-calc)"/><circle cx="26" cy="41" r="2.2" fill="url(#g-calc)"/><circle cx="33" cy="41" r="2.2" fill="url(#g-calc)"/></svg></div><h3>Haz las cuentas</h3><p>Cuanto valdria 1 KIA <a href="calculadora.html" style="color:var(--gold);">con los supuestos a la vista</a>: lo que se lee de la red, lo que se supone y lo que sale. Sin precio inventado.</p></div>
+  </div>
+</section>
+
+<section class="wp reveal">
+  <h2>Whitepaper</h2>
+  <img src="portada.jpg" alt="KUKIA Whitepaper">
+  <p style="margin-top:1.5rem;"><a class="btn" href="whitepaper.html">Leer whitepaper online</a> <a class="btn btn2" href="#" onclick="openWP();return false;">Descargar PDF</a></p>
+  <p style="margin-top:1rem;"><a href="codigo.html" style="color:var(--gold);">Ver codigo fuente completo &rarr;</a></p>
+</section>
+
+<section class="wp reveal">
+  <h2>El sello de la red</h2>
+  <img src="sello.jpg" alt="KUKIA Seal" style="max-width:260px;">
+</section>
+
+<footer>
+  KUKIA Network - prototipo en fase de pruebas. Sin precio hasta movimiento real verificado.<br>
+  <div class="hashes">#KUKIA #KIA #GPU #InteligenciaDistribuida #CriptoUtil #RenderNetwork #ComputoVerificado #DeFi #Web3 #AISinNube #EveryGPUOneNetwork #ComputeCoin</div>
+</footer>
+
+<script>
+function openWP() {
+  fetch('kukia_wp.dat').then(r => r.blob()).then(b => {
+    const url = URL.createObjectURL(new Blob([b], { type: 'application/pdf' }));
+    window.open(url, '_blank');
+  }).catch(() => alert('No se pudo abrir el PDF'));
+}
+const io = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); io.unobserve(e.target); } });
+}, { threshold: 0.12 });
+document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+const counters = document.querySelectorAll('[data-count]');
+const cio = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      const el = e.target, target = parseInt(el.dataset.count), suffix = 'M';
+      let cur = 0;
+      const step = () => { cur += 2; if (cur >= target) { el.textContent = target + suffix; } else { el.textContent = cur + suffix; requestAnimationFrame(step); } };
+      step(); cio.unobserve(el);
+    }
+  });
+}, { threshold: 0.5 });
+counters.forEach(c => cio.observe(c));
+</script>
+<script>
+// Red de nodos GPU animada (fondo cyber del hero)
+(function(){
+  var cv = document.getElementById('netcanvas');
+  if(!cv) return;
+  var ctx = cv.getContext('2d');
+  var W, H, nodes = [];
+  function resize(){
+    var r = cv.parentElement.getBoundingClientRect();
+    W = cv.width = r.width; H = cv.height = r.height;
+  }
+  window.addEventListener('resize', resize); resize();
+  var N = 45;
+  for(var i=0;i<N;i++){
+    nodes.push({x: Math.random(), y: Math.random(),
+      vx: (Math.random()-.5)*0.0009, vy: (Math.random()-.5)*0.0009,
+      r: 1.5+Math.random()*2.2, gpu: Math.random() < 0.25});
+  }
+  function frame(){
+    ctx.clearRect(0,0,W,H);
+    var i, j, a, b, dx, dy, d;
+    for(i=0;i<nodes.length;i++){
+      a = nodes[i];
+      a.x += a.vx; a.y += a.vy;
+      if(a.x<0||a.x>1) a.vx*=-1;
+      if(a.y<0||a.y>1) a.vy*=-1;
+    }
+    for(i=0;i<nodes.length;i++){
+      a = nodes[i];
+      for(j=i+1;j<nodes.length;j++){
+        b = nodes[j];
+        dx = (a.x-b.x)*W; dy = (a.y-b.y)*H;
+        d = Math.sqrt(dx*dx+dy*dy);
+        if(d < 170){
+          var alpha = (1 - d/170) * 0.55;
+          ctx.strokeStyle = (a.gpu||b.gpu)
+            ? 'rgba(0,255,136,'+alpha+')'
+            : 'rgba(0,229,255,'+(alpha*0.7)+')';
+          ctx.lineWidth = (a.gpu||b.gpu) ? 1.4 : 0.8;
+          ctx.beginPath(); ctx.moveTo(a.x*W, a.y*H); ctx.lineTo(b.x*W, b.y*H); ctx.stroke();
+        }
+      }
+    }
+    for(i=0;i<nodes.length;i++){
+      a = nodes[i];
+      if(a.gpu){
+        ctx.fillStyle = '#00ff88';
+        ctx.shadowColor = '#00ff88'; ctx.shadowBlur = 12;
+        ctx.fillRect(a.x*W-3, a.y*H-3, 6, 6);
+        ctx.shadowBlur = 0;
+      } else {
+        ctx.fillStyle = 'rgba(0,229,255,.85)';
+        ctx.beginPath(); ctx.arc(a.x*W, a.y*H, a.r, 0, 6.283); ctx.fill();
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+  frame();
+})();
+</script>
+<script>
+(function(){
+  var v = document.getElementById('heroVideo');
+  if(!v) return;
+  v.muted = false;
+  v.volume = 1.0;
+  var p = v.play();
+  if(p && p.catch){ p.catch(function(){ v.muted = true; v.play().catch(function(){}); }); }
+  var unlock = function(){
+    v.muted = false; v.volume = 1.0;
+    v.play().catch(function(){});
+    window.removeEventListener('click', unlock);
+    window.removeEventListener('scroll', unlock);
+    window.removeEventListener('touchstart', unlock);
+  };
+  window.addEventListener('click', unlock);
+  window.addEventListener('scroll', unlock);
+  window.addEventListener('touchstart', unlock);
+})();
+</script>
+<script>
+// Guardia contra la web vieja: GitHub Pages cachea el HTML unos minutos y habia
+// gente viendo una copia antigua (sin las graficas nuevas). Si la version del
+// HTML cargado no es la que publica el servidor, se recarga UNA vez con otro
+// parametro en la URL, que se salta la cache.
+(function(){
+  var meta = document.querySelector('meta[name="kukia-build"]');
+  var mio = meta ? meta.getAttribute('content') : '';
+  if(!mio || !window.fetch) return;
+  fetch('version.json?_=' + Date.now(), {cache:'no-store'}).then(function(r){
+    return r.ok ? r.json() : null;
+  }).then(function(v){
+    if(!v || !v.v || v.v === mio) return;
+    var clave = 'kukia_reload_' + v.v;
+    try {
+      if(sessionStorage.getItem(clave)) return;
+      sessionStorage.setItem(clave, '1');
+    } catch(e){}
+    location.replace(location.pathname + '?v=' + encodeURIComponent(v.v) + (location.hash || ''));
+  }).catch(function(){});
+})();
+</script>
+<script>
+// El service worker ya existia para la billetera, pero la portada no lo
+// registraba: quien no abria wallet.html seguia dependiendo de la cache del
+// navegador (GitHub Pages manda max-age=600 y el HTML viejo duraba 10 min).
+// Registrado aqui, todas las navegaciones van a RED primero y la copia vieja
+// deja de reaparecer.
+(function(){
+  if(!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('sw.js').catch(function(){});
+})();
+</script>
+<script src="nacl.min.js" integrity="sha384-0jQROJt6wG1AI3HmYbaU8+/kf+09BqXwTdbUCG5Hr6ASZVXXgJ/6lrRPDAqgIqEm"></script>
+<script>
+// Metricas en vivo. La web publica lee /api/metricas del rele (docs/metricas.json);
+// en el mismo PC, ?core=http://127.0.0.1:8300 lee el Core directo (sin rele).
+(function(){
+  var porId = function(id){ return document.getElementById(id); };
+  if(!porId('stSupply')) return;
+  var dot = porId('liveDot'), txt = porId('liveText');
+  var base = '', ruta = '/api/metricas', prev = null, prevT = 0, tsDatos = 0, tsAnterior = 0;
+  // ?core= solo se acepta contra la propia maquina (loopback). Si se aceptara
+  // cualquier URL, un enlace preparado podria pintar cifras inventadas.
+  var modoLocal = false;
+  function marcaSello(){ return modoLocal ? ' · modo local (sin sello)' : ' · sello verificado'; }
+  function compact(n){
+    if(typeof n !== 'number' || !isFinite(n)) return '—';
+    if(n >= 1000000) return (n/1000000).toLocaleString('es-ES',{maximumFractionDigits:2}) + 'M';
+    return Math.round(n).toLocaleString('es-ES');
+  }
+  function entero(n){ return (typeof n === 'number' && isFinite(n)) ? Math.round(n).toLocaleString('es-ES') : '—'; }
+  function set(id, v){ var e = porId(id); if(e) e.textContent = v; }
+  // --- Verificacion del sello, EN EL NAVEGADOR --------------------------
+  // El ancla publicada es el ultimo sello firmado por el Core. Se comprueba
+  // aqui, sin fiarse del rele: la clave publica va FIJADA en el codigo, no se
+  // acepta la que venga en el mensaje (si no, quien controle el rele podria
+  // firmar su propia historia con su propia clave y pasarla por buena).
+  //
+  // OJO con el cuerpo firmado: el sello se firma SIN `firma` y SIN
+  // `clave_publica` (ese campo lo anade el rele al publicar). Meterlo en el
+  // mensaje hacia que NINGUNA firma cuadrase: comprobado el 21-10-2026.
+  var CLAVE_SELLO = '2013664e12b4ac93f5a266ae5e1a4a071f51c68112e1209fae5d501ecb2f8d1c';
+  var CLAVE_VISTA = 'kukia_ancla_visto';
+  function hexBytes(h){
+    h = String(h || '').replace(/[^0-9a-f]/gi, '');
+    if(!h.length || h.length % 2) return null;
+    var out = new Uint8Array(h.length / 2);
+    for(var i=0;i<out.length;i++) out[i] = parseInt(h.substr(i*2, 2), 16);
+    return out;
+  }
+  function u8(t){ return new TextEncoder().encode(t); }
+  // JSON canonico identico a ledger/sellos.py: claves ordenadas, sin espacios.
+  // `suma` es float en Python y se escribe siempre con parte decimal ("123.0"
+  // si es entera); el resto son enteros o textos.
+  function numPy(v){
+    var s = String(v);
+    return (s.indexOf('.') < 0 && s.indexOf('e') < 0 && s.indexOf('E') < 0) ? s + '.0' : s;
+  }
+  function canonicoSello(o){
+    var claves = Object.keys(o).filter(function(k){ return k !== 'firma' && k !== 'clave_publica'; }).sort();
+    var partes = [];
+    for(var i=0;i<claves.length;i++){
+      var k = claves[i], v = o[k];
+      if(k === 'legado' && v && typeof v === 'object') partes.push(JSON.stringify(k) + ':' + canonicoSello(v));
+      else if(k === 'suma') partes.push(JSON.stringify(k) + ':' + numPy(v));
+      else partes.push(JSON.stringify(k) + ':' + JSON.stringify(v));
+    }
+    return '{' + partes.join(',') + '}';
+  }
+  function anclaVista(){
+    try {
+      var x = JSON.parse(localStorage.getItem(CLAVE_VISTA) || 'null');
+      return (x && typeof x.asientos === 'number') ? x : null;
+    } catch(e){ return null; }
+  }
+  function guardarAncla(a){
+    try {
+      localStorage.setItem(CLAVE_VISTA, JSON.stringify({
+        hasta: Number(a.hasta) || 0, asientos: Number(a.asientos) || 0,
+        hash: String(a.hash || '')
+      }));
+    } catch(e){}
+  }
+  // Un dato se acepta solo si el sello firma con la clave conocida y no
+  // retrocede respecto al ultimo sello que este navegador ya vio.
+  function verificarDato(d){
+    var a = d && d.ancla;
+    if(!a || typeof a !== 'object') return {ok:false, motivo:'sin sello'};
+    if(String(a.clave_publica || '').toLowerCase() !== CLAVE_SELLO)
+      return {ok:false, motivo:'el sello usa una clave desconocida'};
+    if(!(window.nacl && nacl.sign && nacl.sign.detached))
+      return {ok:false, motivo:'verificador criptografico no disponible'};
+    var ok = false;
+    try {
+      ok = nacl.sign.detached.verify(u8(canonicoSello(a)), hexBytes(a.firma), hexBytes(a.clave_publica));
+    } catch(e){ ok = false; }
+    if(!ok) return {ok:false, motivo:'la firma del sello no cuadra'};
+    var s = d.stats || {};
+    if(typeof s.supply_emitido === 'number' && Number(a.suma) > Number(s.supply_emitido) + 1e-6)
+      return {ok:false, motivo:'el suministro publicado es menor que el del sello'};
+    var visto = anclaVista();
+    if(visto){
+      if(Number(a.asientos) < Number(visto.asientos) || Number(a.hasta) < Number(visto.hasta))
+        return {ok:false, motivo:'sello mas viejo que el que ya viste (retroceso)'};
+      if(Number(a.asientos) === Number(visto.asientos) && String(a.hash) !== String(visto.hash))
+        return {ok:false, motivo:'dos sellos distintos con los mismos asientos'};
+    }
+    return {ok:true, motivo:'', encadenado: !!(visto && a.prev && String(a.prev) === String(visto.hash))};
+  }
+  // Encaje exacto de cada cifra en SU tarjeta. Se mide el texto renderizado y
+  // se baja el tamaño hasta que cabe. No se fia del CSS (cqw, vw o zoom):
+  // cualquier fuente, zoom o navegador antiguo termina cabiendo igual.
+  function encajarNumeros(){
+    var lista = document.querySelectorAll('.stat .n');
+    for(var i=0; i<lista.length; i++){
+      var n = lista[i];
+      n.style.fontSize = '';
+      var tope = parseFloat(getComputedStyle(n).fontSize) || 24;
+      var ancho = n.clientWidth;
+      if(!ancho) continue;
+      var vueltas = 0;
+      while(n.scrollWidth > ancho && tope > 13 && vueltas++ < 60){
+        tope = Math.max(13, tope - 0.5);
+        n.style.fontSize = tope + 'px';
+      }
+    }
+  }
+  var pendiente = 0;
+  function reencajar(){ clearTimeout(pendiente); pendiente = setTimeout(encajarNumeros, 120); }
+  window.addEventListener('resize', reencajar);
+  if(document.fonts && document.fonts.ready) document.fonts.ready.then(encajarNumeros).catch(function(){});
+  setTimeout(encajarNumeros, 0);
+  function color(c){ if(dot){ dot.style.background = c; dot.style.boxShadow = c === '#00ff88' ? '0 0 10px #00ff88' : 'none'; } }
+  function texto(t){ if(txt) txt.textContent = t; }
+  function hace(){
+    if(!tsDatos) return 'sin datos';
+    var s = Math.max(0, Math.round((Date.now() - tsDatos)/1000));
+    if(s < 90) return 'hace ' + s + ' s';
+    if(s < 5400) return 'hace ' + Math.round(s/60) + ' min';
+    if(s < 172800) return 'hace ' + Math.round(s/3600) + ' h';
+    return 'del ' + new Date(tsDatos).toLocaleDateString('es-ES');
+  }
+  async function descubrir(){
+    var q = new URLSearchParams(location.search).get('core');
+    if(q){
+      var u = null;
+      try { u = new URL(q); } catch(e){ u = null; }
+      var host = u ? String(u.hostname || '') : '';
+      if(u && (host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]')){
+        modoLocal = true; ruta = '/stats'; return q.replace(/\/+$/,'');
+      }
+    }
+    try {
+      var r = await fetch('metricas.json?_=' + Date.now(), {cache:'no-store'});
+      if(r.ok){
+        var cfg = await r.json();
+        if(cfg && cfg.api){ ruta = '/api/metricas'; return String(cfg.api).replace(/\/+$/,''); }
+      }
+    } catch(e){}
+    return '';
+  }
+  function aplicar(d){
+    // Ningun dato sin sello verificado: si la firma no cuadra o el sello es
+    // mas viejo que el ya visto, se lanza y el llamante prueba otra capa.
+    if(!modoLocal){
+      var ver = verificarDato(d);
+      if(!ver.ok) throw new Error('sello: ' + ver.motivo);
+      guardarAncla(d.ancla);
+    }
+    var s = (d && d.stats) ? d.stats : d;
+    var salud = (d && d.salud) ? d.salud : {};
+    if(!s) throw new Error('sin datos');
+    set('stSupply', entero(Number(s.supply_emitido)));
+    var lbl = porId('stSupplyLabel');
+    if(lbl){
+      var em = salud.emision_por_min;
+      lbl.textContent = (typeof em === 'number')
+        ? 'KIA emitidos · +' + Math.max(0, Math.round(em)).toLocaleString('es-ES') + '/min'
+        : 'KIA emitidos (verificados)';
+    }
+    set('stNodes', entero(Number(s.nodos)));
+    set('stTasks', entero(Number(s.tareas_ok)));
+    set('stQueue', entero(Number(s.tareas_pend)));
+    // Ancla publicada: el ultimo sello firmado del ledger. Si el historial se
+    // reescribe, el hash nuevo no encadena con este numero.
+    var ancla = (d && d.ancla) ? d.ancla : null;
+    if(ancla && typeof ancla.hasta === 'number'){
+      set('stSeal', entero(ancla.hasta));
+      var sl = porId('stSealLabel');
+      if(sl) sl.textContent = 'Último sello · ' + String(ancla.hash || '').slice(0, 10) + '…';
+    } else {
+      set('stSeal', '—');
+    }
+    var ahora = Date.now();
+    var tsNuevo = (d && Number(d.ts)) ? Number(d.ts) * 1000 : ahora;
+    // El rele publica cada minuto: si el dato es el mismo, no se recalcula el
+    // ritmo (si no, marcaria 0 en la mitad de los refrescos).
+    if(prev !== null && tsNuevo !== tsAnterior && ahora > prevT && Number(s.tareas_ok) >= prev){
+      var porMin = (Number(s.tareas_ok) - prev) / ((ahora - prevT)/60000);
+      set('stRate', Math.max(0, Math.round(porMin)).toLocaleString('es-ES'));
+    }
+    prev = Number(s.tareas_ok); prevT = ahora; tsAnterior = tsNuevo;
+    tsDatos = tsNuevo;
+    encajarNumeros();
+    graficar(d, s, salud);
+  }
+  // El rele gratuito tiene CUPO DIARIO de peticiones y de escrituras. Pedir
+  // cada 5 s agotaba el cupo en horas y dejaba la web con la instantanea
+  // vieja (visto 20-10-2026: el sitio entero en pausa por escrituras). Una
+  // lectura por minuto es de sobra para ver la red, y una pestana en segundo
+  // plano no pide nada.
+  var POLL = 60000;
+  var pausaHasta = 0, pausaMsg = '';
+  // --- Respaldo en TRES capas -------------------------------------------
+  // 1) rele (en vivo)  2) metricas_snapshot.json, servido por ESTE MISMO
+  // dominio (sin CORS y sin depender del hosting del rele)  3) el ultimo dato
+  // bueno guardado en este navegador. Si el rele se pausa por cupo, la web
+  // sigue enseñando cifras reales con su fecha en vez de quedarse clavada.
+  var SNAP = 'metricas_snapshot.json';
+  var CLAVE_LOCAL = 'kukia_ultimo_dato';
+  function guardarUltimo(d){
+    try { localStorage.setItem(CLAVE_LOCAL, JSON.stringify({t: Date.now(), d: d})); } catch(e){}
+  }
+  function ultimoGuardado(){
+    try {
+      var x = JSON.parse(localStorage.getItem(CLAVE_LOCAL) || 'null');
+      return (x && x.d && x.d.stats) ? x : null;
+    } catch(e){ return null; }
+  }
+  async function respaldo(){
+    try {
+      var r = await fetch(SNAP + '?_=' + Date.now(), {cache:'no-store'});
+      if(r.ok){
+        var d = await r.json();
+        if(d && d.stats && verificarDato(d).ok) return {d: d, origen: 'instantanea'};
+      }
+    } catch(e){}
+    var m = ultimoGuardado();
+    return (m && verificarDato(m.d).ok) ? {d: m.d, origen: 'memoria'} : null;
+  }
+  var respaldoBase = '';
+  // AUDITORIA 24-10-2026: en modo respaldo no hay serie historica que dibujar
+  // (solo una foto). Antes las graficas decian "recopilando datos…" como si
+  // fuera a llegar sola; ahora dicen por que estan vacias.
+  var modoRespaldo = false;
+  function avisoSerie(){
+    return modoRespaldo
+      ? 'sin serie en vivo (relé caído): solo hay la última foto'
+      : 'recopilando datos… (una muestra cada 20 s)';
+  }
+  // La edad del respaldo se recalcula cada segundo: si se congelara en el
+  // texto, "hace 3 min" seguiría diciendo 3 min una hora después.
+  // AUDITORIA 24-10-2026: los cuatro estados se nombran igual en todas partes
+  // (EN VIVO / INSTANTANEA / DATOS ANTIGUOS / DESCONECTADO) y siempre dicen la
+  // hora del ultimo dato y DE DONDE sale. Antes cada rama usaba su propia
+  // frase y no habia forma de saber si lo que se veia era de ahora o de ayer.
+  function pintarRespaldoAhora(){
+    if(!respaldoBase) return;
+    color('#e0c05e');
+    texto(respaldoBase + ' · ultima actualizacion ' + hace() + ' · sello verificado'
+          + (Date.now() < pausaHasta
+             ? ' · reintento en ' + Math.ceil((pausaHasta - Date.now())/1000) + ' s' : ''));
+  }
+  function pintarRespaldo(x){
+    modoRespaldo = true;
+    aplicar(x.d);
+    respaldoBase = (x.origen === 'instantanea'
+            ? 'INSTANTANEA · origen: metricas_snapshot.json de este dominio (el rele no responde)'
+            : 'DATOS ANTIGUOS · origen: ultimo dato guardado en este navegador (sin rele ni instantanea)');
+    pintarRespaldoAhora();
+  }
+  async function tick(){
+    if(document.hidden) return;
+    if(Date.now() < pausaHasta){
+      // Si estamos enseñando el respaldo, el aviso de reintento NO lo tapa:
+      // se añade al final. Si no, cada ciclo borraba la etiqueta buena.
+      if(respaldoBase){ pintarRespaldoAhora(); return; }
+      color('#e0c05e');
+      texto(pausaMsg + ' · reintento en '
+            + Math.ceil((pausaHasta - Date.now())/1000) + ' s');
+      return;
+    }
+    try {
+      if(!base) base = await descubrir();
+      if(!base){
+        var xb = await respaldo();
+        if(xb){ pintarRespaldo(xb); pausaHasta = Date.now() + 120000;
+                pausaMsg = 'Relé no configurado'; return; }
+        color('#e0c05e'); texto('DESCONECTADO · ni relé ni instantánea ni dato guardado: no hay nada que enseñar'); return;
+      }
+      var ctl = new AbortController();
+      var to = setTimeout(function(){ ctl.abort(); }, 6000);
+      var r = await fetch(base + ruta + '?_=' + Date.now(), {cache:'no-store', signal: ctl.signal});
+      clearTimeout(to);
+      if(r.status === 429){
+        // 429 = el hosting gratuito se ha quedado sin cupo. Se respeta
+        // Retry-After y se tira de la instantanea del propio dominio.
+        var ra = parseInt(r.headers.get('Retry-After') || '60', 10);
+        if(!isFinite(ra) || ra <= 0) ra = 60;
+        pausaHasta = Date.now() + Math.max(60, Math.min(900, ra)) * 1000;
+        var x4 = await respaldo();
+        if(x4){ pintarRespaldo(x4); pausaMsg = 'Relé en pausa por cupo'; return; }
+        pausaMsg = 'Relé en pausa por cupo del hosting';
+        color('#e0c05e');
+        texto(pausaMsg + ' · reintento en ' + Math.ceil((pausaHasta - Date.now())/1000) + ' s');
+        return;
+      }
+      if(!r.ok) throw new Error('HTTP ' + r.status);
+      pausaHasta = 0;
+      var dato = await r.json();
+      aplicar(dato);
+      respaldoBase = '';
+      modoRespaldo = false;
+      guardarUltimo(dato);
+      if(Date.now() - tsDatos < 180000){ color('#00ff88'); texto('EN VIVO · origen: relé · ultima actualizacion ' + hace() + ' · refresco 1 min' + marcaSello()); }
+      else { color('#e0c05e'); texto('DATOS ANTIGUOS · origen: relé · ultima actualizacion ' + hace() + marcaSello() + ' (minero apagado)'); }
+    } catch(e){
+      // Sin respuesta: red, corte o el rele en pausa (cuando el hosting pausa
+      // el sitio, la respuesta no trae CORS y el navegador la bloquea, asi que
+      // aqui no se puede leer el 429). Se espacia el reintento igual.
+      pausaHasta = Date.now() + 120000;
+      // AUDITORIA 24-10-2026: este caso es "no hay con que comparar" (rele caido
+      // y sin instantanea ni dato guardado), no "el sello no cuadra": eso se
+      // avisa mas arriba, cuando SI llega un dato y la firma falla.
+      pausaMsg = 'DESCONECTADO · el relé no responde y no hay instantánea ni dato guardado';
+      var x = await respaldo();
+      if(x){ pintarRespaldo(x); return; }
+      color('#e0c05e');
+      texto(pausaMsg + ' · reintento en ' + Math.ceil((pausaHasta - Date.now())/1000) + ' s'
+            + (tsDatos ? ' · último dato ' + hace() : ''));
+    }
+  }
+  // --- Graficas en vivo (canvas, sin librerias) -------------------------
+  var serie = [], MAXP = 400;
+  // Potencia por GPU que viene en salud: [{"d":"cuda:0","gflops":12.3}, ...]
+  function potDeSalud(salud){
+    var o = {}, arr = (salud && Array.isArray(salud.gflops_gpus)) ? salud.gflops_gpus : [];
+    for(var i=0; i<arr.length && i<4; i++){
+      if(arr[i] && typeof arr[i].d === 'string' && typeof arr[i].gflops === 'number' && arr[i].gflops >= 0){
+        o[arr[i].d] = arr[i].gflops;
+      }
+    }
+    return Object.keys(o).length ? o : null;
+  }
+  function uno(v){ return Number(v).toLocaleString('es-ES', {minimumFractionDigits:1, maximumFractionDigits:1}); }
+  // --- Serie por GPU medida (GFLOPS y latencia reales de cada tarjeta) ---
+  var COLORES = ['#00ff88','#00e5ff','#d4af37','#ff7ad9'];
+  var gserie = null;
+  function escapar(t){
+    return String(t).replace(/[&<>"']/g, function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+    });
+  }
+  function normalizarGserie(g){
+    if(!g || !Array.isArray(g.puntos) || !g.puntos.length) return null;
+    var puntos = [];
+    g.puntos.forEach(function(p){
+      if(!p || typeof p.t !== 'number' || !p.gpus || typeof p.gpus !== 'object') return;
+      var gpus = {};
+      for(var k in p.gpus){
+        var v = p.gpus[k] || {};
+        gpus[k] = {
+          gflops: (typeof v.gflops === 'number' && isFinite(v.gflops)) ? v.gflops : null,
+          ms: (typeof v.ms === 'number' && isFinite(v.ms)) ? v.ms : null
+        };
+      }
+      puntos.push({t: p.t, gpus: gpus});
+    });
+    if(!puntos.length) return null;
+    return {puntos: puntos,
+            tipos: (g.tipos && typeof g.tipos === 'object' && !Array.isArray(g.tipos)) ? g.tipos : {}};
+  }
+  function clavesDe(unidad){
+    var claves = [];
+    if(!gserie) return claves;
+    gserie.puntos.forEach(function(p){
+      for(var k in p.gpus){
+        if(p.gpus[k][unidad] !== null && claves.indexOf(k) < 0) claves.push(k);
+      }
+    });
+    return claves.sort();
+  }
+  function pintarLatencia(){
+    var cv = porId('chLat'), cont = porId('bloqueLatencia'), pie = porId('chLatPie'), info = porId('chLatInfo');
+    var claves = clavesDe('ms');
+    var conDato = 0;
+    if(gserie){
+      gserie.puntos.forEach(function(p){
+        for(var k in p.gpus){ if(p.gpus[k].ms !== null){ conDato++; return; } }
+      });
+    }
+    // Con un solo minuto no hay linea: se espera a tener algo que dibujar.
+    var hay = claves.length > 0 && conDato >= 2;
+    if(cont) cont.style.display = hay ? '' : 'none';
+    if(!hay) return;
+    var series = claves.map(function(k, i){
+      return {color: COLORES[i % COLORES.length],
+              vals: gserie.puntos.map(function(p){
+                var v = p.gpus[k];
+                return (v && v.ms !== null) ? v.ms : null;
+              })};
+    });
+    dibujarVarias(cv, series, 'ms');
+    // Ultimo valor con dato de cada GPU (no el ultimo punto: puede ser hueco).
+    var ultimos = {};
+    for(var i=gserie.puntos.length-1; i>=0 && Object.keys(ultimos).length < claves.length; i--){
+      for(var k in gserie.puntos[i].gpus){
+        var v = gserie.puntos[i].gpus[k];
+        if(v.ms !== null && !(k in ultimos)) ultimos[k] = v.ms;
+      }
+    }
+    if(pie){
+      pie.innerHTML = claves.map(function(k, i){
+        return '<span style="color:' + COLORES[i % COLORES.length] + '">&#9679; ' + escapar(k) +
+               ' <b>' + uno(ultimos[k] || 0) + '</b> ms</span>';
+      }).join(' &nbsp;·&nbsp; ');
+    }
+    if(info){
+      var mins = Math.max(1, Math.round((gserie.puntos[gserie.puntos.length-1].t - gserie.puntos[0].t)/60));
+      info.textContent = claves.length + (claves.length === 1 ? ' GPU' : ' GPUs') + ' · ' + mins + ' min';
+    }
+  }
+  function pintarMezcla(){
+    var cont = porId('bloqueMezcla'), barras = porId('chMixBars'), info = porId('chMixInfo');
+    var tipos = (gserie && gserie.tipos) ? gserie.tipos : null;
+    var claves = tipos ? Object.keys(tipos) : [];
+    var total = 0;
+    claves.forEach(function(k){ total += Number(tipos[k]) || 0; });
+    var hay = claves.length > 0 && total > 0;
+    if(cont) cont.style.display = hay ? '' : 'none';
+    if(!hay){
+      if(info) info.textContent = modoRespaldo ? 'sin desglose en esta fuente' : 'recopilando…';
+      return;
+    }
+    if(!barras) return;
+    if(info) info.textContent = total.toLocaleString('es-ES') + ' tareas medidas';
+    barras.innerHTML = claves.map(function(k, i){
+      var pct = total ? (Number(tipos[k]) / total * 100) : 0;
+      return '<div style="display:flex;align-items:center;gap:.6rem;margin:.4rem 0;font-size:.85rem">' +
+        '<span style="width:9.5rem;color:#c3d1ea">' + escapar(k) + '</span>' +
+        '<span style="flex:1;background:rgba(157,182,221,.12);border-radius:5px;height:9px;overflow:hidden">' +
+        '<span style="display:block;height:100%;width:' + pct.toFixed(1) + '%;background:' + COLORES[i % COLORES.length] + '"></span></span>' +
+        '<span style="width:4.8rem;text-align:right;color:#9db6dd">' + Math.round(pct) + '% · ' + (Number(tipos[k]) || 0).toLocaleString('es-ES') + '</span></div>';
+    }).join('');
+  }
+  function graficar(d, s, salud){
+    var pts = (d && Array.isArray(d.serie) && d.serie.length) ? d.serie : null;
+    var potAhora = potDeSalud(salud);
+    if(pts){
+      serie = pts.map(function(x){
+        return {t: Number(x.t), supply: Number(x.supply), tareas: Number(x.tareas),
+                rate: (typeof x.rate === 'number' && isFinite(x.rate) && x.rate > 0) ? x.rate : null,
+                pot: (x.pot && typeof x.pot === 'object' && !Array.isArray(x.pot)) ? x.pot : null};
+      }).filter(function(x){ return isFinite(x.t) && isFinite(x.supply); });
+    } else {
+      var t = Math.round(Date.now()/1000);
+      if(!serie.length || t - serie[serie.length-1].t >= 20){
+        serie.push({t: t, supply: Number(s.supply_emitido), tareas: Number(s.tareas_ok),
+                    rate: (typeof salud.tareas_por_min === 'number') ? salud.tareas_por_min : null,
+                    pot: potAhora});
+        if(serie.length > MAXP) serie.shift();
+      }
+    }
+    for(var i=0;i<serie.length;i++){
+      if(serie[i].rate === null){
+        var j = i-1;
+        // Ventana minima de 15 s: con menos, el ritmo sale disparado.
+        serie[i].rate = (j >= 0 && serie[i].t - serie[j].t >= 15)
+          ? Math.max(0, Math.round((serie[i].tareas - serie[j].tareas) / ((serie[i].t - serie[j].t)/60)))
+          : null;
+      }
+    }
+    gserie = normalizarGserie(d && d.gpu_serie);
+    pintarSerie();
+    var i1 = porId('chSupplyInfo'), i2 = porId('chRateInfo');
+    if(serie.length){
+      var a = serie[0], b = serie[serie.length-1];
+      var mins = Math.max(1, Math.round((b.t - a.t)/60));
+      if(i1) i1.textContent = '+' + Math.round(b.supply - a.supply).toLocaleString('es-ES') + ' KIA en ' + mins + ' min';
+      var conRitmo = serie.filter(function(x){ return x.rate !== null; });
+      if(i2) i2.textContent = conRitmo.length
+        ? Math.round(conRitmo[conRitmo.length-1].rate).toLocaleString('es-ES') + '/min ahora'
+        : 'recopilando…';
+    }
+    var iP = porId('chPowerInfo');
+    var ultPot = serie.length ? serie[serie.length-1].pot : potAhora;
+    var total = null;
+    if(ultPot){ total = 0; for(var k in ultPot) total += Number(ultPot[k]) || 0; }
+    else if(salud && typeof salud.gflops === 'number'){ total = salud.gflops; }
+    if(iP) iP.textContent = (total === null)
+      ? (modoRespaldo ? 'sin dato en esta fuente' : 'recopilando…')
+      : (uno(total) + ' GFLOPS ahora');
+  }
+  function pintarSerie(){
+    dibujar(porId('chSupply'), serie.map(function(x){ return x.supply; }).filter(function(v){ return v !== null; }), 'supply');
+    dibujar(porId('chRate'), serie.filter(function(x){ return x.rate !== null; }).map(function(x){ return x.rate; }), 'rate');
+    pintarPot();
+    pintarLatencia();
+    pintarMezcla();
+  }
+  // Potencia: una linea por GPU, misma escala, misma ventana de tiempo.
+  function pintarPot(){
+    var cv = porId('chPower'); if(!cv) return;
+    var claves = [];
+    serie.forEach(function(x){
+      if(!x.pot) return;
+      for(var k in x.pot){ if(claves.indexOf(k) < 0) claves.push(k); }
+    });
+    claves.sort();
+    // El bloque de potencia solo aparece cuando el rele manda datos: mientras
+    // no los mande, se queda oculto en vez de ensenar una grafica vacia.
+    var hayPot = claves.length > 0;
+    var contPot = porId('bloquePotencia'), notaPot = porId('potenciaNota');
+    if(contPot) contPot.style.display = hayPot ? '' : 'none';
+    if(notaPot) notaPot.style.display = hayPot ? '' : 'none';
+    if(!hayPot) return;
+    var colores = ['#00ff88','#00e5ff','#d4af37','#ff7ad9'];
+    var series = claves.map(function(k, i){
+      return {color: colores[i % colores.length],
+              vals: serie.map(function(x){ return (x.pot && typeof x.pot[k] === 'number') ? x.pot[k] : null; })};
+    });
+    dibujarVarias(cv, series);
+    var pie = porId('chPowerPie');
+    var ult = serie.length ? serie[serie.length-1].pot : null;
+    if(pie){
+      pie.innerHTML = (ult && claves.length)
+        ? claves.map(function(k, i){
+            // AUDITORIA 2026-10-21: esta clave venia del rele SIN escapar (las
+            // otras dos graficas ya usaban escapar). Un nombre de GPU con HTML
+            // se ejecutaba en la portada de todo el que la abriera.
+            return '<span style="color:' + colores[i % colores.length] + '">&#9679; ' + escapar(k) +
+                   ' <b>' + uno(ult[k] || 0) + '</b> GFLOPS</span>';
+          }).join(' &nbsp;·&nbsp; ')
+        : '';
+    }
+  }
+  function dibujarVarias(cv, series, unidad){
+    if(!cv) return;
+    var todos = [];
+    series.forEach(function(s){ s.vals.forEach(function(v){ if(v !== null) todos.push(v); }); });
+    var dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 320, h = 170;
+    cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+    var ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.font = '11px Segoe UI, system-ui, sans-serif';
+    if(todos.length < 2){
+      ctx.fillStyle = '#9db6dd'; ctx.textAlign = 'center';
+      ctx.fillText(avisoSerie(), w/2, h/2);
+      return;
+    }
+    var n = 0;
+    series.forEach(function(s){ n = Math.max(n, s.vals.length); });
+    var min = Math.min.apply(null, todos), max = Math.max.apply(null, todos);
+    if(max - min < 1e-9) max = min + 1;
+    var pad = (max - min) * 0.12;
+    min -= pad; max += pad;
+    if(min < 0 && Math.min.apply(null, todos) >= 0) min = 0;
+    var x = function(i){ return 6 + i * (w - 12) / Math.max(1, n - 1); };
+    var y = function(v){ return (h - 18) - ((v - min) / (max - min)) * (h - 34); };
+    ctx.strokeStyle = 'rgba(157,182,221,.16)'; ctx.lineWidth = 1;
+    for(var g=0; g<3; g++){
+      var yy = 10 + g * (h - 34) / 2;
+      ctx.beginPath(); ctx.moveTo(6, yy); ctx.lineTo(w - 6, yy); ctx.stroke();
+    }
+    series.forEach(function(s){
+      var prev = -1;
+      ctx.beginPath();
+      for(var i=0; i<s.vals.length; i++){
+        var v = s.vals[i];
+        if(v === null){ prev = -1; continue; }
+        if(prev < 0) ctx.moveTo(x(i), y(v)); else ctx.lineTo(x(i), y(v));
+        prev = i;
+      }
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+    });
+    series.forEach(function(s){
+      for(var i=s.vals.length-1; i>=0; i--){
+        if(s.vals[i] !== null){
+          ctx.beginPath(); ctx.arc(x(i), y(s.vals[i]), 3, 0, 6.283);
+          ctx.fillStyle = s.color; ctx.fill(); break;
+        }
+      }
+    });
+    ctx.fillStyle = '#9db6dd'; ctx.textAlign = 'left';
+    ctx.fillText(Math.round(max).toLocaleString('es-ES') + ' ' + (unidad || 'GFLOPS'), 6, 11);
+    ctx.fillText(Math.round(min).toLocaleString('es-ES'), 6, h - 20);
+  }
+  function dibujar(cv, vals, tipo){
+    if(!cv) return;
+    var dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 320, h = 170;
+    cv.width = Math.round(w*dpr); cv.height = Math.round(h*dpr);
+    var ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    ctx.font = '11px Segoe UI, system-ui, sans-serif';
+    if(vals.length < 2){
+      ctx.fillStyle = '#9db6dd'; ctx.textAlign = 'center';
+      ctx.fillText(avisoSerie(), w/2, h/2);
+      return;
+    }
+    var min = Math.min.apply(null, vals), max = Math.max.apply(null, vals);
+    if(max - min < 1e-9) max = min + 1;
+    var pad = (max - min) * 0.12;
+    min -= pad; max += pad;
+    if(min < 0 && Math.min.apply(null, vals) >= 0) min = 0;   // sin ejes negativos
+    var x = function(i){ return 6 + i * (w - 12) / (vals.length - 1); };
+    var y = function(v){ return (h - 18) - ((v - min) / (max - min)) * (h - 34); };
+    ctx.strokeStyle = 'rgba(157,182,221,.16)'; ctx.lineWidth = 1;
+    for(var g=0; g<3; g++){
+      var yy = 10 + g * (h - 34) / 2;
+      ctx.beginPath(); ctx.moveTo(6, yy); ctx.lineTo(w - 6, yy); ctx.stroke();
+    }
+    var col = (tipo === 'rate') ? '#00ff88' : '#d4af37';
+    var grad = ctx.createLinearGradient(0, 10, 0, h - 18);
+    grad.addColorStop(0, (tipo === 'rate') ? 'rgba(0,255,136,.32)' : 'rgba(212,175,55,.32)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.beginPath(); ctx.moveTo(x(0), y(vals[0]));
+    for(var i=1; i<vals.length; i++) ctx.lineTo(x(i), y(vals[i]));
+    ctx.lineTo(x(vals.length-1), h - 18); ctx.lineTo(x(0), h - 18); ctx.closePath();
+    ctx.fillStyle = grad; ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x(0), y(vals[0]));
+    for(i=1; i<vals.length; i++) ctx.lineTo(x(i), y(vals[i]));
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+    ctx.beginPath(); ctx.arc(x(vals.length-1), y(vals[vals.length-1]), 3, 0, 6.283);
+    ctx.fillStyle = col; ctx.fill();
+    ctx.fillStyle = '#9db6dd'; ctx.textAlign = 'left';
+    ctx.fillText(Math.round(max).toLocaleString('es-ES'), 6, 11);
+    ctx.fillText(Math.round(min).toLocaleString('es-ES'), 6, h - 20);
+  }
+  window.addEventListener('resize', function(){ if(serie.length > 1) pintarSerie(); });
+
+  tick();
+  setInterval(tick, POLL);
+  // Al volver a la pestana se pide de inmediato: si estuvo oculta, el dato
+  // que se ve es viejo y conviene refrescarlo ya.
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden) tick(); });
+  setInterval(function(){
+    if(respaldoBase){ pintarRespaldoAhora(); }
+    else if(Date.now() < pausaHasta){
+      texto(pausaMsg + ' · reintento en ' + Math.ceil((pausaHasta - Date.now())/1000) + ' s');
+    } else if(tsDatos && Date.now() - tsDatos < 180000){ texto('EN VIVO · origen: relé · ultima actualizacion ' + hace() + ' · refresco 1 min' + marcaSello()); }
+  }, 1000);
+})();
+</script>
+<script>
+// Menu de movil (24-10-2026). Sin JS, el boton no se ve y la barra queda como
+// estaba antes. Cierra al elegir un enlace, al hacer clic fuera y con Escape.
+(function(){
+  var btn = document.getElementById('menuBtn');
+  var ul = document.getElementById('menuPrincipal');
+  if(!btn || !ul) return;
+  function cerrar(){ ul.classList.remove('abierto'); btn.setAttribute('aria-expanded','false'); btn.setAttribute('aria-label','Abrir menu'); }
+  btn.addEventListener('click', function(){
+    var abierto = ul.classList.toggle('abierto');
+    btn.setAttribute('aria-expanded', abierto ? 'true' : 'false');
+    btn.setAttribute('aria-label', abierto ? 'Cerrar menu' : 'Abrir menu');
+  });
+  ul.addEventListener('click', function(e){ if(e.target.closest('a')) cerrar(); });
+  document.addEventListener('keydown', function(e){ if(e.key === 'Escape') cerrar(); });
+  document.addEventListener('click', function(e){ if(!e.target.closest('nav')) cerrar(); });
+})();
+</script>
+</body>
+</html>

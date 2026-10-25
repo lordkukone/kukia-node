@@ -170,6 +170,12 @@ def cargar(flag) -> dict:
             KUKIA_DB=str(tmp / "coordinator" / "ledger" / "kukia.db"),
             KUKIA_AUTO_TAREAS="0",
             KUKIA_GFLOP_MIN=str(GFLOP_MIN),
+            # Esta suite prueba el reparto por TRABAJO MEDIDO (el precio sale
+            # de los GFLOP del minuto anterior). Desde el 25-10-2026 el modo por
+            # defecto es el ancla GPU-minuto, que fija el precio y no depende de
+            # la medida, asi que aqui se apaga a proposito. El ancla tiene su
+            # propia prueba en tools/prueba_ancla.py.
+            KUKIA_ANCLA_GPU_MIN="0",
             PYTHONIOENCODING="utf-8",
         )
         if flag is not None:

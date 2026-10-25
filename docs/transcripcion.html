@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; form-action 'self' https://formsubmit.co; object-src 'none'; base-uri 'self'">
+<link rel="canonical" href="https://lordkukone.github.io/kukia-node/transcripcion">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcripción de audio y subtítulos | 0,15 €/min | KUKIA</title>
+<meta name="description" content="Audio o vídeo a texto y subtítulos SRT. 0,15 € por minuto, primera prueba gratis hasta 10 minutos. Se procesa en un equipo propio, no en una nube, y el audio se borra a los 7 días.">
+<link rel="icon" href="moneda.jpg">
+<meta name="theme-color" content="#081a3a">
+<style>
+:root { --gold:#d4af37; --navy:#081a3a; --blue:#12305e; --line:#27487c; --text:#c3d1ea; --ok:#5ee08a; --warn:#e0c05e; --bad:#ff7b7b; }
+* { margin:0; padding:0; box-sizing:border-box; }
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:3px solid #d4af37; outline-offset:2px; border-radius:4px; }
+body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; line-height:1.65; }
+a { color:var(--gold); }
+.wrap { max-width:980px; margin:0 auto; padding:2.5rem 1.25rem 4rem; }
+.back { display:inline-block; margin-bottom:1.5rem; color:var(--gold); text-decoration:none; font-size:.9rem; }
+.back:hover { text-decoration:underline; }
+h1 { color:var(--gold); font-size:2.1rem; line-height:1.2; }
+.sub { color:var(--text); margin:.5rem 0 2rem; max-width:720px; }
+h2 { color:var(--gold); font-size:1.15rem; margin:2.4rem 0 .9rem; border-bottom:1px solid var(--line); padding-bottom:.5rem; }
+h3 { font-size:1rem; margin-bottom:.4rem; }
+p { color:var(--text); }
+.panel { background:rgba(18,48,94,.55); border:1px solid var(--line); border-radius:14px; padding:1.2rem; }
+.precio { display:flex; align-items:baseline; gap:.6rem; flex-wrap:wrap; margin:.2rem 0 .8rem; }
+.precio .cifra { font-size:2.6rem; font-weight:800; color:#fff; letter-spacing:-.02em; }
+.precio .unidad { color:var(--text); font-size:1rem; }
+.chapa { display:inline-block; background:rgba(94,224,138,.12); border:1px solid var(--ok); color:var(--ok); border-radius:999px; padding:.2rem .7rem; font-size:.78rem; font-weight:700; }
+.grid { display:grid; grid-template-columns:repeat(4,1fr); gap:.8rem; }
+@media (max-width:760px){ .grid { grid-template-columns:repeat(2,1fr); } }
+@media (max-width:460px){ .grid { grid-template-columns:1fr; } }
+.tile { background:rgba(8,26,58,.75); border:1px solid var(--line); border-radius:12px; padding:.9rem 1rem; }
+.tile .l { display:block; color:#8fa5c6; font-size:.74rem; text-transform:uppercase; letter-spacing:.06em; }
+.tile .v { display:block; font-size:1.55rem; font-weight:800; color:#fff; margin-top:.15rem; }
+.tile .n { display:block; font-size:.75rem; color:#8fa5c6; margin-top:.2rem; }
+.nota { border-left:3px solid var(--gold); background:rgba(212,175,55,.07); border-radius:0 10px 10px 0; padding:.8rem 1rem; font-size:.87rem; margin:1rem 0; }
+.warnbox { border-left:3px solid var(--warn); background:rgba(224,192,94,.07); border-radius:0 10px 10px 0; padding:.8rem 1rem; font-size:.87rem; margin:1rem 0; }
+.btn { display:inline-block; padding:.85rem 1.3rem; border-radius:12px; background:linear-gradient(135deg,var(--gold),#f0d060); color:var(--navy); font-weight:800; text-decoration:none; border:0; cursor:pointer; font-family:inherit; font-size:1rem; }
+.btn.sec { background:transparent; border:2px solid var(--gold); color:var(--gold); margin-left:.5rem; }
+ul { color:var(--text); padding-left:1.2rem; }
+li { margin:.35rem 0; }
+form { display:grid; gap:.7rem; }
+input, select, textarea { width:100%; padding:.8rem .9rem; border-radius:10px; border:1px solid var(--line); background:#050f22; color:#fff; font-family:inherit; font-size:.95rem; }
+input::placeholder, textarea::placeholder { color:#6f86a8; }
+label { font-size:.85rem; color:var(--text); }
+details { border:1px solid var(--line); border-radius:10px; padding:.7rem .9rem; margin:.5rem 0; background:rgba(8,26,58,.6); }
+summary { cursor:pointer; color:#fff; font-weight:600; }
+details p { margin-top:.5rem; font-size:.9rem; }
+.foot { margin-top:3rem; color:#789; font-size:.82rem; }
+#estimado { font-weight:800; color:var(--gold); }
+@media (max-width:520px){ h1{font-size:1.7rem;} .btn.sec{margin-left:0;margin-top:.6rem;} .precio .cifra{font-size:2.2rem;} }
+</style>
+<!-- kukia-seo -->
+<meta name="robots" content="index,follow,max-image-preview:large">
+<meta name="google-site-verification" content="9d6cb22812b81092">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="KUKIA Network">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://lordkukone.github.io/kukia-node/transcripcion">
+<meta property="og:title" content="Transcripción de audio y subtítulos | 0,15 €/min | KUKIA">
+<meta property="og:description" content="Audio o vídeo a texto y subtítulos SRT. 0,15 € por minuto, primera prueba gratis hasta 10 minutos. Se procesa en un equipo propio, no en una nube, y el audio se borra a los 7 días.">
+<meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Transcripción de audio y subtítulos | 0,15 €/min | KUKIA">
+<meta name="twitter:description" content="Audio o vídeo a texto y subtítulos SRT. 0,15 € por minuto, primera prueba gratis hasta 10 minutos. Se procesa en un equipo propio, no en una nube, y el audio se borra a los 7 días.">
+<meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://lordkukone.github.io/kukia-node/#sitio",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "name": "KUKIA Network",
+   "alternateName": "KUKIA",
+   "inLanguage": "es",
+   "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
+   "publisher": {
+    "@id": "https://lordkukone.github.io/kukia-node/#organizacion"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://lordkukone.github.io/kukia-node/#organizacion",
+   "name": "KUKIA Network",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://lordkukone.github.io/kukia-node/moneda.jpg",
+    "width": 512,
+    "height": 512
+   }
+  },
+  {
+   "@type": "WebPage",
+   "@id": "https://lordkukone.github.io/kukia-node/transcripcion#pagina",
+   "url": "https://lordkukone.github.io/kukia-node/transcripcion",
+   "name": "Transcripción de audio y subtítulos | 0,15 €/min | KUKIA",
+   "description": "Audio o vídeo a texto y subtítulos SRT. 0,15 € por minuto, primera prueba gratis hasta 10 minutos. Se procesa en un equipo propio, no en una nube, y el audio se borra a los 7 días.",
+   "inLanguage": "es",
+   "isPartOf": {
+    "@id": "https://lordkukone.github.io/kukia-node/#sitio"
+   }
+  }
+ ]
+}
+</script>
+<!-- /kukia-seo -->
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="index.html">&larr; Volver a KUKIA</a>
+
+<h1>Tu audio, en texto y con subtítulos</h1>
+<p class="sub">Notas de voz, entrevistas, clases, reuniones y podcasts. Te devuelvo el texto limpio, los subtítulos <code>.srt</code> listos para el vídeo y la duración exacta. Sin cuotas, sin suscripción y sin subirlo a ninguna nube.</p>
+
+<div class="panel">
+  <div class="precio">
+    <span class="cifra">0,15 €</span><span class="unidad">por minuto de audio</span>
+  </div>
+  <p style="margin-bottom:.8rem;">Mínimo 1 minuto. Sin mínimos mensuales ni permanencia. Lo que dura el audio es lo que pagas.</p>
+  <span class="chapa">Primera prueba gratis hasta 10 minutos</span>
+  <p style="margin:1rem 0 .9rem;">Mándame el audio y te digo el precio exacto en minutos antes de empezar. Si el resultado no te vale, no lo pagas.</p>
+  <a class="btn" href="#pedido">Pedir una transcripción</a>
+  <a class="btn sec" href="mailto:kukone510@hotmail.com?subject=Transcripci%C3%B3n%20-%20consulta">Preguntar antes</a>
+</div>
+
+<h2>Cuánto cuesta de verdad</h2>
+<div class="grid">
+  <div class="tile"><span class="l">Nota de voz 5 min</span><span class="v">0,75 €</span><span class="n">lista en minutos</span></div>
+  <div class="tile"><span class="l">Entrevista 40 min</span><span class="v">6,00 €</span><span class="n">texto + subtítulos</span></div>
+  <div class="tile"><span class="l">Clase 2 horas</span><span class="v">18,00 €</span><span class="n">entrega en el día</span></div>
+  <div class="tile"><span class="l">Curso 20 horas</span><span class="v">180,00 €</span><span class="n">por tramos, sin pagar todo</span></div>
+</div>
+<div class="nota">
+  <strong style="color:#fff;">Calculadora rápida:</strong>
+  <label for="minutos" style="display:block;margin:.6rem 0 .3rem;">Minutos de audio</label>
+  <input id="minutos" type="number" min="0" step="0.5" value="40" style="max-width:200px;">
+  <p style="margin-top:.6rem;">Precio: <span id="estimado">6,00 €</span></p>
+  <p style="font-size:.85rem;color:#9fb3d1;" id="linea_prueba">Si es tu primera vez, se te quitan los primeros 10 minutos: <span id="estimado_prueba">4,50 €</span></p>
+</div>
+
+<h2>Qué recibes</h2>
+<ul>
+  <li><strong style="color:#fff;">Texto limpio</strong> en <code>.txt</code>: sin cortes raros, con puntuación y párrafos.</li>
+  <li><strong style="color:#fff;">Subtítulos <code>.srt</code></strong> con marcas de tiempo, listos para YouTube, VLC o cualquier editor de vídeo.</li>
+  <li><strong style="color:#fff;">Ficha del trabajo</strong> en <code>.json</code>: duración, idioma detectado, motor usado y precio. Para que puedas comprobar que te he cobrado lo que toca.</li>
+  <li><strong style="color:#fff;">Corrección incluida</strong> de nombres propios y términos raros que me avises antes de empezar, sin coste extra.</li>
+  <li><strong style="color:#fff;">Plazo</strong>: hasta 1 hora de audio en el día; trabajos grandes por tramos, con precio cerrado por adelantado.</li>
+</ul>
+
+<h2>Por qué aquí y no en una web grande</h2>
+<ul>
+  <li><strong style="color:#fff;">El audio no sale de un equipo particular.</strong> No hay nube, ni proveedor, ni "entrenamos con tus datos". Se procesa en una GPU propia y los ficheros se borran a los 7 días.</li>
+  <li><strong style="color:#fff;">Precio claro y sin cuotas.</strong> 0,15 €/min, sin suscripción y sin "contacta con ventas".</li>
+  <li><strong style="color:#fff;">Se puede verificar.</strong> Cada trabajo lleva su ficha con la duración real y el precio aplicado. Si algo no cuadra, lo hablamos con los números delante.</li>
+</ul>
+
+<div class="warnbox">
+  <strong style="color:#fff;">Lo que no es, para que no haya engaños:</strong>
+  <ul style="margin-top:.5rem;">
+    <li>No es una transcripción jurada: para juzgados hace falta un transcritor jurado con título.</li>
+    <li>No es perfecta. Con ruido, acento muy cerrado o varias personas hablando a la vez, todas las máquinas fallan, esta también. Se entrega lo mejor posible y, si no vale, no se cobra.</li>
+    <li>No incluye traducción: se transcribe en el idioma original del audio.</li>
+  </ul>
+</div>
+
+<h2 id="pedido">Pedir una transcripción</h2>
+<div class="panel">
+  <form action="https://formsubmit.co/kukone510@hotmail.com" method="POST">
+    <input type="hidden" name="_subject" value="Transcripcion KUKIA - nuevo encargo">
+    <input type="hidden" name="_captcha" value="false">
+    <input type="hidden" name="_template" value="table">
+    <input type="hidden" name="_autoresponse" value="Gracias por tu encargo de transcripcion. Para empezar solo falta el audio: responde a este correo con el fichero adjunto (si pesa menos de 20 MB) o con un enlace de WeTransfer, Google Drive, Dropbox o Telegram. En cuanto lo tenga miro la duracion exacta y te confirmo el precio antes de transcribir nada. Si es tu primera vez, los primeros 10 minutos son gratis. - KUKIA">
+    <input type="hidden" name="precio_estimado" id="precio_estimado" value="">
+
+    <label for="nombre">Tu nombre</label>
+    <input id="nombre" type="text" name="nombre" placeholder="Nombre y apellidos" required>
+
+    <label for="email">Tu email</label>
+    <input id="email" type="email" name="email" placeholder="donde te contesto" required>
+
+    <label for="duracion">¿Cuánto dura el audio? (minutos, aproximado)</label>
+    <input id="duracion" type="text" name="duracion" placeholder="ej: 37 minutos" required>
+
+    <label for="tipo">¿Qué es?</label>
+    <select id="tipo" name="tipo">
+      <option>Entrevista</option>
+      <option>Podcast</option>
+      <option>Clase o conferencia</option>
+      <option>Reunión de trabajo</option>
+      <option>Nota de voz</option>
+      <option>Vídeo para subtitular</option>
+      <option>Otro</option>
+    </select>
+
+    <label for="enlace">Enlace al audio (WeTransfer, Drive, Dropbox, Telegram)</label>
+    <input id="enlace" type="text" name="enlace_audio" placeholder="pega el enlace, o escribe 'lo adjunto al correo'">
+
+    <label for="idioma">Idioma del audio</label>
+    <input id="idioma" type="text" name="idioma" placeholder="español (por defecto)">
+
+    <label for="notas">Nombres propios, siglas o cosas raras que deba respetar</label>
+    <textarea id="notas" name="notas" rows="3" placeholder="ej: el ponente se llama Iñaki Zubizarreta; la empresa es 'Lorategi S. Coop.'"></textarea>
+
+    <label style="display:flex;gap:.7rem;align-items:flex-start;cursor:pointer;">
+      <input type="checkbox" name="prueba_gratis" value="SI" checked style="width:auto;margin-top:.25rem;transform:scale(1.2);accent-color:var(--gold);">
+      <span>Quiero usar la prueba gratis de 10 minutos (solo la primera vez)</span>
+    </label>
+
+    <button class="btn" type="submit" style="margin-top:.4rem;">Enviar el encargo</button>
+  </form>
+  <small style="display:block;line-height:1.6;margin-top:.9rem;">
+    <strong style="color:#fff;">El formulario no sube el audio.</strong> Una web estática no puede recibir ficheros grandes: al enviar esto recibes un correo automático con la dirección a la que mandar el audio (adjunto si pesa poco, o un enlace si pesa mucho).
+    <strong style="color:#fff;">Qué datos se piden:</strong> nombre, email, duración y enlace al audio. <strong style="color:#fff;">Para qué:</strong> contestarte con el precio y hacer el trabajo; nada más. <strong style="color:#fff;">Quién lo trata:</strong> el formulario lo envía el servicio FormSubmit directamente al correo del proyecto; esta web no guarda nada. <strong style="color:#fff;">Audio:</strong> se borra a los 7 días de la entrega. <strong style="color:#fff;">Baja:</strong> responde BAJA a cualquier correo y se borra todo tu rastro.
+  </small>
+</div>
+
+<h2>Preguntas que me hacen</h2>
+<details>
+  <summary>¿Cómo se paga?</summary>
+  <p>Transferencia o Bizum, con el importe cerrado antes de empezar. Al confirmar el encargo te paso los datos de pago. Trabajos de más de 100 € se pueden pagar por tramos, uno por cada bloque de audio entregado.</p>
+</details>
+<details>
+  <summary>¿Cuánto tarda?</summary>
+  <p>Hasta una hora de audio, el mismo día. Trabajos de varias horas, por bloques: te entrego el primero mientras el resto sigue. Si tengo mucha cola te lo digo antes de aceptar, no después.</p>
+</details>
+<details>
+  <summary>¿Qué pasa si el audio está mal grabado?</summary>
+  <p>Te lo digo antes de cobrar. Con ruido de fondo fuerte o varias personas hablando a la vez el resultado baja mucho; en ese caso no lo acepto o te aviso de que habrá huecos marcados como ininteligibles.</p>
+</details>
+<details>
+  <summary>¿Se puede pagar con KIA?</summary>
+  <p>No. Este servicio se cobra en euros: KIA es la moneda de la red de cómputo de <a href="index.html">KUKIA</a>, un proyecto aparte. Mezclar las dos cosas sería liarlo todo.</p>
+</details>
+<details>
+  <summary>¿Y mis datos?</summary>
+  <p>El audio se procesa en un equipo propio, nunca se sube a un servicio de terceros, y se borra a los 7 días de entregarte el resultado. El texto y los subtítulos son tuyos; no los reutilizo ni los publico.</p>
+</details>
+
+<p class="foot">
+  Servicio de transcripción de <a href="index.html">KUKIA</a> · Se procesa en una GPU propia, sin nubes.
+  <br>Precio orientativo del mercado: 0,10–0,30 €/min. Aquí, 0,15 €/min sin cuotas.
+</p>
+</div>
+
+<script>
+(function () {
+  var MIN = 0.15, GRATIS = 10;
+  var entrada = document.getElementById('minutos');
+  var salida = document.getElementById('estimado');
+  var salidaPrueba = document.getElementById('estimado_prueba');
+  var lineaPrueba = document.getElementById('linea_prueba');
+  var oculto = document.getElementById('precio_estimado');
+  function euros(n) { return n.toFixed(2).replace('.', ',') + ' €'; }
+  function pinta() {
+    var m = parseFloat(entrada.value || '0');
+    if (!isFinite(m) || m <= 0) {
+      salida.textContent = '0,00 €';
+      if (lineaPrueba) lineaPrueba.style.display = 'none';
+      if (oculto) oculto.value = '';
+      return;
+    }
+    var total = m * MIN;
+    salida.textContent = euros(total);
+    var conPrueba = Math.max(0, m - GRATIS) * MIN;
+    if (lineaPrueba) lineaPrueba.style.display = '';
+    if (salidaPrueba) {
+      salidaPrueba.textContent = (conPrueba === 0) ? 'gratis' : euros(conPrueba);
+    }
+    if (oculto) {
+      oculto.value = m.toFixed(1) + ' min -> ' + euros(total) +
+        (conPrueba < total ? ' (con prueba: ' + euros(conPrueba) + ')' : '');
+    }
+  }
+  if (entrada) { entrada.addEventListener('input', pinta); pinta(); }
+})();
+</script>
+</body>
+</html>
