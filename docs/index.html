@@ -8,7 +8,7 @@
 <title>KUKIA · Convierte potencia de cálculo en trabajo útil para la IA</title>
 <meta name="description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
 <meta name="keywords" content="computación distribuida GPU, cómputo para IA, tareas verificables, minado útil, nodos de computación domésticos, KUKIA, KIA">
-<meta name="kukia-build" content="v1.3.6-ligera">
+<meta name="kukia-build" content="v1.3.7-freno">
 <link rel="icon" href="moneda.jpg">
 <script>document.documentElement.classList.add('js');</script>
 <style>
@@ -413,6 +413,13 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
       <div class="acciones">
         <a class="btn btn-principal" href="minar.html">Quiero aportar mi ordenador</a>
         <a class="btn btn-secundario" href="#clientes">Explorar computación para IA</a>
+        <!-- 26-10-2026: freno para equipos que estan minando. Para el video y la
+             animacion del fondo de ESTA pagina; no toca nada del nodo. Se
+             recuerda en este navegador (localStorage). -->
+        <button class="btn btn-secundario btn-pequeno" id="frenoFondo" type="button"
+                aria-pressed="false" title="Para el vídeo y la animación de esta página: útil si el equipo está minando">
+          <span aria-hidden="true" id="frenoIcono">⏸</span>&nbsp;<span id="frenoTexto">Pausar animación</span>
+        </button>
       </div>
       <div class="mini">
         <span><i class="punto"></i>Código abierto, sin partes cerradas</span>
@@ -1022,6 +1029,41 @@ if (io) {
 }
 </script>
 <script>
+/* Freno de la portada (26-10-2026). Pensado para un PC que esta minando: para
+   el video de fondo y la animacion de nodos, que son lo unico que gasta GPU en
+   esta pagina. No toca el nodo, ni el minero, ni nada del Core. La eleccion se
+   guarda en este navegador, asi que sigue parada la proxima vez. */
+(function(){
+  var CLAVE = 'kukia_fondo';
+  var btn = document.getElementById('frenoFondo');
+  var ic = document.getElementById('frenoIcono'), tx = document.getElementById('frenoTexto');
+  function leer(){ try { return localStorage.getItem(CLAVE); } catch(e){ return null; } }
+  function guardar(pausado){
+    try { pausado ? localStorage.setItem(CLAVE,'off') : localStorage.removeItem(CLAVE); } catch(e){}
+  }
+  var activo = leer() !== 'off';
+  function pinta(){
+    if(!tx) return;
+    tx.textContent = activo ? 'Pausar animación' : 'Reanudar animación';
+    if(ic) ic.textContent = activo ? '⏸' : '▶';
+    if(btn) btn.setAttribute('aria-pressed', activo ? 'false' : 'true');
+  }
+  function avisa(){
+    try {
+      document.dispatchEvent(new CustomEvent('kukia-fondo', { detail: { activo: activo } }));
+    } catch(e) {}
+  }
+  window.KUKIA_FONDO_ACTIVO = activo;
+  if(btn) btn.addEventListener('click', function(){
+    activo = !activo;
+    window.KUKIA_FONDO_ACTIVO = activo;
+    guardar(!activo);
+    pinta(); avisa();
+  });
+  pinta();
+})();
+</script>
+<script>
 // Red de nodos GPU animada (fondo cyber del hero)
 (function(){
   var cv = document.getElementById('netcanvas');
@@ -1039,6 +1081,7 @@ if (io) {
   // a tirones y parece que la web "no carga". Ahora solo dibuja cuando de
   // verdad se ve, y al volver a verla se reanuda sola. El dibujo es el mismo.
   var visible = true, programado = false;
+  var apagado = window.KUKIA_FONDO_ACTIVO === false;   // freno del boton
   var N = 30;   // 45 nodos con resplandor en cada fotograma pesaban de mas
   for(var i=0;i<N;i++){
     nodes.push({x: Math.random(), y: Math.random(),
@@ -1047,7 +1090,7 @@ if (io) {
   }
   function frame(){
     programado = false;
-    if(document.hidden || !visible) return;
+    if(document.hidden || !visible || apagado) return;
     ctx.clearRect(0,0,W,H);
     var i, j, a, b, dx, dy, d;
     for(i=0;i<nodes.length;i++){
@@ -1098,7 +1141,11 @@ if (io) {
     },{threshold:0}).observe(cv);
   }
   document.addEventListener('visibilitychange', function(){ if(!document.hidden) programa(); });
-  programa();
+  document.addEventListener('kukia-fondo', function(e){
+    apagado = !(e.detail && e.detail.activo);
+    if(apagado){ try{ ctx.clearRect(0,0,W,H); }catch(err){} } else { programa(); }
+  });
+  if(!apagado) programa();
 })();
 </script>
 <script>
@@ -2003,9 +2050,18 @@ if (io) {
   var ahorro=!!(c && (c.saveData===true || /(^|-)2g$/.test(String(c.effectiveType||''))));
   v.addEventListener('playing', function(){ v.setAttribute('data-modo','video'); });
   v.addEventListener('error', function(){ quedarse(); });
+  // Freno de la portada: si esta puesto, no se pide ni un byte de video.
+  document.addEventListener('kukia-fondo', function(e){
+    if(e.detail && e.detail.activo){ quiere(); }
+    else { try{ v.pause(); }catch(err){} v.setAttribute('data-modo','poster'); }
+  });
+  // Estos tres son frenos definitivos: ahi no hay video, punto.
   if(reducido||ahorro||window.innerWidth<720){ quedarse(); return; }
   var pedido=false, visible=false;
   function quiere(){
+    // El freno del boton sí se puede quitar: por eso este se comprueba aqui y
+    // no se sale antes (el observador tiene que quedar montado para reanudar).
+    if(window.KUKIA_FONDO_ACTIVO === false){ try{ v.pause(); }catch(e){} quedarse(); return; }
     var on=visible && !document.hidden;
     if(on){
       if(!pedido){ pedido=true; v.preload='auto'; v.load(); }
