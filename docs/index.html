@@ -8,7 +8,7 @@
 <title>KUKIA · Convierte potencia de cálculo en trabajo útil para la IA</title>
 <meta name="description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
 <meta name="keywords" content="computación distribuida GPU, cómputo para IA, tareas verificables, minado útil, nodos de computación domésticos, KUKIA, KIA">
-<meta name="kukia-build" content="v1.3.4-video-visible">
+<meta name="kukia-build" content="v1.3.5-visible-siempre">
 <link rel="icon" href="moneda.jpg">
 <script>document.documentElement.classList.add('js');</script>
 <style>
@@ -972,13 +972,36 @@ function openWP() {
     window.open(url, '_blank');
   }).catch(() => alert('No se pudo abrir el PDF'));
 }
-const io = new IntersectionObserver((entries) => {
-  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); io.unobserve(e.target); } });
-}, { threshold: 0.12 });
-document.querySelectorAll('.reveal').forEach(el => io.observe(el));
-const counters = document.querySelectorAll('[data-count]');
-const cio = new IntersectionObserver((entries) => {
-  entries.forEach(e => {
+/* 26-10-2026 — "la pagina no carga": las secciones con .reveal nacen con
+   opacidad 0 y solo se encienden cuando un IntersectionObserver las ve. Si ese
+   observador no existe o no dispara (navegador raro, WebView, error previo),
+   la pagina se queda EN BLANCO por debajo de la portada y parece que no carga.
+   Dos redes de seguridad, sin quitar la animacion:
+     1) si no hay IntersectionObserver, todo se muestra de golpe.
+     2) si lo hay pero en 2,5 s no ha avisado NI UNA VEZ, se muestra todo igual. */
+const reveladores = Array.from(document.querySelectorAll('.reveal'));
+const contadores = Array.from(document.querySelectorAll('[data-count]'));
+function mostrarTodo(){
+  reveladores.forEach(el => el.classList.add('visible'));
+  contadores.forEach(el => { const t = parseInt(el.dataset.count); if (!isNaN(t)) el.textContent = t + 'M'; });
+}
+// La red de seguridad mira si ALGUNA seccion se ha encendido: si a los 2,5 s
+// no hay ni una con .visible, es que el observador no esta haciendo su trabajo
+// (o la pestana estaba oculta) y se enciende todo. Si hay alguna, funciona y se
+// deja la animacion tranquila.
+setTimeout(function(){ if (!document.querySelector('.reveal.visible')) mostrarTodo(); }, 2500);
+let io = null, cio = null;
+if ('IntersectionObserver' in window) try {
+  io = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); io.unobserve(e.target); } });
+  }, { threshold: 0.12 });
+  reveladores.forEach(el => io.observe(el));
+} catch (e) { mostrarTodo(); }
+else { mostrarTodo(); }
+const counters = contadores;
+if (io) {
+  cio = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
     if (e.isIntersecting) {
       const el = e.target, target = parseInt(el.dataset.count), suffix = 'M';
       let cur = 0;
@@ -986,8 +1009,9 @@ const cio = new IntersectionObserver((entries) => {
       step(); cio.unobserve(el);
     }
   });
-}, { threshold: 0.5 });
-counters.forEach(c => cio.observe(c));
+  }, { threshold: 0.5 });
+  counters.forEach(c => cio.observe(c));
+}
 </script>
 <script>
 // Red de nodos GPU animada (fondo cyber del hero)
