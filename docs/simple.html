@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>KUKIA · versión simple</title>
+<!--
+  Página de rescate (26-10-2026). Existe porque la portada completa no abría en
+  los navegadores de Kuki y hacía falta algo que se pinte SIEMPRE: cero
+  JavaScript, cero vídeo, cero fuentes externas, cero peticiones de red. Si esta
+  página se abre y la portada no, el problema es la página (o el equipo), no la
+  conexión ni el dominio. Se puede borrar sin tocar nada más.
+-->
+<style>
+  :root{--oro:#e6bd4b;--mint:#22e08a;--texto:#e8f2ec;--texto2:#a9c2b4;--linea:#1d3a2b}
+  *{box-sizing:border-box}
+  body{margin:0;background:#050d0a;color:var(--texto);
+       font-family:'Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.65}
+  main{max-width:640px;margin:0 auto;padding:2.5rem 1.25rem 4rem}
+  h1{color:var(--oro);font-size:1.9rem;line-height:1.2;margin:0 0 .4rem}
+  h1 em{font-style:normal;color:var(--mint)}
+  .et{display:inline-block;font-size:.72rem;letter-spacing:.1em;text-transform:uppercase;
+      color:var(--oro);border:1px solid rgba(230,189,75,.4);border-radius:999px;
+      padding:.25rem .7rem;margin-bottom:1.4rem}
+  p{color:var(--texto2);margin:.8rem 0}
+  strong{color:var(--texto)}
+  ul{padding-left:1.1rem;color:var(--texto2)}
+  li{margin:.35rem 0}
+  a{color:var(--mint)}
+  .botones{display:flex;flex-wrap:wrap;gap:.7rem;margin:1.6rem 0 2rem}
+  .btn{display:inline-block;padding:.7rem 1.1rem;border-radius:10px;text-decoration:none;
+       font-weight:700;border:1px solid var(--linea)}
+  .principal{background:var(--mint);color:#04120b;border-color:var(--mint)}
+  .sec{background:rgba(11,26,19,.7);color:var(--texto)}
+  .pie{margin-top:2.5rem;padding-top:1rem;border-top:1px solid var(--linea);
+       font-size:.8rem;color:#7f9b8b}
+</style>
+</head>
+<body>
+<main>
+  <span class="et">● Fase de pruebas · KIA aún sin precio de mercado</span>
+  <h1>Convierte potencia de cálculo en <em>trabajo útil para la IA</em></h1>
+  <p><strong>KUKIA</strong> conecta ordenadores con CPU y GPU para ejecutar tareas de
+     computación verificables. Los participantes reciben KIA por el trabajo aceptado.
+     El proyecto está en fase de pruebas y KIA todavía no tiene precio de mercado.</p>
+
+  <div class="botones">
+    <a class="btn principal" href="minar.html">Quiero aportar mi ordenador</a>
+    <a class="btn sec" href="index.html">Ver la web completa</a>
+  </div>
+
+  <p><strong>Esta es la versión simple</strong>, sin vídeo ni animaciones. Si la web
+     completa no te abre, esta sí debería: si abre, el problema está en la página
+     pesada o en el equipo, no en la conexión.</p>
+
+  <h2 style="font-size:1rem;color:var(--oro);margin-top:2rem">Datos y documentos</h2>
+  <ul>
+    <li><a href="calculadora.html">Calculadora: cuánto valdría 1 KIA, con las cuentas a la vista</a></li>
+    <li><a href="minar.html">Cómo instalar el minero y empezar</a></li>
+    <li><a href="wallet.html">Billetera</a></li>
+    <li><a href="codigo.html">Código fuente completo</a></li>
+    <li><a href="kukia-node.zip">Paquete del nodo (zip)</a> · <a href="kukia-node.zip.sha256">huella SHA-256</a></li>
+    <li><a href="https://github.com/lordkukone/kukia-node" target="_blank" rel="noopener">Repositorio en GitHub</a></li>
+  </ul>
+
+  <div class="pie">
+    KUKIA · KIA no tiene precio de mercado. Proyecto en fase de pruebas.
+    Sin auditoría de seguridad independiente.
+  </div>
+</main>
+</body>
+</html>
