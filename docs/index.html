@@ -8,8 +8,98 @@
 <title>KUKIA · Convierte potencia de cálculo en trabajo útil para la IA</title>
 <meta name="description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
 <meta name="keywords" content="computación distribuida GPU, cómputo para IA, tareas verificables, minado útil, nodos de computación domésticos, KUKIA, KIA">
-<meta name="kukia-build" content="v1.3.7-freno">
+<meta name="kukia-build" content="v1.3.9-autolimpieza">
 <link rel="icon" href="moneda.jpg">
+<script>
+/* AUTOLIMPIEZA (26-10-2026). El visitante no tiene que saber nada: si la web
+   llega servida por un service worker viejo, o con caches atascadas, o con una
+   copia anterior a la que publica el servidor, la pagina se limpia y se recarga
+   ELLA SOLA una vez. Es lo que hacia que en el PC y en el movil se viera en
+   blanco mientras en una ventana recien estrenada se veia entera.
+
+   Reglas para no dar vueltas ni molestar a nadie:
+     - una sola limpieza por motivo y por sesion (sessionStorage),
+     - y ademas, si acabamos de recargar por esto (parametro limpio= con su t=),
+       no se repite en los primeros 20 s, aunque el navegador no deje usar
+       sessionStorage (incognito cerrado a cal y canto),
+     - si el visitante ya ha tocado la pantalla, no se limpia en esa carga: se
+       hara en la siguiente visita. Nunca se interrumpe a media lectura.
+   No se toca nada suyo: se borran las caches de la web (Cache API) y los
+   registros de service worker. localStorage (el freno de la animacion, por
+   ejemplo) se queda como estaba. */
+(function(){
+  var CLAVE = 'kukia_autolimpieza';
+  var interactuado = false;
+  try {
+    document.addEventListener('pointerdown', function(){ interactuado = true; }, {once:true, passive:true});
+    document.addEventListener('keydown', function(){ interactuado = true; }, {once:true});
+  } catch(e) {}
+
+  function intentoReciente(huella){
+    try { if(sessionStorage.getItem(CLAVE + ':' + huella)) return true; } catch(e) {}
+    var m = /[?&]t=(\d+)/.exec(location.search);
+    if(m && /[?&]limpio=/.test(location.search) && (Date.now() - parseInt(m[1], 10)) < 20000) return true;
+    return false;
+  }
+  function anotaIntento(huella){ try { sessionStorage.setItem(CLAVE + ':' + huella, '1'); } catch(e) {} }
+
+  function limpiarCaches(){
+    try {
+      if(!(window.caches && caches.keys)) return Promise.resolve(false);
+      return caches.keys().then(function(claves){
+        if(!claves.length) return false;
+        return Promise.all(claves.map(function(k){ return caches.delete(k); })).then(function(){ return true; });
+      }).catch(function(){ return false; });
+    } catch(e) { return Promise.resolve(false); }
+  }
+  function limpiarWorkers(){
+    try {
+      if(!('serviceWorker' in navigator) || !navigator.serviceWorker.getRegistrations) return Promise.resolve(false);
+      return navigator.serviceWorker.getRegistrations().then(function(regs){
+        if(!regs.length) return false;
+        return Promise.all(regs.map(function(r){ return r.unregister(); })).then(function(){ return true; });
+      }).catch(function(){ return false; });
+    } catch(e) { return Promise.resolve(false); }
+  }
+  function recargarLimpio(motivo, huella){
+    anotaIntento(huella);
+    try { console.log('[KUKIA] autolimpieza:', motivo); } catch(e) {}
+    location.replace(location.pathname + '?limpio=' + encodeURIComponent(String(huella).slice(0, 40))
+      + '&t=' + Date.now() + (location.hash || ''));
+  }
+
+  var controlada = false;
+  try { controlada = !!(navigator.serviceWorker && navigator.serviceWorker.controller); } catch(e) {}
+
+  if(!window.fetch || !window.Promise){
+    // Navegador muy antiguo: al menos se limpia, sin recargar.
+    limpiarWorkers(); limpiarCaches(); return;
+  }
+
+  Promise.all([limpiarWorkers(), limpiarCaches()]).then(function(res){
+    var habiaWorker = res[0], habiaCaches = res[1];
+    if(interactuado || intentoReciente('sw')) return;
+    if(controlada || habiaWorker || habiaCaches){
+      recargarLimpio(controlada ? 'esta pagina venia de un service worker viejo'
+        : (habiaWorker ? 'habia un service worker registrado' : 'habia caches atascadas'), 'sw');
+      return;
+    }
+    // Y si no habia nada guardado, se comprueba que la copia cargada sea la
+    // que publica el servidor (un proxy o una cache intermedia puede servir la
+    // de ayer aunque el navegador este limpio).
+    return fetch('version.json?_=' + Date.now(), {cache:'no-store'}).then(function(r){
+      return r.ok ? r.json() : null;
+    }).then(function(v){
+      if(!v || !v.v) return;
+      var meta = document.querySelector('meta[name="kukia-build"]');
+      var mio = meta ? meta.getAttribute('content') : '';
+      if(!mio || v.v === mio) return;
+      if(interactuado || intentoReciente(v.v)) return;
+      recargarLimpio('el HTML cargado (' + mio + ') no es el publicado (' + v.v + ')', v.v);
+    });
+  }).catch(function(){});
+})();
+</script>
 <script>document.documentElement.classList.add('js');</script>
 <style>
 /* ============================================================
@@ -293,9 +383,15 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
    pagina vacia. Aqui el contenido se ve siempre; solo se oculta cuando el
    propio navegador ha declarado que hay JS (clase .js en <html>). */
 .reveal{opacity:1;transform:none}
-.js .reveal{opacity:0;transform:translateY(18px);transition:opacity .5s ease,transform .5s ease}
+/* 26-10-2026 (2): FUERA la animacion que nacia con opacity:0.
+   Kuki veia la web EN BLANCO en el PC y en el movil, mientras que en una
+   ventana limpia se veia entera. El contenido solo se encendia desde
+   JavaScript: si ese script no llega a correr (copia vieja en cache, WebView,
+   extension, un error anterior), la pagina se queda vacia por debajo de la
+   portada y parece que "no carga". Una web no puede depender de un script
+   para ser visible ni para leerse: aqui el contenido se ve SIEMPRE.
+   La clase .visible la sigue poniendo el JS, pero ya no oculta nada. */
 .js .reveal.visible{opacity:1;transform:none}
-@media (prefers-reduced-motion:reduce){.js .reveal{opacity:1;transform:none}}
 </style>
 <!-- kukia-seo -->
 <meta name="robots" content="index,follow,max-image-preview:large">
@@ -1148,39 +1244,13 @@ if (io) {
   if(!apagado) programa();
 })();
 </script>
-<script>
-// Guardia contra la web vieja: GitHub Pages cachea el HTML unos minutos y habia
-// gente viendo una copia antigua (sin las graficas nuevas). Si la version del
-// HTML cargado no es la que publica el servidor, se recarga UNA vez con otro
-// parametro en la URL, que se salta la cache.
-(function(){
-  var meta = document.querySelector('meta[name="kukia-build"]');
-  var mio = meta ? meta.getAttribute('content') : '';
-  if(!mio || !window.fetch) return;
-  fetch('version.json?_=' + Date.now(), {cache:'no-store'}).then(function(r){
-    return r.ok ? r.json() : null;
-  }).then(function(v){
-    if(!v || !v.v || v.v === mio) return;
-    var clave = 'kukia_reload_' + v.v;
-    try {
-      if(sessionStorage.getItem(clave)) return;
-      sessionStorage.setItem(clave, '1');
-    } catch(e){}
-    location.replace(location.pathname + '?v=' + encodeURIComponent(v.v) + (location.hash || ''));
-  }).catch(function(){});
-})();
-</script>
-<script>
-// El service worker ya existia para la billetera, pero la portada no lo
-// registraba: quien no abria wallet.html seguia dependiendo de la cache del
-// navegador (GitHub Pages manda max-age=600 y el HTML viejo duraba 10 min).
-// Registrado aqui, todas las navegaciones van a RED primero y la copia vieja
-// deja de reaparecer.
-(function(){
-  if(!('serviceWorker' in navigator)) return;
-  navigator.serviceWorker.register('sw.js').catch(function(){});
-})();
-</script>
+<!-- La guardia contra la copia vieja vive ahora en la AUTOLIMPIEZA del <head>,
+     que ademas limpia service workers y caches sin que el visitante haga nada.
+     Aqui estaba la version antigua (recarga con ?v=), retirada el 26-10-2026
+     para no tener dos sitios haciendo lo mismo. -->
+<!-- El service worker se retira desde la AUTOLIMPIEZA del <head> (y desde
+     sw.js para los navegadores que aun no hayan leido este HTML). Un solo
+     sitio: el 26-10-2026 se quito de aqui el bloque duplicado. -->
 <!-- Verificador criptografico: comprueba la firma Ed25519 del sello ANTES de
      enseñar ninguna cifra. Va antes que el script de metricas porque ese lo usa
      en la primera vuelta (sin el, la web diria "DESCONECTADO" aunque haya datos). -->

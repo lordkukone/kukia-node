@@ -17,6 +17,10 @@ QUE HACE, cada 30 s (y al instante si un hijo suyo se muere):
      abriste tu a mano).
   3. Validador: si no esta, lo arranca (si existe el binario/identidad).
   4. Publicador de metricas: idem. Sin el, la web se queda con datos viejos.
+  5. Potencia medida: si el equipo TIENE GPU NVIDIA y el nodo lleva un rato
+     cobrando tareas pero no reporta ni un GFLOPS medido, AVISA (escritorio y
+     Telegram). Es el sintoma de un minero que arranco en CPU con la GPU
+     encendida: hasta ahora se podia quedar asi dias sin que nadie lo viera.
 
 NO toca el ledger, no firma nada y no toma decisiones de dinero: solo
 levanta procesos. Si se cae el propio guardia, no pasa nada: al volver a
@@ -37,6 +41,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -254,6 +259,184 @@ def _ya_corriendo(patron, ttl: float = 20.0) -> bool:
         encontrado = False
     _YA_CORRIENDO[clave] = (ahora, encontrado)
     return encontrado
+
+
+# --- GPU en el equipo sin potencia medida (26-10-2026) ---------------------
+# Lo que vigila esto: la maquina TIENE GPU NVIDIA pero el nodo no reporta ni un
+# GFLOPS medido. Dos causas conocidas: el minero arranco antes que el driver y
+# se quedo en CPU (el minero ya lo reintenta por su cuenta, ver _detectar_gpus
+# en worker/kukia_worker.py), o hay una GPU que no se esta usando. En los dos
+# casos el sintoma es el mismo y hasta hoy no se veia en ningun sitio.
+GPU_SIN_POTENCIA = (os.environ.get("KUKIA_GUARDIA_POTENCIA", "1") or "1") != "0"
+# Entre aviso y aviso: no es un fallo nuevo, es el mismo que sigue.
+POTENCIA_AVISO_SEG = float(os.environ.get("KUKIA_GUARDIA_POTENCIA_SEG", "1800"))
+# Margen antes de darlo por hecho, para no avisar por un arranque que aun no ha
+# terminado de calentar.
+POTENCIA_ESPERA_SEG = float(os.environ.get("KUKIA_GUARDIA_POTENCIA_ESPERA", "600"))
+
+_IDENTIDAD_MINERO = RAIZ / "worker" / "identidad_minero.json"
+_GPUS_EQUIPO = {"ts": 0.0, "nombres": []}
+_ULTIMO_AVISO_POTENCIA = 0.0
+
+TOAST = r"""
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$p = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$t = $p.GetElementsByTagName("text")
+$t.Item(0).AppendChild($p.CreateTextNode($env:KUKIA_TITULO)) | Out-Null
+$t.Item(1).AppendChild($p.CreateTextNode($env:KUKIA_TEXTO)) | Out-Null
+$a = "{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
+$n = [Windows.UI.Notifications.ToastNotification]::new($p)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($a).Show($n)
+"""
+
+
+def _gpus_del_equipo(ttl: float = 300.0) -> list:
+    """Nombres de las GPU NVIDIA que ve el DRIVER (nvidia-smi), con cache.
+
+    Se le pregunta al driver y no a torch a proposito: el driver sabe si la
+    tarjeta esta fisicamente ahi aunque CUDA (o torch) no la vean, que es justo
+    el caso que hay que detectar. Si nvidia-smi no existe o no responde, la
+    lista va vacia y no se avisa de nada: mejor callar que inventar.
+    """
+    ahora = time.time()
+    if _GPUS_EQUIPO["nombres"] and ahora - _GPUS_EQUIPO["ts"] < ttl:
+        return _GPUS_EQUIPO["nombres"]
+    nombres = []
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                           capture_output=True, text=True, timeout=8,
+                           creationflags=SIN_VENTANA)
+        if r.returncode == 0:
+            nombres = [l.strip() for l in (r.stdout or "").splitlines() if l.strip()]
+    except Exception:
+        nombres = []
+    _GPUS_EQUIPO.update(ts=ahora, nombres=nombres)
+    return nombres
+
+
+def _ids_mineros_propios() -> set:
+    """Ids de los nodos de ESTE equipo (los escribe el minero al registrarse)."""
+    try:
+        d = json.loads(_IDENTIDAD_MINERO.read_text(encoding="utf-8"))
+        return {str(v.get("id")) for v in d.values()
+                if isinstance(v, dict) and v.get("id")}
+    except Exception:
+        return set()
+
+
+def _potencia_reportada() -> dict:
+    """Lo que el nodo dice medido: por tarea y en el benchmark de arranque.
+
+    `gflops_medido` lo calcula el Core con el tiempo REAL de cada tarea (no es
+    una cifra declarada por el minero). `gflops_base` es la medida que el
+    minero hace con sus propias cuentas al arrancar y manda en la telemetria.
+    Cualquiera de las dos > 0 significa que el nodo SI reporta potencia
+    medida. Nunca lanza: sin Core devuelve cero y se reintenta en la vuelta
+    siguiente.
+    """
+    ids = _ids_mineros_propios()
+    salida = {"por_tarea": 0.0, "benchmark": 0.0, "nodos": 0}
+    if not ids:
+        return salida
+    # Uno por uno (/nodos/<id>): son los 2-3 nodos de este equipo y la
+    # respuesta es una fila. Pedir la lista entera (hasta 1000 nodos) cada 30 s
+    # solo para mirar los mios seria castigar al Core por gusto.
+    for nid in sorted(ids):
+        try:
+            n = _peticion(f"/nodos/{urllib.parse.quote(str(nid))}") or {}
+        except Exception:
+            continue
+        salida["nodos"] += 1
+        salida["por_tarea"] = max(salida["por_tarea"],
+                                  float(n.get("gflops_medido") or 0.0))
+    try:
+        for t in (_peticion("/red/telemetria") or {}).get("telemetria") or []:
+            if str(t.get("nodo_id")) not in ids:
+                continue
+            try:
+                m = json.loads(t.get("metricas") or "{}")
+            except Exception:
+                continue
+            salida["benchmark"] = max(salida["benchmark"],
+                                      float(m.get("gflops_base") or 0.0))
+    except Exception:
+        pass
+    return salida
+
+
+def _avisar(titulo: str, texto: str) -> bool:
+    """Aviso al escritorio (Windows) y al movil (Telegram). Nunca lanza.
+
+    Mismo camino que `tools/vigilante_servicios.py`: los dos canales son
+    independientes a proposito, asi que aunque el PC este sin sesion (el toast
+    no se ve) el movil sigue sonando. Sin Telegram configurado
+    (`python tools/avisos.py --configurar`) queda el aviso de Windows y el log.
+    """
+    hecho = False
+    if os.name == "nt":
+        entorno = dict(os.environ, KUKIA_TITULO=titulo, KUKIA_TEXTO=texto)
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
+                                "-Command", TOAST],
+                               capture_output=True, text=True, timeout=30,
+                               env=entorno, creationflags=SIN_VENTANA)
+            hecho = r.returncode == 0
+        except Exception:
+            hecho = False
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import avisos as _avisos
+        hecho = _avisos.enviar(titulo, texto) or hecho
+    except Exception:
+        pass
+    return hecho
+
+
+def _aviso_potencia(stats: dict, estado, verbose: bool = False,
+                    gpus=None, medido=None):
+    """Avisa si el equipo tiene GPU y el nodo no reporta potencia medida.
+
+    Devuelve el texto del aviso, o None si no habia nada que avisar. `gpus` y
+    `medido` se pueden inyectar para probarlo sin depender de la maquina: la
+    prueba esta en tools/prueba_aviso_potencia_gpu.py.
+    """
+    global _ULTIMO_AVISO_POTENCIA
+    if not GPU_SIN_POTENCIA:
+        return None
+    nombres = list(gpus) if gpus is not None else _gpus_del_equipo()
+    if not nombres:
+        return None                      # no hay GPU: no hay nada que reclamar
+    # Solo se avisa si el nodo esta COBRANDO tareas. Si no cobra, ese es el
+    # problema y lo llevan los apartados de arriba (relanzar el minero).
+    pagando = (estado.ultimo_ok_ts > 0
+               and (time.time() - estado.ultimo_ok_ts) < POTENCIA_ESPERA_SEG)
+    if not pagando:
+        if verbose:
+            log("[gpu] hay GPU pero el nodo no lleva tareas pagadas: no se avisa")
+        return None
+    p = dict(medido) if medido is not None else _potencia_reportada()
+    if float(p.get("por_tarea") or 0.0) > 0 or float(p.get("benchmark") or 0.0) > 0:
+        _ULTIMO_AVISO_POTENCIA = 0.0     # ha vuelto a medir: el proximo fallo avisa
+        if verbose:
+            log(f"[gpu] potencia medida OK ({p.get('por_tarea')} GFLOPS/tarea, "
+                f"{p.get('benchmark')} GFLOPS de benchmark)")
+        return None
+    ahora = time.time()
+    if ahora - _ULTIMO_AVISO_POTENCIA < POTENCIA_AVISO_SEG:
+        return None                      # ya se aviso hace poco del mismo fallo
+    _ULTIMO_AVISO_POTENCIA = ahora
+    texto = (f"El equipo tiene {len(nombres)} GPU NVIDIA ({', '.join(nombres)}) pero el "
+             f"nodo no reporta potencia medida: 0 GFLOPS por tarea y 0 de benchmark. "
+             f"Se esta minando en CPU, o las tareas no llegan a la GPU. Comprueba "
+             f"'nvidia-smi' y reinicia el minero. Si es a proposito, "
+             f"KUKIA_GUARDIA_POTENCIA=0 lo desactiva.")
+    log(f"[gpu] AVISO: {texto}")
+    try:
+        _avisar("KUKIA: GPU sin potencia medida", texto)
+    except Exception:
+        pass
+    return texto
 
 
 class Hijo:
@@ -660,6 +843,15 @@ def ciclo(hijos: dict, estado: Estado, verbose: bool) -> int:
         if h is not None and not h.vivo() and not h.caido():
             if h.arrancar():
                 problemas += 1
+
+    # 4. GPU en el equipo sin potencia medida. Este sintoma no se veia en
+    #    ningun sitio: la maquina minaba en CPU con las GPU encendidas dias
+    #    enteros y el log parecia normal.
+    if stats:
+        try:
+            _aviso_potencia(stats, estado, verbose)
+        except Exception as e:
+            log(f"[gpu] no pude comprobar la potencia medida ({type(e).__name__}: {e})")
 
     if verbose:
         log(f"[ok] nodos={stats.get('nodos')} cola={stats.get('tareas_pend')} "

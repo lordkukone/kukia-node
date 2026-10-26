@@ -577,6 +577,12 @@ function saldo(){
   });
 }
 </script>
-<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js');}</script>
+<script>/* 26-10-2026 - la billetera YA NO usa service worker. El worker que habia
+   guardaba copias de la web y te seguia sirviendo la de ayer (portada en blanco
+   en el PC y en el movil). Ahora solo se desmonta lo que hubiera quedado. */
+if('serviceWorker' in navigator && navigator.serviceWorker.getRegistrations){
+  navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){r.unregister();});}).catch(function(){});
+}
+if(window.caches && caches.keys){caches.keys().then(function(cs){cs.forEach(function(c){caches.delete(c);});}).catch(function(){});}</script>
 </body>
 </html>
