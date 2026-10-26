@@ -1,8 +1,8 @@
 {
   "v": "v1.3.2-video-precio",
-  "generado": "2026-10-26 12:57:12",
+  "generado": "2026-10-26 13:04:12",
   "core": "0.4.4",
   "zip": "kukia-node.zip",
-  "zip_sha256": "adecec9f018fe1f6143ab9a97624942d57eae72c617941425a92f3907f48a462",
+  "zip_sha256": "56d12f344d911490e607a3b2a9c8ee5db1c0c307d4a2584eacf7b91c6b1a3b34",
   "verificar": "Descarga kukia-node.zip y ejecuta 'sha256sum kukia-node.zip' (Windows: 'certutil -hashfile kukia-node.zip SHA256'): tiene que dar el zip_sha256 de este fichero. La version del Core se ve en http://127.0.0.1:8300/version, que ademas publica el hash de cada fichero que esta ejecutando."
 }

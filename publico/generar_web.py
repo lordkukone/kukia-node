@@ -306,21 +306,20 @@ def generar_zip(destino: Path) -> Path:
                 raise SystemExit(f"[generar_web] ABORTADO: {rel} no puede publicarse "
                                  f"(clave, base de datos o registro)")
             _meter(z, rel, ruta.read_bytes())
-        # Anclas en Bitcoin: se incluyen para que cualquiera pueda verificar el
-        # historial sin pedirnos nada (son 2 KB y no llevan ningun secreto).
-        #
-        # PERO las pruebas `.ots` NO entran (26-10-2026). No son fijas: mientras
-        # el sello espera confirmacion, `ots upgrade` reescribe el fichero en
-        # cuanto el bloque de Bitcoin llega. Eso hacia que el hash del paquete
-        # cambiase SIN que cambiase una linea de codigo, y que el zip publicado
-        # no cuadrase con lo que hay en disco (siete .ots distintos con el mismo
-        # codigo). Fuera del paquete, el hash depende solo del codigo; las
-        # pruebas siguen enteras y publicas en el repositorio (anclas/*.ots).
-        for ruta in sorted((RAIZ / "anclas").glob("kukia_sello_*")):
-            if ruta.suffix == ".ots":
-                continue
-            if ruta.is_file():
-                _meter(z, str(ruta.relative_to(RAIZ)), ruta.read_bytes())
+        # BAJO NINGUN CONCEPTO entran las anclas (26-10-2026). Antes se
+        # colaban los `anclas/kukia_sello_<N>.txt` "para que cualquiera pudiera
+        # verificar el historial sin pedirnos nada", y luego se quitaron los
+        # `.ots`. No basta con eso: la carpeta entera cambia SOLA. Cada sello
+        # nuevo anade un `.txt` (la guardia sella cada ~10 minutos) y cada
+        # `ots upgrade` reescribe un `.ots`. Resultado medido: el SHA-256 del
+        # paquete cambiaba cada pocos minutos sin que cambiase una sola linea
+        # de codigo, asi que la huella publicada en version.json dejaba de
+        # cuadrar con nada. Con la carpeta fuera, el hash depende UNICAMENTE
+        # del codigo: si no se toca el codigo, la huella es la misma hoy y
+        # manana. Los anclajes no se pierden: siguen enteros en el repositorio
+        # (anclas/*.txt, los .ots y anclas/registro.jsonl) y ANCLAJE.md, que si
+        # va en el paquete, explica donde estan y como se verifican.
+        pass
     return salida
 
 

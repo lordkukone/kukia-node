@@ -89,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>adecec9f018fe1f6143ab9a97624942d57eae72c617941425a92f3907f48a462</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>56d12f344d911490e607a3b2a9c8ee5db1c0c307d4a2584eacf7b91c6b1a3b34</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -15819,6 +15819,18 @@ pruebas pendientes. No hace falta acordarse de nada.
 El `.txt` no se puede tocar después: `--verificar` recalcula su sha256 y, si no
 coincide con el anclado, lo dice (`el .txt NO coincide con el anclado`). **Eso es
 justo lo que se quiere**: el ancla deja de valer si alguien edita el contenido.
+
+### Dónde están: en el repositorio, no en el paquete descargable
+
+La carpeta `anclas/` vive en el repositorio (`anclas/` en
+`github.com/lordkukone/kukia-node`), no dentro de `kukia-node.zip`. No es un
+descuido: sus ficheros cambian **solos**, sin que nadie toque el código (cada
+sello nuevo añade un `.txt` y cada `ots upgrade` reescribe un `.ots`). Si
+viajaran en el paquete, su huella SHA-256 cambiaría cada pocos minutos y la
+huella publicada en `version.json` dejaría de servir para comprobar nada. Fuera
+de él, la huella del paquete depende solo del código. Los anclajes siguen
+enteros, públicos y verificables con los comandos de arriba apuntando a esa
+carpeta del repositorio.
 
 ## Cómo se verifica (sin confiar en este PC)
 
