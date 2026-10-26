@@ -10,7 +10,15 @@
 // estaticos: quien ya habia entrado una vez seguia viendo las cifras —y el
 // precio— del primer dia, aunque el servidor ya tuviera las nuevas. Se sube la
 // version para tirar las caches v4 que ya tienen esos JSON dentro.
-var CACHE = 'kukia-wallet-v5';
+// v6 (2026-10-26): dos arreglos de "la pagina no carga":
+//   1) si no habia red, CUALQUIER navegacion caia en wallet.html, asi que a
+//      quien le fallara la portada (por ejemplo mientras se publicaba) le
+//      aparecia la billetera, que se ve como si la web estuviera rota. Ahora
+//      cae en la copia de ESA misma pagina y, si no hay, en un aviso.
+//   2) el install usaba addAll (todo o nada): un solo fichero que faltara
+//      dejaba el worker viejo para siempre. Ahora entra igual y la cache se
+//      completa con lo que haya.
+var CACHE = 'kukia-wallet-v6';
 var ASSETS = [
   'wallet.html',
   'manifest.json',
@@ -20,9 +28,23 @@ var ASSETS = [
   'wordlist.txt'
 ];
 
+// Aviso minimo para cuando NO hay red y esa pagina no esta en la cache.
+var AVISO_SIN_RED = '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">' +
+  '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+  '<title>KUKIA | sin conexion</title></head>' +
+  '<body style="font-family:system-ui,sans-serif;background:#050d0a;color:#e8f2ec;' +
+  'margin:0;padding:2rem;text-align:center">' +
+  '<h1 style="color:#e6bd4b">Sin conexion</h1>' +
+  '<p>No hay red y esta pagina no estaba guardada en tu navegador.</p>' +
+  '<p><a href="" style="color:#22e08a">Reintentar</a></p></body></html>';
+
 self.addEventListener('install', function(e) {
   self.skipWaiting();
-  e.waitUntil(caches.open(CACHE).then(function(c) { return c.addAll(ASSETS); }));
+  e.waitUntil(caches.open(CACHE).then(function(c) {
+    return Promise.all(ASSETS.map(function(u) {
+      return c.add(u).catch(function() { /* lo que falte no bloquea al worker nuevo */ });
+    }));
+  }));
 });
 
 self.addEventListener('activate', function(e) {
@@ -47,7 +69,15 @@ self.addEventListener('fetch', function(e) {
       return r;
     }).catch(function() {
       return caches.match(e.request).then(function(r) {
-        return r || caches.match('wallet.html');
+        if (r) return r;
+        if (/wallet/i.test(url.pathname)) {
+          return caches.match('wallet.html').then(function(w) {
+            return w || new Response(AVISO_SIN_RED, {status: 200,
+              headers: {'content-type': 'text/html; charset=utf-8'}});
+          });
+        }
+        return new Response(AVISO_SIN_RED, {status: 200,
+          headers: {'content-type': 'text/html; charset=utf-8'}});
       });
     }));
     return;

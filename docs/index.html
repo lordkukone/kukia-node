@@ -8,7 +8,7 @@
 <title>KUKIA · Convierte potencia de cálculo en trabajo útil para la IA</title>
 <meta name="description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
 <meta name="keywords" content="computación distribuida GPU, cómputo para IA, tareas verificables, minado útil, nodos de computación domésticos, KUKIA, KIA">
-<meta name="kukia-build" content="v1.3.2-video-precio">
+<meta name="kukia-build" content="v1.3.3-carga-ligera">
 <link rel="icon" href="moneda.jpg">
 <script>document.documentElement.classList.add('js');</script>
 <style>
@@ -992,6 +992,12 @@ counters.forEach(c => cio.observe(c));
     W = cv.width = r.width; H = cv.height = r.height;
   }
   window.addEventListener('resize', resize); resize();
+  // AUDITORIA 26-10-2026: esta animacion repintaba para siempre, incluso con la
+  // portada fuera de pantalla o la pestana en segundo plano. En un PC que esta
+  // minando, sumar un rAF eterno con shadowBlur se nota: el navegador se queda
+  // a tirones y parece que la web "no carga". Ahora solo dibuja cuando de
+  // verdad se ve, y al volver a verla se reanuda sola. El dibujo es el mismo.
+  var visible = true, programado = false;
   var N = 45;
   for(var i=0;i<N;i++){
     nodes.push({x: Math.random(), y: Math.random(),
@@ -999,6 +1005,8 @@ counters.forEach(c => cio.observe(c));
       r: 1.5+Math.random()*2.2, gpu: Math.random() < 0.25});
   }
   function frame(){
+    programado = false;
+    if(document.hidden || !visible) return;
     ctx.clearRect(0,0,W,H);
     var i, j, a, b, dx, dy, d;
     for(i=0;i<nodes.length;i++){
@@ -1035,9 +1043,19 @@ counters.forEach(c => cio.observe(c));
         ctx.beginPath(); ctx.arc(a.x*W, a.y*H, a.r, 0, 6.283); ctx.fill();
       }
     }
-    requestAnimationFrame(frame);
+    programa();
   }
-  frame();
+  function programa(){
+    if(!programado){ programado = true; requestAnimationFrame(frame); }
+  }
+  if('IntersectionObserver' in window){
+    new IntersectionObserver(function(es){
+      visible = !!(es[0] && es[0].isIntersecting);
+      if(visible) programa();
+    },{threshold:0}).observe(cv);
+  }
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden) programa(); });
+  programa();
 })();
 </script>
 <script>
