@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KUKIA · qué falla en tu navegador</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*">
+<!--
+  PÁGINA DE DIAGNÓSTICO (26-10-2026).
+
+  Para qué existe: la web carga bien desde el PC donde se publica (comprobado con
+  curl y con un perfil limpio), pero en los navegadores de Kuki no abría del todo.
+  Como no se puede mirar su pantalla, esta página hace las mismas comprobaciones
+  QUE LA PORTADA, una por una, y enseña en qué paso se rompe. Además limpia de
+  verdad: retira service workers, borra cachés y recarga.
+
+  No depende de nada: ni librerías, ni fuentes, ni vídeo. Si el JavaScript no
+  corre, lo dice y eso YA es el diagnóstico.
+-->
+<style>
+  :root{--oro:#e6bd4b;--mint:#22e08a;--rojo:#ff6b6b;--texto:#e8f2ec;--texto2:#a9c2b4;--linea:#1d3a2b;--panel:#0b1a13}
+  *{box-sizing:border-box}
+  body{margin:0;background:#050d0a;color:var(--texto);font-family:'Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.6}
+  main{max-width:760px;margin:0 auto;padding:1.5rem 1rem 3rem}
+  h1{color:var(--oro);font-size:1.45rem;margin:0 0 .3rem;line-height:1.25}
+  p.intro{color:var(--texto2);margin:0 0 1.2rem;font-size:.95rem}
+  .botones{display:flex;flex-wrap:wrap;gap:.6rem;margin:0 0 1.4rem}
+  button{font:inherit;font-weight:700;padding:.85rem 1.15rem;border-radius:12px;border:1px solid var(--linea);
+          background:#0e2118;color:var(--texto);cursor:pointer}
+  button.principal{background:var(--mint);color:#04180e;border-color:var(--mint)}
+  button:hover{filter:brightness(1.1)}
+  .veredicto{border:1px solid var(--linea);background:var(--panel);border-radius:14px;padding:1rem;margin:0 0 1.2rem;font-size:1.02rem}
+  .veredicto b{color:var(--oro)}
+  .veredicto.mal{border-color:var(--rojo)}
+  .veredicto.bien{border-color:var(--mint)}
+  ul.lista{list-style:none;padding:0;margin:0}
+  ul.lista li{border-top:1px solid var(--linea);padding:.6rem 0;font-size:.94rem}
+  ul.lista li:first-child{border-top:0}
+  .marca{display:inline-block;min-width:1.4rem;font-weight:700}
+  .ok{color:var(--mint)}
+  .mal{color:var(--rojo)}
+  .ojo{color:var(--oro)}
+  .detalle{color:var(--texto2);display:block;font-size:.86rem;white-space:pre-wrap}
+  h2{font-size:1rem;color:var(--oro);margin:1.6rem 0 .5rem}
+  pre{background:#08150f;border:1px solid var(--linea);border-radius:10px;padding:.8rem;overflow-x:auto;
+      font-size:.78rem;color:var(--texto2);max-height:16rem}
+  a{color:var(--mint)}
+  .sinscript{border:1px solid var(--rojo);border-radius:12px;padding:1rem;margin:1rem 0}
+</style>
+<!-- kukia-seo -->
+<meta name="robots" content="noindex,follow">
+<meta name="google-site-verification" content="9d6cb22812b81092">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="KUKIA Network">
+<meta property="og:locale" content="es_ES">
+<meta property="og:url" content="https://lordkukone.github.io/kukia-node/estado">
+<meta property="og:title" content="KUKIA · qué falla en tu navegador">
+<meta property="og:description" content="">
+<meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="KUKIA · qué falla en tu navegador">
+<meta name="twitter:description" content="">
+<meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<script type="application/ld+json">
+{
+ "@context": "https://schema.org",
+ "@graph": [
+  {
+   "@type": "WebSite",
+   "@id": "https://lordkukone.github.io/kukia-node/#sitio",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "name": "KUKIA Network",
+   "alternateName": "KUKIA",
+   "inLanguage": "es",
+   "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
+   "publisher": {
+    "@id": "https://lordkukone.github.io/kukia-node/#organizacion"
+   }
+  },
+  {
+   "@type": "Organization",
+   "@id": "https://lordkukone.github.io/kukia-node/#organizacion",
+   "name": "KUKIA Network",
+   "url": "https://lordkukone.github.io/kukia-node/",
+   "logo": {
+    "@type": "ImageObject",
+    "url": "https://lordkukone.github.io/kukia-node/moneda.jpg",
+    "width": 512,
+    "height": 512
+   }
+  },
+  {
+   "@type": "WebPage",
+   "@id": "https://lordkukone.github.io/kukia-node/estado#pagina",
+   "url": "https://lordkukone.github.io/kukia-node/estado",
+   "name": "KUKIA · qué falla en tu navegador",
+   "inLanguage": "es",
+   "isPartOf": {
+    "@id": "https://lordkukone.github.io/kukia-node/#sitio"
+   }
+  }
+ ]
+}
+</script>
+<!-- /kukia-seo -->
+</head>
+<body>
+<main>
+  <h1>Qué falla en tu navegador</h1>
+  <p class="intro">Esta página no es la web: hace las mismas comprobaciones que la portada, una por una,
+     para ver en cuál se rompe. Nada de lo que hace aquí toca tu billetera ni tus claves.</p>
+
+  <noscript>
+    <div class="sinscript">
+      <b>Tu navegador está bloqueando el JavaScript.</b> Eso ya es el diagnóstico: la portada de KUKIA
+      necesita JavaScript para pintar los datos. Revisa la configuración del navegador (bloqueo de
+      scripts, extensiones tipo NoScript) y vuelve a entrar.
+    </div>
+  </noscript>
+
+  <div class="botones">
+    <button class="principal" id="b-reparar" type="button">Reparar ahora</button>
+    <button id="b-copiar" type="button">Copiar el informe</button>
+    <button id="b-recargar" type="button">Recargar en limpio</button>
+    <a href="./" style="align-self:center">Ir a la portada</a>
+    <a href="simple.html" style="align-self:center">Versión simple</a>
+  </div>
+
+  <div class="veredicto" id="veredicto">Comprobando…</div>
+  <ul class="lista" id="lista"></ul>
+
+  <h2>Informe (para copiar y pegar)</h2>
+  <pre id="informe">…</pre>
+</main>
+
+<script>
+(function(){
+  'use strict';
+  var salida = [];
+  var problemas = [];
+  var avisos = [];
+
+  function linea(estado, titulo, detalle){
+    var li = document.createElement('li');
+    var clase = estado === 'ok' ? 'ok' : (estado === 'mal' ? 'mal' : 'ojo');
+    li.innerHTML = '<span class="marca ' + clase + '">' +
+      (estado === 'ok' ? '✔' : (estado === 'mal' ? '✘' : '!')) + '</span> <b>' +
+      titulo.replace(/</g, '&lt;') + '</b>' +
+      (detalle ? '<span class="detalle">' + String(detalle).replace(/</g, '&lt;') + '</span>' : '');
+    document.getElementById('lista').appendChild(li);
+    salida.push((estado === 'ok' ? 'OK   ' : (estado === 'mal' ? 'FALLO ' : 'AVISO ')) + titulo +
+                (detalle ? '  |  ' + detalle : ''));
+  }
+  function muda(que, titulo, detalle){ problemas.push(que); linea('mal', titulo, detalle); }
+  function ojo(que, titulo, detalle){ avisos.push(que); linea('ojo', titulo, detalle); }
+  function bien(titulo, detalle){ linea('ok', titulo, detalle); }
+
+  function edad(seg){
+    if(seg < 90) return seg.toFixed(0) + ' s';
+    if(seg < 5400) return (seg / 60).toFixed(0) + ' min';
+    if(seg < 172800) return (seg / 3600).toFixed(0) + ' h';
+    return (seg / 86400).toFixed(0) + ' dias';
+  }
+
+  function versionMia(){
+    var m = document.querySelector('meta[name="kukia-build"]');
+    return m ? m.getAttribute('content') : '';
+  }
+
+  function pintarVeredicto(){
+    var caja = document.getElementById('veredicto');
+    if(problemas.length){
+      caja.className = 'veredicto mal';
+      caja.innerHTML = '<b>Hay un problema y tiene arreglo desde aquí.</b> ' +
+        'Pulsa <b>Reparar ahora</b>: retira la copia vieja que tenga tu navegador y vuelve a cargar. ' +
+        'Si despues de eso sigue igual, copia el informe de abajo y mandalo.';
+    } else if(avisos.length){
+      caja.className = 'veredicto';
+      caja.innerHTML = '<b>Funciona, con algún aviso.</b> Los datos llegan; mira los avisos de la lista.';
+    } else {
+      caja.className = 'veredicto bien';
+      caja.innerHTML = '<b>Todo correcto en este navegador.</b> La portada te tiene que funcionar.';
+    }
+    document.getElementById('informe').textContent =
+      'KUKIA · informe desde ' + location.href + '\n' + salida.join('\n');
+  }
+
+  function ejecutar(){
+    // 1. La copia que te ha llegado
+    var mio = versionMia();
+    linea(mio ? 'ok' : 'mal', 'Copias que te ha llegado la web: ' + (mio || 'no lo dice'),
+          mio ? 'puede estar guardada en tu navegador y ser vieja; se comprueba en el punto 2'
+              : 'la pagina no declara su version: es una copia vieja de hace semanas');
+
+    // 2. La copia de verdad
+    fetch('version.json?_=' + Date.now(), {cache:'no-store'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(v){
+        var publicado = v && v.v ? v.v : '';
+        if(!publicado){ ojo('version.json', 'El servidor no dice que version publica',
+                            'no se pudo leer version.json en este dominio'); }
+        else if(!mio){ /* ya avisado arriba */ }
+        else if(publicado === mio){ bien('Tu copia esta al dia', 'servidor y navegador dicen ' + mio); }
+        else { muda('copia-vieja', 'Tu navegador tiene una copia VIEJA de la web',
+                    'la tuya dice ' + mio + ' y el servidor publica ' + publicado +
+                    '.\nLo arregla el boton Reparar ahora.'); }
+
+        // 3. El fichero con hash de integridad (lo que dejaba la web sin datos)
+        var tieneNacl = (typeof window.nacl !== 'undefined' && window.nacl && window.nacl.sign);
+        if(tieneNacl){ bien('El verificador de sellos (nacl) esta cargado'); }
+        else {
+          muda('nacl', 'El navegador NO ha cargado nacl.min.js',
+               'Sin el no se pueden verificar los sellos y la portada se queda en DESCONECTADO sin datos.' +
+               '\nCausa habitual: tiene guardada una copia vieja de ese fichero y el hash de seguridad no cuadra' +
+               ' (el navegador lo bloquea en silencio).\nMira la consola: "Failed to find a valid digest ...".' +
+               '\nLo arregla el boton Reparar ahora.');
+        }
+
+        // 4. Service workers y caches
+        return navigator.serviceWorker && navigator.serviceWorker.getRegistrations
+          ? navigator.serviceWorker.getRegistrations() : [];
+      })
+      .then(function(regs){
+        if(regs && regs.length){
+          muda('service-worker', 'Tienes ' + regs.length + ' service worker del dominio',
+               regs.map(function(r){ return r.active ? r.active.scriptURL : '(inactivo)'; }).join('\n') +
+               '\nUn worker viejo sirve su propia copia de la web: es la causa numero uno de "no carga".' +
+               '\nLo arregla el boton Reparar ahora.');
+        } else { bien('Ningun service worker registrado'); }
+        if(!(window.caches && caches.keys)){ bien('Este navegador no usa cache de aplicacion'); return []; }
+        return caches.keys();
+      })
+      .then(function(claves){
+        if(claves && claves.length){
+          muda('caches', 'Tienes ' + claves.length + ' cache(s) guardada(s) del dominio',
+               claves.join(', ') + '\nSe borran con el boton Reparar ahora.');
+        } else { bien('Ninguna cache guardada del dominio'); }
+
+        // 5. El relevo publico (los datos en vivo)
+        return fetch('metricas.json?_=' + Date.now(), {cache:'no-store'})
+          .then(function(r){ return r.ok ? r.json() : null; });
+      })
+      .then(function(cfg){
+        if(!cfg || !cfg.api){
+          ojo('rele-config', 'No se pudo leer la configuracion del relevo', 'metricas.json');
+          return null;
+        }
+        var api = String(cfg.api).replace(/\/+$/, '');
+        return fetch(api + '/api/metricas?_=' + Date.now(), {cache:'no-store'})
+          .then(function(r){
+            if(!r.ok){ ojo('rele', 'El relevo de datos responde ' + r.status, api); return null; }
+            return r.json();
+          })
+          .then(function(d){
+            if(!d) return null;
+            var ts = Number(d.ts || 0);
+            var seg = ts ? (Date.now() / 1000 - ts) : 1e9;
+            if(seg < 180){
+              var s = (d.stats || {});
+              bien('El relevo responde y los datos son de ahora',
+                   'hace ' + edad(seg) + ' · nodos ' + (s.nodos !== undefined ? s.nodos : '?') +
+                   ' · tareas ' + (s.tareas_ok !== undefined ? s.tareas_ok : '?'));
+            } else {
+              ojo('rele-viejo', 'El relevo responde pero el dato es antiguo',
+                  'el ultimo dato es de hace ' + edad(seg) + ' (minero parado o Core caido)');
+            }
+            return null;
+          })
+          .catch(function(e){
+            muda('rele', 'No se puede pedir datos al relevo',
+                 api + '\n' + e.name + ': ' + e.message +
+                 '\nSi estas detras de un VPN, un filtro DNS o un bloqueador que corte dominios raros,' +
+                 ' es lo primero que hay que mirar.');
+            return null;
+          });
+      })
+      .catch(function(e){
+        muda('excepcion', 'Fallo al comprobar: ' + e.name, e.message);
+      })
+      .then(function(){
+        // 6. La instantanea de respaldo (mismo dominio, sin CORS)
+        return fetch('metricas_snapshot.json?_=' + Date.now(), {cache:'no-store'})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(d){
+            var ts = d && Number(d.ts || 0);
+            if(ts){
+              var seg = Date.now() / 1000 - ts;
+              bien('Hay instantanea de respaldo del propio dominio', 'la ultima es de hace ' + edad(seg));
+            } else { ojo('snapshot', 'No hay instantanea de respaldo legible'); }
+          })
+          .catch(function(){ ojo('snapshot', 'No se pudo leer la instantanea de respaldo'); });
+      })
+      .then(function(){
+        // 7. Lo que el navegador se guardo de antes
+        try {
+          var g = localStorage.getItem('kukia_ultimo_dato');
+          if(g){
+            var d = JSON.parse(g);
+            var seg = (Date.now() - Number(d.t || 0)) / 1000;
+            bien('Hay un ultimo dato guardado en este navegador', 'de hace ' + edad(seg));
+          }
+        } catch(e){}
+        // 8. Entorno
+        var c = navigator.connection || {};
+        bien('Entorno', 'navegador: ' + navigator.userAgent +
+             '\npantalla: ' + window.innerWidth + 'x' + window.innerHeight +
+             ' · ahorro de datos: ' + (c.saveData ? 'SI' : 'no') +
+             ' · red: ' + (c.effectiveType || '?') +
+             ' · pestana en segundo plano: ' + (document.hidden ? 'SI' : 'no'));
+        pintarVeredicto();
+      });
+  }
+
+  function limpiar(){
+    var tareas = [];
+    try {
+      if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+        tareas.push(navigator.serviceWorker.getRegistrations().then(function(rs){
+          return Promise.all(rs.map(function(r){ return r.unregister(); }));
+        }).catch(function(){}));
+      }
+    } catch(e){}
+    try {
+      if(window.caches && caches.keys){
+        tareas.push(caches.keys().then(function(ks){
+          return Promise.all(ks.map(function(k){ return caches.delete(k); }));
+        }).catch(function(){}));
+      }
+    } catch(e){}
+    return Promise.all(tareas);
+  }
+
+  document.getElementById('b-reparar').addEventListener('click', function(){
+    var b = this;
+    b.disabled = true;
+    b.textContent = 'Reparando...';
+    limpiar().then(function(){
+      location.replace(location.pathname + '?reparado=' + Date.now());
+    });
+  });
+
+  document.getElementById('b-recargar').addEventListener('click', function(){
+    limpiar().then(function(){ location.reload(); });
+  });
+
+  document.getElementById('b-copiar').addEventListener('click', function(){
+    var b = this, texto = document.getElementById('informe').textContent;
+    function hecho(){ b.textContent = 'Copiado'; setTimeout(function(){ b.textContent = 'Copiar el informe'; }, 2500); }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(texto).then(hecho, function(){ seleccionar(texto); });
+    } else { seleccionar(texto); }
+    function seleccionar(t){
+      var ta = document.createElement('textarea');
+      ta.value = t;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); hecho(); } catch(e){ b.textContent = 'Copia a mano el informe'; }
+      document.body.removeChild(ta);
+    }
+  });
+
+  ejecutar();
+})();
+</script>
+</body>
+</html>

@@ -452,8 +452,18 @@ def _tokens_google(destino: Path) -> list:
     return tokens
 
 
+# Paginas que NO son la web de KUKIA: la de rescate (se pinta sin JavaScript,
+# para saber si el problema es la pagina o el equipo) y la de diagnostico (dice
+# en que paso falla el navegador del visitante). No van en el sitemap y salen
+# con `noindex`: que Google ofrezca una pagina de averias como si fuera KUKIA
+# seria un desastre de cara al publico. La lista va escrita aqui porque
+# inyectar_seo escribe el `robots` de TODAS las paginas y machacaria la marca
+# que se pusiera en el HTML.
+PAGINAS_DE_SERVICIO = {"simple.html", "estado.html"}
+
+
 def _bloque_seo(url: str, base: str, titulo: str, desc: str,
-                verificacion=()) -> str:
+                verificacion=(), indexar: bool = True) -> str:
     """Etiquetas + JSON-LD de una pagina. Sin datos que no sean ciertos."""
     desc_js = json.dumps(desc, ensure_ascii=False)
     graf = {
@@ -494,7 +504,8 @@ def _bloque_seo(url: str, base: str, titulo: str, desc: str,
         graf["@graph"][2].pop("description", None)
     etiquetas = [
         MARCA_INI,
-        '<meta name="robots" content="index,follow,max-image-preview:large">',
+        ('<meta name="robots" content="index,follow,max-image-preview:large">' if indexar
+         else '<meta name="robots" content="noindex,follow">'),
         f'<meta property="og:type" content="{"website" if url.rstrip("/") == base else "article"}">',
         '<meta property="og:site_name" content="KUKIA Network">',
         '<meta property="og:locale" content="es_ES">',
@@ -540,7 +551,8 @@ def inyectar_seo(destino: Path, canonico: str = CANONICO) -> int:
                             "", cabeza, flags=re.S)
         cabeza = _REDUNDANTES.sub("", cabeza)
         cabeza = (cabeza.rstrip() + "\n"
-                  + _bloque_seo(url, base, titulo, desc, verificacion) + "\n")
+                  + _bloque_seo(url, base, titulo, desc, verificacion,
+                                indexar=ruta.name not in PAGINAS_DE_SERVICIO) + "\n")
         nuevo = cabeza + resto
         if nuevo != texto:
             ruta.write_text(nuevo, encoding="utf-8")
@@ -584,6 +596,13 @@ def generar_seo(destino: Path, canonico: str = CANONICO):
     for ruta in sorted(destino.glob("*.html")):
         # Los ficheros de verificacion NO son paginas: no van en el sitemap.
         if re.fullmatch(r"(google|yandex_)[0-9A-Za-z_\-]+\.html", ruta.name):
+            continue
+        # Las paginas que se marcan a si mismas `noindex` tampoco: son de
+        # rescate o de diagnostico (simple.html, estado.html) y no queremos que
+        # Google las ofrezca como si fueran la web de KUKIA. Se lee del fichero
+        # para que valga la pena escribirlo: se marca en el HTML y ya.
+        # Y las de servicio (rescate y diagnostico), tampoco.
+        if ruta.name in PAGINAS_DE_SERVICIO:
             continue
         rel = "" if ruta.name == "index.html" else ruta.name
         prio, frec = plan.get(ruta.name, (0.5, "monthly"))
