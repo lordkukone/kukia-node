@@ -122,6 +122,11 @@ esperados_tmp.json
 # Capturas locales de la revision (24-10-2026): no se publican.
 capturas_local/
 
+# Copia migrada a enteros (25-10-2026): 400 MB de base con el dinero de todos.
+# Se regenera con `python tools/migrar_entero.py`; el informe SI se versiona.
+migracion_entera/*.db
+migracion_entera/sha256.txt
+
 # Evidencia local del trabajo (25-10-2026): capturas comparativas de la web y
 # carpetas de auditoria. Son para revisar en el disco, no producto del repo.
 capturas/
