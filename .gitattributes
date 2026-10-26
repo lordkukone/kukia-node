@@ -1,0 +1,21 @@
+# Ficheros que la web carga con hash de integridad (SRI) en el <script>.
+#
+# POR QUE ESTA ESTE FICHERO (fallo real, 26-10-2026): en GitHub Pages, el
+# navegador bloqueaba nacl.min.js con
+#
+#   Failed to find a valid digest in the 'integrity' attribute for resource
+#   '.../nacl.min.js' ... The resource has been blocked.
+#
+# y la portada se quedaba en «DESCONECTADO · el relé no responde» sin datos en
+# vivo, y la billetera sin criptografía ni QR. Medido byte a byte: en el disco
+# los ficheros tienen 18458 y 20389 bytes (terminan en \r\n) y por GitHub
+# llegaban 18457 y 20388 (git les quitaba el \r final). Un byte de diferencia =
+# otro sha384 = el navegador bloquea el script. En Surge llegaban intactos y por
+# eso allí la web funcionaba.
+#
+# Con `-text` git guarda estos ficheros tal cual, sin tocar sus saltos de línea.
+# Si algún día se cambia un fichero de estos hay que recalcular su sha384 y
+# actualizar el `integrity` de los HTML que lo cargan (index, wallet,
+# calculadora).
+nacl.min.js -text
+qrcode.min.js -text
