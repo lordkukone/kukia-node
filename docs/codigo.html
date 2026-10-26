@@ -89,10 +89,10 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>56b911f5d075d5bfe9ebee247e8fc18f1cc21ba1f7193c012dc0384694bc6e04</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>67568477950bca0284cf638fb48eccde19ba052b02e120e18423f720d7bb59b0</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
-<br><br>Generado desde los ficheros reales el 25-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
+<br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
 
 <h2>Coordinador (Core) - coordinator/kukia_core.py</h2>
 
@@ -12660,6 +12660,16 @@ export default {
           nodos: num(s.nodos),
           tareas_ok: num(s.tareas_ok),
           tareas_pend: num(s.tareas_pend),
+          // Precio del trabajo y tope del minuto (26-10-2026): la portada los
+          // pinta en la calculadora leyendolos de aqui, no llevandolos escritos.
+          // Se publican con todos los decimales que da /stats: el precio es
+          // 1,45e-06 KIA/GFLOP y redondearlo a 6 decimales daria cero.
+          precio: {
+            gflop_kia: num(s.pago_por_potencia &amp;&amp; s.pago_por_potencia.precio_gflop),
+            gflop_divisor: num(s.bolsa_emision &amp;&amp; s.bolsa_emision.gflop_divisor),
+            tope_min_kia: num(s.bolsa_emision &amp;&amp; s.bolsa_emision.presupuesto_kia_min),
+            gpu_ref_gflops: num(s.bolsa_emision &amp;&amp; s.bolsa_emision.gpu_ref_gflops),
+          },
         },
         serie: limpiaSerie(d.serie),
         // Serie por GPU medida: sin esto la web no tiene latencia ni mezcla.

@@ -8,7 +8,7 @@
 <title>KUKIA · Convierte potencia de cálculo en trabajo útil para la IA</title>
 <meta name="description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
 <meta name="keywords" content="computación distribuida GPU, cómputo para IA, tareas verificables, minado útil, nodos de computación domésticos, KUKIA, KIA">
-<meta name="kukia-build" content="v1.3.1-portada">
+<meta name="kukia-build" content="v1.3.2-video-precio">
 <link rel="icon" href="moneda.jpg">
 <script>document.documentElement.classList.add('js');</script>
 <style>
@@ -97,6 +97,19 @@ header.barra{position:sticky;top:0;z-index:100;background:rgba(5,13,10,.86);
              radial-gradient(700px 380px at 90% 0%,rgba(230,189,75,.08),transparent 60%),
              var(--fondo)}
 .portada canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.5;pointer-events:none}
+/* ---------- video de fondo de la portada ----------
+   Va en su propia capa, por detras del texto y del titular. No cuesta nada al
+   que no lo puede ver: `preload="none"` en el HTML y el script solo pide los
+   bytes si el equipo aguanta (ni "reducir movimiento", ni ahorro de datos, ni
+   pantalla de movil). Si no, se queda el poster: la imagen de GPUs y red. */
+.video-fondo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+  object-position:50% 22%;z-index:0;pointer-events:none;opacity:.20;
+  filter:saturate(.65) contrast(1.06) brightness(.85);
+  -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 16%,#000 84%,transparent 100%);
+  mask-image:linear-gradient(90deg,transparent 0,#000 16%,#000 84%,transparent 100%)}
+.portada .velo{position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:linear-gradient(180deg,rgba(5,13,10,.5),rgba(5,13,10,.8) 55%,var(--fondo) 100%),
+             radial-gradient(70% 62% at 50% 42%,rgba(5,13,10,.15),rgba(5,13,10,.6))}
 .portada .dentro{position:relative;padding:5.5rem 1.25rem 3.5rem;max-width:var(--ancho);margin:0 auto}
 .etiqueta{display:inline-flex;align-items:center;gap:.5rem;font-size:.78rem;letter-spacing:.09em;
   text-transform:uppercase;color:var(--oro);border:1px solid rgba(230,189,75,.35);
@@ -110,6 +123,28 @@ header.barra{position:sticky;top:0;z-index:100;background:rgba(5,13,10,.86);
 .mini b{color:var(--texto)}
 .punto{width:7px;height:7px;border-radius:50%;background:var(--mint);box-shadow:0 0 10px var(--mint)}
 .punto.oro{background:var(--oro);box-shadow:0 0 10px var(--oro)}
+/* La moneda del proyecto, a la derecha del titular.
+   La foto trae su propio fondo oscuro: se funde con una mascara radial para que
+   no se vea el cuadrado. Es decorativa en la forma, pero lleva texto alternativo
+   real porque identifica el proyecto. */
+.portada .dentro{display:grid;grid-template-columns:minmax(0,1fr) minmax(200px,320px);
+  gap:1.4rem 2.6rem;align-items:center}
+.portada-texto{min-width:0;grid-column:1;grid-row:1}
+.moneda-hero{margin:0;justify-self:center;text-align:center;grid-column:2;grid-row:1}
+.moneda-hero img{display:block;width:min(100%,320px);height:auto;
+  -webkit-mask-image:radial-gradient(circle at 50% 46%,#000 50%,transparent 70%);
+  mask-image:radial-gradient(circle at 50% 46%,#000 50%,transparent 70%);
+  filter:drop-shadow(0 22px 55px rgba(230,189,75,.20)) drop-shadow(0 0 70px rgba(60,200,255,.10))}
+.moneda-hero figcaption{margin:.5rem auto 0;max-width:32ch;font-size:.76rem;line-height:1.55;
+  color:#bcd3c6;text-shadow:0 1px 10px #000,0 0 18px #000;
+  background:rgba(5,13,10,.55);padding:.4rem .6rem;border-radius:9px} 
+@media (max-width:920px){
+  .portada .dentro{grid-template-columns:1fr}
+  .portada-texto,.moneda-hero{grid-column:1;grid-row:auto}
+  .moneda-hero{margin:0 0 .4rem}
+  .moneda-hero img{width:min(34vw,116px)}
+  .moneda-hero figcaption{max-width:40ch;margin-top:.3rem;font-size:.7rem;line-height:1.45}
+}
 
 /* ---------- tarjetas ---------- */
 .rejilla{display:grid;gap:1rem}
@@ -187,6 +222,11 @@ article.caja p{font-size:.92rem}
 .calc .unidad{font-size:.85rem;color:var(--texto2)}
 .calc .formula{margin-top:.9rem;font-size:.8rem;color:var(--texto2);
   border-top:1px dashed var(--linea2);padding-top:.8rem}
+/* De donde sale cada numero: verde si es del Core, gris si es el de reserva. */
+.calc .fuente{margin-top:.7rem;font-size:.74rem;line-height:1.5;color:var(--texto2);
+  border-left:2px solid var(--linea2);padding-left:.6rem}
+.calc .fuente.de-core{border-left-color:var(--mint);color:#bfe9d6}
+.calc .fuente.sin-core{border-left-color:var(--oro);color:#f0d9a0}
 .aviso{border-left:3px solid var(--oro);background:rgba(230,189,75,.06);
   padding:.85rem 1rem;border-radius:0 10px 10px 0;font-size:.88rem;color:var(--texto2);margin-top:1.4rem}
 .aviso b{color:var(--oro)}
@@ -329,22 +369,39 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
 <!-- ============ PORTADA ============ -->
 <div class="portada">
   <canvas id="netcanvas" aria-hidden="true"></canvas>
+  <!-- Video de presentación. Decorativo (aria-hidden): no dice nada que no esté
+       escrito al lado. `preload="none"` para que al cargar la página no se baje
+       ni un byte de los 1,9 MB; el script de abajo decide si se reproduce. -->
+  <video class="video-fondo" id="videoPortada" muted loop playsinline
+         preload="none" poster="portada.jpg" aria-hidden="true" tabindex="-1"
+         disablepictureinpicture disableremoteplayback>
+    <source src="promo_web.mp4" type="video/mp4">
+  </video>
+  <div class="velo" aria-hidden="true"></div>
   <div class="dentro">
-    <span class="etiqueta">● Fase de pruebas · KIA aún sin precio de mercado</span>
-    <h1>Convierte potencia de cálculo en <em>trabajo útil para la IA</em></h1>
-    <p class="entradilla">
-      KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación
-      verificables. Los participantes reciben KIA por el trabajo aceptado.
-      El proyecto está en fase de pruebas y KIA todavía no tiene precio de mercado.
-    </p>
-    <div class="acciones">
-      <a class="btn btn-principal" href="minar.html">Quiero aportar mi ordenador</a>
-      <a class="btn btn-secundario" href="#clientes">Explorar computación para IA</a>
-    </div>
-    <div class="mini">
-      <span><i class="punto"></i>Código abierto, sin partes cerradas</span>
-      <span><i class="punto"></i>Ledger público con sellos firmados</span>
-      <span><i class="punto oro"></i>Sin auditoría independiente todavía</span>
+    <figure class="moneda-hero">
+      <img src="moneda.jpg" width="1024" height="1024" decoding="async" fetchpriority="high"
+           alt="Moneda del proyecto KUKIA: pieza dorada con un vórtice azul, el nombre KUKIA arriba y la leyenda QUANTUM AI COMPUTE NETWORK abajo">
+      <figcaption>La moneda del proyecto: es la imagen de KUKIA, no una moneda con
+      valor de mercado ni una promesa de precio.</figcaption>
+    </figure>
+    <div class="portada-texto">
+      <span class="etiqueta">● Fase de pruebas · KIA aún sin precio de mercado</span>
+      <h1>Convierte potencia de cálculo en <em>trabajo útil para la IA</em></h1>
+      <p class="entradilla">
+        KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación
+        verificables. Los participantes reciben KIA por el trabajo aceptado.
+        El proyecto está en fase de pruebas y KIA todavía no tiene precio de mercado.
+      </p>
+      <div class="acciones">
+        <a class="btn btn-principal" href="minar.html">Quiero aportar mi ordenador</a>
+        <a class="btn btn-secundario" href="#clientes">Explorar computación para IA</a>
+      </div>
+      <div class="mini">
+        <span><i class="punto"></i>Código abierto, sin partes cerradas</span>
+        <span><i class="punto"></i>Ledger público con sellos firmados</span>
+        <span><i class="punto oro"></i>Sin auditoría independiente todavía</span>
+      </div>
     </div>
   </div>
 </div>
@@ -608,15 +665,22 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
         <span class="grande" id="calcKia">—</span>
         <span class="unidad">KIA al día · <span id="calcKiaHora">—</span> KIA/hora</span>
         <p class="formula">
-          <strong>Cuenta:</strong> GFLOPS × 3.600 × horas × uso ÷ 900.000 = KIA.<br>
-          900.000 GFLOP es un minuto de la GPU de referencia (60 s × 15.000 GFLOPS),
-          y ese minuto vale 1 KIA. Equivale a <strong>0,000001111111 KIA por GFLOP</strong>.
+          <strong>Cuenta:</strong> GFLOPS × 3.600 × horas × uso ×
+          <b id="calcPrecio">—</b> KIA/GFLOP = KIA.
         </p>
         <p class="formula">
-          <strong>Tope del minuto:</strong> la red emite hoy
-          <span id="calcTope">1,3076</span> KIA por minuto, así que ningún equipo puede
-          cobrar más de eso por minuto de reloj. Con varios nodos, ese presupuesto se reparte.
+          <strong>Ese precio no está escrito aquí dentro:</strong> lo publica el Core y esta
+          página lo pide a <code>/stats</code> cada vez que la abres. Un minuto de la GPU de
+          referencia son <b id="calcDivisor">—</b> GFLOP (60 s ×
+          <span id="calcGpuRef">—</span> GFLOPS), ese minuto vale
+          <b id="calcTope">—</b> KIA, y de ahí sale el precio: <b id="calcPorKia">—</b> GFLOP por KIA.
         </p>
+        <p class="formula">
+          <strong>Tope del minuto:</strong> lo que la red emite en un minuto es también el
+          techo de lo que se reparte en ese minuto: ningún equipo puede cobrar más que eso
+          por minuto de reloj. Con varios nodos, el presupuesto se reparte entre todos.
+        </p>
+        <p class="fuente" id="calcFuente">Leyendo el precio del Core…</p>
       </div>
     </div>
 
@@ -693,7 +757,9 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
         <tr><td>Fin de la emisión</td><td><b>13 de abril de 2150</b></td></tr>
         <tr><td>Unidad</td><td>1 KIA = 1 minuto de GPU de referencia</td></tr>
         <tr><td>GPU de referencia</td><td>RTX 5070 medida en 15.000 GFLOPS</td></tr>
-        <tr><td>Precio del trabajo</td><td><b>0,000001111111 KIA por GFLOP</b></td></tr>
+        <tr><td>Precio del trabajo</td><td><b><span id="tabPrecio">leyendo…</span> KIA por GFLOP</b>,
+          con un tope de <span id="tabTope">leyendo…</span> KIA por minuto. Las dos cifras las publica el
+          coordinador en <code>/stats</code> y esta página las lee de ahí, no las lleva escritas.</td></tr>
         <tr><td>Suelo por tarea</td><td>0,0001 KIA (ninguna tarea paga menos de lo transferible)</td></tr>
         <tr><td>Comisión al transferir</td><td><b>0</b>: lo que envías es lo que llega</td></tr>
         <tr><td>Precio en euros</td><td><b>No existe</b> (no hay mercado)</td></tr>
@@ -1684,25 +1750,213 @@ counters.forEach(c => cio.observe(c));
 })();
 </script>
 <script>
-/* Calculadora: la cuenta es la definicion (1 KIA = 1 minuto de GPU = 900.000 GFLOP).
+/* Calculadora de la portada.
+
+   La regla es "1 KIA = 1 minuto de GPU de referencia", pero el precio por GFLOP
+   y el tope del minuto NO se escriben aqui: se leen del Core. Orden de lectura:
+     1) ?core=http://127.0.0.1:8300   Core directo (solo se acepta loopback)
+     2) rele /api/metricas            lo que publica la red
+     3) metricas_snapshot.json        instantanea servida en este mismo dominio
+     4) 1 / 900.000                   reserva del codigo, y se dice en pantalla
+   Si no hay dato no se inventa: se pinta el de reserva, marcado como tal.
    No hay precio en euros porque no hay mercado: aqui solo salen KIA. */
 (function(){
   var g=document.getElementById('calcGpu'), f=document.getElementById('calcFlops'),
       h=document.getElementById('calcHoras'), u=document.getElementById('calcUso'),
-      out=document.getElementById('calcKia'), outh=document.getElementById('calcKiaHora');
+      out=document.getElementById('calcKia'), outh=document.getElementById('calcKiaHora'),
+      eP=document.getElementById('calcPrecio'), eD=document.getElementById('calcDivisor'),
+      eT=document.getElementById('calcTope'), eG=document.getElementById('calcGpuRef'),
+      eF=document.getElementById('calcFuente'), eTP=document.getElementById('tabPrecio'),
+      eTT=document.getElementById('tabTope'), eK=document.getElementById('calcPorKia');
   if(!g||!f||!out) return;
-  function nf(n){ return n.toLocaleString('es-ES',{minimumFractionDigits:3,maximumFractionDigits:3}); }
+
+  // Reserva: la definicion del propio ledger (60 s x 15.000 GFLOPS = 900.000
+  // GFLOP por KIA). Solo se usa si no se puede leer nada, y se avisa.
+  var P = {precio:1/900000, divisor:900000, tope:null, gpu:15000,
+           de:'reserva', ts:0, nombre:''};
+
+  function miles(n,dec){
+    if(typeof n!=='number'||!isFinite(n)) return '—';
+    return n.toLocaleString('es-ES',{minimumFractionDigits:dec||0,maximumFractionDigits:dec||0});
+  }
+  // Decimales sin ceros de relleno y con coma: 1,452942e-06 -> 0,000001452942
+  function largo(n,max){ 
+    if(typeof n!=='number'||!isFinite(n)) return '—';
+    var s=n.toFixed(max);
+    if(s.indexOf('.')>=0) s=s.replace(/0+$/,'').replace(/\.$/,'');
+    return s.replace('.',',');
+  }
+  function hora(ts){
+    if(!ts) return '—';
+    try{ return new Date(ts*1000).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}); }
+    catch(e){ return '—'; }
+  }
+  function hace(ts){
+    if(!ts) return '';
+    var s=Math.max(0,Math.round(Date.now()/1000-ts));
+    if(s<120) return 'hace ' + s + ' s';
+    if(s<5400) return 'hace ' + Math.round(s/60) + ' min';
+    if(s<172800) return 'hace ' + Math.round(s/3600) + ' h';
+    return 'de hace ' + Math.round(s/86400) + ' dias';
+  }
+  function positivo(v){ return (typeof v==='number'&&isFinite(v)&&v>0) ? v : null; }
+  function primero(){ for(var i=0;i<arguments.length;i++){ var v=positivo(arguments[i]); if(v!==null) return v; } return null; }
+
+  function nf(n){ return miles(n,3); }
+
   function calc(){
     var flops=Math.max(1,Number(f.value)||0),
         horas=Math.min(24,Math.max(1,Number(h.value)||0)),
         uso=Math.min(100,Math.max(1,Number(u.value)||0));
-    var kiaHora=flops*3600/900000*(uso/100);
+    var kiaHora=flops*3600*P.precio*(uso/100);
     out.textContent=nf(kiaHora*horas);
     outh.textContent=nf(kiaHora);
   }
-  g.addEventListener('change',function(){ if(g.value!=='custom'){ f.value=g.value; } calc(); });
-  f.addEventListener('input',calc); h.addEventListener('input',calc); u.addEventListener('input',calc);
-  calc();
+
+  function pintarPrecio(){
+    if(eP) eP.textContent=largo(P.precio,12);
+    if(eD) eD.textContent=miles(P.divisor,0);
+    if(eG) eG.textContent=miles(P.gpu,0);
+    if(eT) eT.textContent=(P.tope===null? '—' : largo(P.tope,6));
+    if(eK) eK.textContent=miles(1/P.precio,0);   // cuantos GFLOP paga 1 KIA
+    // La misma cifra en la tabla de tokenomics, para que no haya dos numeros.
+    if(eTP) eTP.textContent=largo(P.precio,12);
+    if(eTT) eTT.textContent=(P.tope===null? '—' : largo(P.tope,6));
+    if(!eF) return;
+    var minutoEquipo=P.precio*(Math.max(1,Number(f.value)||0)*3600)/60;  // KIA/min a tope
+    var reparto='';
+    if(P.tope!==null && minutoEquipo>0){
+      reparto=' A tope ese equipo pediría <b>'+largo(minutoEquipo,6)+' KIA/min</b>, y el minuto entero de la red son '
+        + largo(P.tope,6) + ' KIA: si hay más de un nodo entregando, lo que cobra es el reparto, no la multiplicación.';
+    }
+    if(P.de==='reserva'){
+      eF.className='fuente sin-core';
+      eF.innerHTML='<b>Sin conexión con el Core.</b> Estos números son la reserva del código '
+        + '(1 KIA = 1 minuto de 15.000 GFLOPS), no los que el Core está pagando ahora. '
+        + 'Para leerlos de verdad: abre esta página con <code>?core=http://127.0.0.1:8300</code> '
+        + 'o espera a que vuelva la conexión.' + reparto;
+      return;
+    }
+    eF.className='fuente de-core';
+    eF.innerHTML='<b>Precio leído desde '+P.nombre+'</b> ('+hace(P.ts)+', '+hora(P.ts)+'). '
+      + 'Sale de <code>pago_por_potencia.precio_gflop</code> y <code>bolsa_emision.presupuesto_kia_min</code> '
+      + 'del <code>/stats</code> del coordinador: cambia si cambia el presupuesto del minuto, así que el número de arriba '
+      + 'se mueve con él. Compruébalo tú mismo pidiendo <code>/stats</code>.' + reparto;
+  }
+
+  // --- lectura del precio -------------------------------------------------
+  function coreDeUrl(){
+    try{
+      var raw=new URLSearchParams(location.search).get('core');
+      if(!raw) return '';
+      var x=new URL(raw);
+      var loop=(x.hostname==='127.0.0.1'||x.hostname==='localhost'||x.hostname==='::1'||x.hostname==='[::1]');
+      if(x.protocol!=='http:'||!loop) return '';   // nada de cores de terceros
+      return x.origin;
+    }catch(e){ return ''; }
+  }
+  function pedir(url,ms){
+    var ctl=('AbortController' in window)?new AbortController():null;
+    var t=ctl?setTimeout(function(){ ctl.abort(); },ms):null;
+    function fin(){ if(t) clearTimeout(t); }
+    return fetch(url,{cache:'no-store',signal:ctl?ctl.signal:undefined})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(d){ fin(); return d; }, function(e){ fin(); throw e; });
+  }
+
+  // Cualquier bloque de stats (Core, instantanea o el compacto del rele) -> precio.
+  function precioDe(stats, ts, nombre){
+    if(!stats||typeof stats!=='object') return null;
+    var bolsa=stats.bolsa_emision||{}, pot=stats.pago_por_potencia||{},
+        comp=stats.precio||{}, det=stats.detalle_pago||{};
+    var precio=primero(pot.precio_gflop, bolsa.precio_minuto, comp.gflop_kia, det.precio_gflop);
+    var divisor=primero(bolsa.gflop_divisor, comp.gflop_divisor);
+    if(!divisor && precio) divisor=1/precio;
+    if(!precio && divisor) precio=1/divisor;
+    if(!precio) return null;
+    var tope=primero(bolsa.presupuesto_kia_min, comp.tope_min_kia, stats.emision_por_min);
+    var gpu=primero(bolsa.gpu_ref_gflops, comp.gpu_ref_gflops) || (divisor?divisor/60:null);
+    return {precio:precio, divisor:divisor, tope:tope, gpu:gpu,
+            de:'core', nombre:nombre, ts:Number(ts)||0};
+  }
+
+  function leer(){
+    var base=coreDeUrl();
+    var cadena=Promise.resolve(null);
+    if(base){
+      cadena=cadena.then(function(){
+        return pedir(base+'/stats',8000).then(function(d){
+          return precioDe(d.stats||d, Date.now()/1000, 'tu Core en '+base);
+        });
+      }).catch(function(){ return null; });
+    }
+    return cadena.then(function(p){
+      if(p) return p;
+      return pedir('metricas.json?_='+Date.now(),6000)
+        .then(function(cfg){
+          if(!cfg||!cfg.api) return null;
+          var api=String(cfg.api).replace(/\/+$/,'');
+          return pedir(api+'/api/metricas?_='+Date.now(),8000)
+            .then(function(d){ return precioDe(d&&d.stats, d&&d.ts, 'el relé público de la red'); });
+        }).catch(function(){ return null; });
+    }).then(function(p){
+      if(p) return p;
+      return pedir('metricas_snapshot.json?_='+Date.now(),6000)
+        .then(function(d){ return precioDe(d&&d.stats, d&&d.ts, 'la instantánea publicada en este dominio'); })
+        .catch(function(){ return null; });
+    });
+  }
+
+  g.addEventListener('change',function(){ if(g.value!=='custom'){ f.value=g.value; } calc(); pintarPrecio(); });
+  f.addEventListener('input',function(){ calc(); pintarPrecio(); });
+  h.addEventListener('input',calc); u.addEventListener('input',calc);
+  calc(); pintarPrecio();
+
+  leer().then(function(p){
+    if(p){ P=p; }
+    pintarPrecio();
+    calc();
+    // El precio del minuto se congela al empezar el minuto: se refresca solo
+    // cada minuto, no cada segundo.
+    setInterval(function(){
+      leer().then(function(q){ if(q){ P=q; pintarPrecio(); calc(); } });
+    }, 60000);
+  });
+})();
+</script>
+<script>
+/* Video de la portada. Cuatro frenos antes de gastar 1,9 MB, porque un fondo
+   bonito no puede costar medio segundo en un movil con datos:
+     1) "reducir movimiento" activado en el sistema -> se queda el poster.
+     2) ahorro de datos o red 2G -> poster.
+     3) pantalla de movil (<720 px) -> poster: ahi el texto manda.
+     4) pestaña en segundo plano o portada fuera de pantalla -> no reproduce.
+   Con el HTML se baja CERO bytes de video: `preload="none"` se cambia a "auto"
+   solo cuando la portada entra en pantalla y pasa los filtros de arriba. */
+(function(){
+  var v=document.getElementById('videoPortada'); if(!v) return;
+  function quedarse(){ v.setAttribute('data-modo','poster'); }
+  var reducido=false;
+  try{ reducido=window.matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){}
+  var c=navigator.connection||navigator.mozConnection||navigator.webkitConnection;
+  var ahorro=!!(c && (c.saveData===true || /(^|-)2g$/.test(String(c.effectiveType||''))));
+  if(reducido||ahorro||window.innerWidth<720){ quedarse(); return; }
+  var pedido=false, visible=false;
+  function quiere(){
+    var on=visible && !document.hidden;
+    if(on){
+      if(!pedido){ pedido=true; v.preload='auto'; v.load(); }
+      var p=v.play(); if(p&&p.catch) p.catch(function(){ /* autoplay bloqueado: queda el poster */ });
+    } else {
+      try{ v.pause(); }catch(e){}
+    }
+  }
+  if('IntersectionObserver' in window){
+    new IntersectionObserver(function(es){
+      visible=!!(es[0]&&es[0].isIntersecting); quiere();
+    },{threshold:0.05}).observe(v);
+  } else { visible=true; quiere(); }
+  document.addEventListener('visibilitychange', quiere);
 })();
 </script>
 <script>

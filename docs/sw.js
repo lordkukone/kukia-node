@@ -5,7 +5,12 @@
 // Ahora el HTML va a RED primero y la cache solo se usa si no hay conexion.
 // v4 (2026-10-20): sube la version para que todo el que ya tenia la cache
 // vieja la tire al activarse el worker nuevo (la web se quedaba antigua).
-var CACHE = 'kukia-wallet-v4';
+// v5 (2026-10-26): los .json de datos (metricas, metricas_snapshot, version,
+// core_actual) NO se cachean. Estaban cayendo en la rama cache-first de los
+// estaticos: quien ya habia entrado una vez seguia viendo las cifras —y el
+// precio— del primer dia, aunque el servidor ya tuviera las nuevas. Se sube la
+// version para tirar las caches v4 que ya tienen esos JSON dentro.
+var CACHE = 'kukia-wallet-v5';
 var ASSETS = [
   'wallet.html',
   'manifest.json',
@@ -48,12 +53,23 @@ self.addEventListener('fetch', function(e) {
     return;
   }
 
-  // Estaticos: cache primero, y se refresca en segundo plano.
+  // Datos que cambian (metricas.json, metricas_snapshot.json, version.json,
+  // core_actual.json...): SIEMPRE red. Un JSON cacheado es una cifra vieja que
+  // se queda pegada, y aqui una cifra vieja es un precio viejo.
+  if (/\.json$/i.test(url.pathname)) return;
+
+  // Estaticos (imagenes, scripts, video): cache primero, y se refresca en segundo plano.
   e.respondWith(caches.match(e.request).then(function(r) {
     if (r) return r;
     return fetch(e.request).then(function(res) {
-      var copia = res.clone();
-      caches.open(CACHE).then(function(c) { c.put(e.request, copia); });
+      // El video se pide por trozos (Range: 206). La Cache API NO acepta
+      // respuestas parciales: intentar guardarlas lanza un TypeError y ensucia
+      // la consola en cada reproduccion. Solo se guarda lo que viene entero.
+      if (res.status === 200 && !e.request.headers.get('range')) {
+        var copia = res.clone();
+        caches.open(CACHE).then(function(c) { return c.put(e.request, copia); })
+          .catch(function() {});
+      }
       return res;
     });
   }));
