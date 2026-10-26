@@ -89,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>56d12f344d911490e607a3b2a9c8ee5db1c0c307d4a2584eacf7b91c6b1a3b34</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>bded3d4b1fb4483f321b0cdabb7ff71d10c50131e91f1d7afbf5f1f1691a17de</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -7432,6 +7432,73 @@ def _vigilar_direccion(seg: float = 300.0) -&gt; None:
     threading.Thread(target=bucle, daemon=True, name=&quot;direccion-core&quot;).start()
 
 
+# --- Deteccion de GPU con reintento (26-10-2026) ---------------------------
+# FALLO REAL: al iniciar sesion el driver de NVIDIA tarda unos segundos en
+# estar listo (por eso la guardia del .vbs espera 40 s antes de arrancar nada).
+# Si el minero llegaba antes, `torch.cuda.device_count()` devolvia 0 y el
+# minero se quedaba TODA la sesion minando en CPU: GPU encendida, cero potencia
+# medida y tareas mucho mas lentas, sin ningun error en el log. Ahora se
+# reintenta un rato antes de darse por vencido; solo si al final no aparece
+# ninguna GPU se mina en CPU.
+CUDA_INTENTOS = max(1, int(os.environ.get(&quot;KUKIA_CUDA_INTENTOS&quot;, &quot;6&quot;)))
+CUDA_ESPERA_SEG = max(1.0, float(os.environ.get(&quot;KUKIA_CUDA_ESPERA_SEG&quot;, &quot;10&quot;)))
+
+
+def _gpus_nvidia() -&gt; list:
+    &quot;&quot;&quot;Nombres de las GPU NVIDIA del equipo segun el driver (nvidia-smi).
+
+    Sirve para distinguir &quot;este PC no tiene GPU&quot; de &quot;tiene GPU pero CUDA no la
+    ve&quot;: en el log las dos cosas se veian exactamente igual.
+    &quot;&quot;&quot;
+    extra = {}
+    if os.name == &quot;nt&quot;:
+        extra[&quot;creationflags&quot;] = 0x08000000   # CREATE_NO_WINDOW
+    try:
+        r = subprocess.run([&quot;nvidia-smi&quot;, &quot;--query-gpu=name&quot;,
+                            &quot;--format=csv,noheader&quot;],
+                           capture_output=True, text=True, timeout=8, **extra)
+        if r.returncode == 0:
+            return [l.strip() for l in (r.stdout or &quot;&quot;).splitlines() if l.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _detectar_gpus() -&gt; tuple:
+    &quot;&quot;&quot;(numero de GPUs CUDA, motivo si son 0). Reintenta al arrancar.
+
+    No hay cache que valga: cada intento vuelve a preguntar a torch. Se sale en
+    cuanto hay una GPU. Tampoco bloquea el arranque para siempre: como mucho
+    espera KUKIA_CUDA_INTENTOS x KUKIA_CUDA_ESPERA_SEG (por defecto ~50 s) y
+    entonces mina en CPU, que es lo que hacia antes siempre.
+    &quot;&quot;&quot;
+    motivo = &quot;sin probar&quot;
+    for intento in range(1, CUDA_INTENTOS + 1):
+        try:
+            import torch
+        except ImportError as e:
+            # Definitivo: reintentar no instala torch. Se dice claro y se sigue.
+            return 0, f&quot;torch no esta instalado ({e})&quot;
+        except Exception as e:
+            motivo = f&quot;no se pudo importar torch ({type(e).__name__})&quot;
+        else:
+            try:
+                n = int(torch.cuda.device_count() or 0)
+                motivo = &quot;CUDA no ve ninguna GPU&quot; if n == 0 else &quot;&quot;
+            except Exception as e:
+                n, motivo = 0, f&quot;CUDA no inicializa ({type(e).__name__}: {e})&quot;
+            if n &gt; 0:
+                if intento &gt; 1:
+                    print(f&quot;[KUKIA] GPU disponible en el intento {intento}/{CUDA_INTENTOS}: &quot;
+                          f&quot;{n} - se mina en GPU&quot;, flush=True)
+                return n, &quot;&quot;
+        if intento &lt; CUDA_INTENTOS:
+            print(f&quot;[KUKIA] aun no hay GPU ({motivo}); intento {intento}/{CUDA_INTENTOS}, &quot;
+                  f&quot;reintento en {CUDA_ESPERA_SEG:.0f} s&quot;, flush=True)
+            time.sleep(CUDA_ESPERA_SEG)
+    return 0, motivo
+
+
 def main():
     # AUDITORIA 2026-10-19: la lista de palabras es la BIP39 en espanol y lleva
     # tildes. En Windows la consola es cp1252 y print() reventaba con
@@ -7450,11 +7517,7 @@ def main():
         print(f&quot;[KUKIA] ERROR: {motivo_core}&quot;, flush=True)
         return 2
     nombre = sys.argv[1] if len(sys.argv) &gt; 1 else &quot;worker_&quot; + socket.gethostname()
-    try:
-        import torch
-        n_gpus = torch.cuda.device_count()
-    except Exception:
-        n_gpus = 0
+    n_gpus, motivo_gpu = _detectar_gpus()
 
     def _esperar(hilos):
         &quot;&quot;&quot;Espera a los hilos y, si llega un Ctrl+C, para ordenadamente.&quot;&quot;&quot;
@@ -7472,7 +7535,15 @@ def main():
             print(&quot;[KUKIA] minero detenido&quot;, flush=True)
 
     if n_gpus == 0:
-        print(&quot;[KUKIA] Sin GPUs CUDA - usando CPU (mas lento)&quot;, flush=True)
+        print(f&quot;[KUKIA] Sin GPUs CUDA ({motivo_gpu}) - usando CPU (mas lento)&quot;, flush=True)
+        nombres = _gpus_nvidia()
+        if nombres:
+            # La GPU esta, CUDA no la ve: es un problema de driver, no de
+            # hardware, y asi queda escrito para no confundirlo con &quot;este PC no
+            # tiene GPU&quot;.
+            print(f&quot;[KUKIA] OJO: el equipo SI tiene GPU NVIDIA ({&#x27;, &#x27;.join(nombres)}) &quot;
+                  f&quot;pero CUDA no la ve: se mina en CPU. Comprueba &#x27;nvidia-smi&#x27; y &quot;
+                  f&quot;reinicia el minero cuando responda.&quot;, flush=True)
         _benchmark_arranque()
         _anunciar_emision()
         # En un hilo y no en el principal: asi el Ctrl+C pasa por la misma
@@ -13365,6 +13436,10 @@ QUE HACE, cada 30 s (y al instante si un hijo suyo se muere):
      abriste tu a mano).
   3. Validador: si no esta, lo arranca (si existe el binario/identidad).
   4. Publicador de metricas: idem. Sin el, la web se queda con datos viejos.
+  5. Potencia medida: si el equipo TIENE GPU NVIDIA y el nodo lleva un rato
+     cobrando tareas pero no reporta ni un GFLOPS medido, AVISA (escritorio y
+     Telegram). Es el sintoma de un minero que arranco en CPU con la GPU
+     encendida: hasta ahora se podia quedar asi dias sin que nadie lo viera.
 
 NO toca el ledger, no firma nada y no toma decisiones de dinero: solo
 levanta procesos. Si se cae el propio guardia, no pasa nada: al volver a
@@ -13385,6 +13460,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -13602,6 +13678,184 @@ def _ya_corriendo(patron, ttl: float = 20.0) -&gt; bool:
         encontrado = False
     _YA_CORRIENDO[clave] = (ahora, encontrado)
     return encontrado
+
+
+# --- GPU en el equipo sin potencia medida (26-10-2026) ---------------------
+# Lo que vigila esto: la maquina TIENE GPU NVIDIA pero el nodo no reporta ni un
+# GFLOPS medido. Dos causas conocidas: el minero arranco antes que el driver y
+# se quedo en CPU (el minero ya lo reintenta por su cuenta, ver _detectar_gpus
+# en worker/kukia_worker.py), o hay una GPU que no se esta usando. En los dos
+# casos el sintoma es el mismo y hasta hoy no se veia en ningun sitio.
+GPU_SIN_POTENCIA = (os.environ.get(&quot;KUKIA_GUARDIA_POTENCIA&quot;, &quot;1&quot;) or &quot;1&quot;) != &quot;0&quot;
+# Entre aviso y aviso: no es un fallo nuevo, es el mismo que sigue.
+POTENCIA_AVISO_SEG = float(os.environ.get(&quot;KUKIA_GUARDIA_POTENCIA_SEG&quot;, &quot;1800&quot;))
+# Margen antes de darlo por hecho, para no avisar por un arranque que aun no ha
+# terminado de calentar.
+POTENCIA_ESPERA_SEG = float(os.environ.get(&quot;KUKIA_GUARDIA_POTENCIA_ESPERA&quot;, &quot;600&quot;))
+
+_IDENTIDAD_MINERO = RAIZ / &quot;worker&quot; / &quot;identidad_minero.json&quot;
+_GPUS_EQUIPO = {&quot;ts&quot;: 0.0, &quot;nombres&quot;: []}
+_ULTIMO_AVISO_POTENCIA = 0.0
+
+TOAST = r&quot;&quot;&quot;
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+$p = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$t = $p.GetElementsByTagName(&quot;text&quot;)
+$t.Item(0).AppendChild($p.CreateTextNode($env:KUKIA_TITULO)) | Out-Null
+$t.Item(1).AppendChild($p.CreateTextNode($env:KUKIA_TEXTO)) | Out-Null
+$a = &quot;{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe&quot;
+$n = [Windows.UI.Notifications.ToastNotification]::new($p)
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($a).Show($n)
+&quot;&quot;&quot;
+
+
+def _gpus_del_equipo(ttl: float = 300.0) -&gt; list:
+    &quot;&quot;&quot;Nombres de las GPU NVIDIA que ve el DRIVER (nvidia-smi), con cache.
+
+    Se le pregunta al driver y no a torch a proposito: el driver sabe si la
+    tarjeta esta fisicamente ahi aunque CUDA (o torch) no la vean, que es justo
+    el caso que hay que detectar. Si nvidia-smi no existe o no responde, la
+    lista va vacia y no se avisa de nada: mejor callar que inventar.
+    &quot;&quot;&quot;
+    ahora = time.time()
+    if _GPUS_EQUIPO[&quot;nombres&quot;] and ahora - _GPUS_EQUIPO[&quot;ts&quot;] &lt; ttl:
+        return _GPUS_EQUIPO[&quot;nombres&quot;]
+    nombres = []
+    try:
+        r = subprocess.run([&quot;nvidia-smi&quot;, &quot;--query-gpu=name&quot;, &quot;--format=csv,noheader&quot;],
+                           capture_output=True, text=True, timeout=8,
+                           creationflags=SIN_VENTANA)
+        if r.returncode == 0:
+            nombres = [l.strip() for l in (r.stdout or &quot;&quot;).splitlines() if l.strip()]
+    except Exception:
+        nombres = []
+    _GPUS_EQUIPO.update(ts=ahora, nombres=nombres)
+    return nombres
+
+
+def _ids_mineros_propios() -&gt; set:
+    &quot;&quot;&quot;Ids de los nodos de ESTE equipo (los escribe el minero al registrarse).&quot;&quot;&quot;
+    try:
+        d = json.loads(_IDENTIDAD_MINERO.read_text(encoding=&quot;utf-8&quot;))
+        return {str(v.get(&quot;id&quot;)) for v in d.values()
+                if isinstance(v, dict) and v.get(&quot;id&quot;)}
+    except Exception:
+        return set()
+
+
+def _potencia_reportada() -&gt; dict:
+    &quot;&quot;&quot;Lo que el nodo dice medido: por tarea y en el benchmark de arranque.
+
+    `gflops_medido` lo calcula el Core con el tiempo REAL de cada tarea (no es
+    una cifra declarada por el minero). `gflops_base` es la medida que el
+    minero hace con sus propias cuentas al arrancar y manda en la telemetria.
+    Cualquiera de las dos &gt; 0 significa que el nodo SI reporta potencia
+    medida. Nunca lanza: sin Core devuelve cero y se reintenta en la vuelta
+    siguiente.
+    &quot;&quot;&quot;
+    ids = _ids_mineros_propios()
+    salida = {&quot;por_tarea&quot;: 0.0, &quot;benchmark&quot;: 0.0, &quot;nodos&quot;: 0}
+    if not ids:
+        return salida
+    # Uno por uno (/nodos/&lt;id&gt;): son los 2-3 nodos de este equipo y la
+    # respuesta es una fila. Pedir la lista entera (hasta 1000 nodos) cada 30 s
+    # solo para mirar los mios seria castigar al Core por gusto.
+    for nid in sorted(ids):
+        try:
+            n = _peticion(f&quot;/nodos/{urllib.parse.quote(str(nid))}&quot;) or {}
+        except Exception:
+            continue
+        salida[&quot;nodos&quot;] += 1
+        salida[&quot;por_tarea&quot;] = max(salida[&quot;por_tarea&quot;],
+                                  float(n.get(&quot;gflops_medido&quot;) or 0.0))
+    try:
+        for t in (_peticion(&quot;/red/telemetria&quot;) or {}).get(&quot;telemetria&quot;) or []:
+            if str(t.get(&quot;nodo_id&quot;)) not in ids:
+                continue
+            try:
+                m = json.loads(t.get(&quot;metricas&quot;) or &quot;{}&quot;)
+            except Exception:
+                continue
+            salida[&quot;benchmark&quot;] = max(salida[&quot;benchmark&quot;],
+                                      float(m.get(&quot;gflops_base&quot;) or 0.0))
+    except Exception:
+        pass
+    return salida
+
+
+def _avisar(titulo: str, texto: str) -&gt; bool:
+    &quot;&quot;&quot;Aviso al escritorio (Windows) y al movil (Telegram). Nunca lanza.
+
+    Mismo camino que `tools/vigilante_servicios.py`: los dos canales son
+    independientes a proposito, asi que aunque el PC este sin sesion (el toast
+    no se ve) el movil sigue sonando. Sin Telegram configurado
+    (`python tools/avisos.py --configurar`) queda el aviso de Windows y el log.
+    &quot;&quot;&quot;
+    hecho = False
+    if os.name == &quot;nt&quot;:
+        entorno = dict(os.environ, KUKIA_TITULO=titulo, KUKIA_TEXTO=texto)
+        try:
+            r = subprocess.run([&quot;powershell&quot;, &quot;-NoProfile&quot;, &quot;-NonInteractive&quot;,
+                                &quot;-Command&quot;, TOAST],
+                               capture_output=True, text=True, timeout=30,
+                               env=entorno, creationflags=SIN_VENTANA)
+            hecho = r.returncode == 0
+        except Exception:
+            hecho = False
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import avisos as _avisos
+        hecho = _avisos.enviar(titulo, texto) or hecho
+    except Exception:
+        pass
+    return hecho
+
+
+def _aviso_potencia(stats: dict, estado, verbose: bool = False,
+                    gpus=None, medido=None):
+    &quot;&quot;&quot;Avisa si el equipo tiene GPU y el nodo no reporta potencia medida.
+
+    Devuelve el texto del aviso, o None si no habia nada que avisar. `gpus` y
+    `medido` se pueden inyectar para probarlo sin depender de la maquina: la
+    prueba esta en tools/prueba_aviso_potencia_gpu.py.
+    &quot;&quot;&quot;
+    global _ULTIMO_AVISO_POTENCIA
+    if not GPU_SIN_POTENCIA:
+        return None
+    nombres = list(gpus) if gpus is not None else _gpus_del_equipo()
+    if not nombres:
+        return None                      # no hay GPU: no hay nada que reclamar
+    # Solo se avisa si el nodo esta COBRANDO tareas. Si no cobra, ese es el
+    # problema y lo llevan los apartados de arriba (relanzar el minero).
+    pagando = (estado.ultimo_ok_ts &gt; 0
+               and (time.time() - estado.ultimo_ok_ts) &lt; POTENCIA_ESPERA_SEG)
+    if not pagando:
+        if verbose:
+            log(&quot;[gpu] hay GPU pero el nodo no lleva tareas pagadas: no se avisa&quot;)
+        return None
+    p = dict(medido) if medido is not None else _potencia_reportada()
+    if float(p.get(&quot;por_tarea&quot;) or 0.0) &gt; 0 or float(p.get(&quot;benchmark&quot;) or 0.0) &gt; 0:
+        _ULTIMO_AVISO_POTENCIA = 0.0     # ha vuelto a medir: el proximo fallo avisa
+        if verbose:
+            log(f&quot;[gpu] potencia medida OK ({p.get(&#x27;por_tarea&#x27;)} GFLOPS/tarea, &quot;
+                f&quot;{p.get(&#x27;benchmark&#x27;)} GFLOPS de benchmark)&quot;)
+        return None
+    ahora = time.time()
+    if ahora - _ULTIMO_AVISO_POTENCIA &lt; POTENCIA_AVISO_SEG:
+        return None                      # ya se aviso hace poco del mismo fallo
+    _ULTIMO_AVISO_POTENCIA = ahora
+    texto = (f&quot;El equipo tiene {len(nombres)} GPU NVIDIA ({&#x27;, &#x27;.join(nombres)}) pero el &quot;
+             f&quot;nodo no reporta potencia medida: 0 GFLOPS por tarea y 0 de benchmark. &quot;
+             f&quot;Se esta minando en CPU, o las tareas no llegan a la GPU. Comprueba &quot;
+             f&quot;&#x27;nvidia-smi&#x27; y reinicia el minero. Si es a proposito, &quot;
+             f&quot;KUKIA_GUARDIA_POTENCIA=0 lo desactiva.&quot;)
+    log(f&quot;[gpu] AVISO: {texto}&quot;)
+    try:
+        _avisar(&quot;KUKIA: GPU sin potencia medida&quot;, texto)
+    except Exception:
+        pass
+    return texto
 
 
 class Hijo:
@@ -14008,6 +14262,15 @@ def ciclo(hijos: dict, estado: Estado, verbose: bool) -&gt; int:
         if h is not None and not h.vivo() and not h.caido():
             if h.arrancar():
                 problemas += 1
+
+    # 4. GPU en el equipo sin potencia medida. Este sintoma no se veia en
+    #    ningun sitio: la maquina minaba en CPU con las GPU encendidas dias
+    #    enteros y el log parecia normal.
+    if stats:
+        try:
+            _aviso_potencia(stats, estado, verbose)
+        except Exception as e:
+            log(f&quot;[gpu] no pude comprobar la potencia medida ({type(e).__name__}: {e})&quot;)
 
     if verbose:
         log(f&quot;[ok] nodos={stats.get(&#x27;nodos&#x27;)} cola={stats.get(&#x27;tareas_pend&#x27;)} &quot;

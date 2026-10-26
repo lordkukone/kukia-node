@@ -8,7 +8,7 @@
 <title>KUKIA · Convierte potencia de cálculo en trabajo útil para la IA</title>
 <meta name="description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
 <meta name="keywords" content="computación distribuida GPU, cómputo para IA, tareas verificables, minado útil, nodos de computación domésticos, KUKIA, KIA">
-<meta name="kukia-build" content="v1.3.9-autolimpieza">
+<meta name="kukia-build" content="v1.3.10-ficheros-vivos">
 <link rel="icon" href="moneda.jpg">
 <script>
 /* AUTOLIMPIEZA (26-10-2026). El visitante no tiene que saber nada: si la web
@@ -1254,7 +1254,12 @@ if (io) {
 <!-- Verificador criptografico: comprueba la firma Ed25519 del sello ANTES de
      enseñar ninguna cifra. Va antes que el script de metricas porque ese lo usa
      en la primera vuelta (sin el, la web diria "DESCONECTADO" aunque haya datos). -->
-<script src="nacl.min.js" integrity="sha384-0jQROJt6wG1AI3HmYbaU8+/kf+09BqXwTdbUCG5Hr6ASZVXXgJ/6lrRPDAqgIqEm"></script>
+<!-- El ?v= es a proposito: sin el, el navegador se queda con el nacl.min.js que
+     ya tenia en cache (GitHub Pages cachea 10 min o mas) y, si esa copia vieja
+     llegaba con otro byte, el hash SRI no cuadraba y el script se BLOQUEABA:
+     la web se quedaba en DESCONECTADO sin datos en vivo. Con el numero, cada
+     version pide su fichero. Ver .gitattributes. -->
+<script src="nacl.min.js?v=1.3.10" integrity="sha384-0jQROJt6wG1AI3HmYbaU8+/kf+09BqXwTdbUCG5Hr6ASZVXXgJ/6lrRPDAqgIqEm"></script>
 <script>
 // Metricas en vivo. La web publica lee /api/metricas del rele (docs/metricas.json);
 // en el mismo PC, ?core=http://127.0.0.1:8300 lee el Core directo (sin rele).

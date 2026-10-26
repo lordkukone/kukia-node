@@ -1,8 +1,8 @@
 {
-  "v": "v1.3.9-autolimpieza",
-  "generado": "2026-10-26 15:29:38",
+  "v": "v1.3.10-ficheros-vivos",
+  "generado": "2026-10-26 16:06:54",
   "core": "0.4.4",
   "zip": "kukia-node.zip",
-  "zip_sha256": "56d12f344d911490e607a3b2a9c8ee5db1c0c307d4a2584eacf7b91c6b1a3b34",
+  "zip_sha256": "bded3d4b1fb4483f321b0cdabb7ff71d10c50131e91f1d7afbf5f1f1691a17de",
   "verificar": "Descarga kukia-node.zip y ejecuta 'sha256sum kukia-node.zip' (Windows: 'certutil -hashfile kukia-node.zip SHA256'): tiene que dar el zip_sha256 de este fichero. La version del Core se ve en http://127.0.0.1:8300/version, que ademas publica el hash de cada fichero que esta ejecutando."
 }
