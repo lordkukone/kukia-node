@@ -291,6 +291,12 @@ def generar_zip(destino: Path) -> Path:
     with zipfile.ZipFile(salida, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for rel in EN_ZIP:
             if rel == "core_minero.txt":
+                # No se copia el de este PC: lleva la direccion del tunel de
+                # casa. Va una plantilla fija ("auto <espejo>") para que nadie
+                # acabe minando contra el ordenador de Kuki y para que el
+                # paquete sea igual en todas las copias. Si se compara el zip
+                # contra el disco, este fichero SIEMPRE sale distinto: es a
+                # proposito.
                 _meter(z, rel, CORE_MINERO_PUBLICO.encode("utf-8"))
                 continue
             ruta = RAIZ / rel
@@ -302,7 +308,17 @@ def generar_zip(destino: Path) -> Path:
             _meter(z, rel, ruta.read_bytes())
         # Anclas en Bitcoin: se incluyen para que cualquiera pueda verificar el
         # historial sin pedirnos nada (son 2 KB y no llevan ningun secreto).
+        #
+        # PERO las pruebas `.ots` NO entran (26-10-2026). No son fijas: mientras
+        # el sello espera confirmacion, `ots upgrade` reescribe el fichero en
+        # cuanto el bloque de Bitcoin llega. Eso hacia que el hash del paquete
+        # cambiase SIN que cambiase una linea de codigo, y que el zip publicado
+        # no cuadrase con lo que hay en disco (siete .ots distintos con el mismo
+        # codigo). Fuera del paquete, el hash depende solo del codigo; las
+        # pruebas siguen enteras y publicas en el repositorio (anclas/*.ots).
         for ruta in sorted((RAIZ / "anclas").glob("kukia_sello_*")):
+            if ruta.suffix == ".ots":
+                continue
             if ruta.is_file():
                 _meter(z, str(ruta.relative_to(RAIZ)), ruta.read_bytes())
     return salida
