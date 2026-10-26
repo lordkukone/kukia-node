@@ -8,7 +8,7 @@
 <title>KUKIA · Convierte potencia de cálculo en trabajo útil para la IA</title>
 <meta name="description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
 <meta name="keywords" content="computación distribuida GPU, cómputo para IA, tareas verificables, minado útil, nodos de computación domésticos, KUKIA, KIA">
-<meta name="kukia-build" content="v1.3.5-visible-siempre">
+<meta name="kukia-build" content="v1.3.6-ligera">
 <link rel="icon" href="moneda.jpg">
 <script>document.documentElement.classList.add('js');</script>
 <style>
@@ -58,8 +58,12 @@ section[id],div[id]{scroll-margin-top:84px}
 .salto:focus{left:8px;top:8px}
 
 /* ---------- barra ---------- */
-header.barra{position:sticky;top:0;z-index:100;background:rgba(5,13,10,.86);
-  backdrop-filter:blur(14px);border-bottom:1px solid var(--linea)}
+/* 26-10-2026: fuera el backdrop-filter. Difuminar en vivo lo que hay detras de
+   la barra se recalcula en cada fotograma mientras se hace scroll, y en un PC
+   que esta minando eso es justo lo que deja la pagina a tirones. Un fondo casi
+   opaco se ve igual de bien y no cuesta nada. */
+header.barra{position:sticky;top:0;z-index:100;background:rgba(5,13,10,.94);
+  border-bottom:1px solid var(--linea)}
 .barra .dentro{display:flex;align-items:center;gap:1.2rem;height:64px;
   max-width:var(--ancho);margin:0 auto;padding:0 1.25rem}
 .logo{display:flex;align-items:center;gap:.55rem;font-weight:800;letter-spacing:.16em;
@@ -111,7 +115,9 @@ header.barra{position:sticky;top:0;z-index:100;background:rgba(5,13,10,.86);
 .video-fondo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
   object-position:50% 22%;z-index:0;pointer-events:none;opacity:.34;
   transition:opacity .8s ease;
-  filter:saturate(.7) contrast(1.06) brightness(.95);
+  /* Sin `filter`: filtrar a pantalla completa un video que se mueve obliga a
+     reprocesar todos los fotogramas. El color ya viene ajustado en el propio
+     archivo (ver promo_web_lite.mp4). */
   }
 .video-fondo[data-modo="poster"]{opacity:.26}
   -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 16%,#000 84%,transparent 100%);
@@ -143,7 +149,7 @@ header.barra{position:sticky;top:0;z-index:100;background:rgba(5,13,10,.86);
 .moneda-hero img{display:block;width:min(100%,320px);height:auto;
   -webkit-mask-image:radial-gradient(circle at 50% 46%,#000 50%,transparent 70%);
   mask-image:radial-gradient(circle at 50% 46%,#000 50%,transparent 70%);
-  filter:drop-shadow(0 22px 55px rgba(230,189,75,.20)) drop-shadow(0 0 70px rgba(60,200,255,.10))}
+  filter:drop-shadow(0 14px 26px rgba(230,189,75,.18))}
 .moneda-hero figcaption{margin:.5rem auto 0;max-width:32ch;font-size:.76rem;line-height:1.55;
   color:#bcd3c6;text-shadow:0 1px 10px #000,0 0 18px #000;
   background:rgba(5,13,10,.55);padding:.4rem .6rem;border-radius:9px} 
@@ -384,7 +390,9 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
   <video class="video-fondo" id="videoPortada" muted loop playsinline
          preload="none" poster="portada.jpg" aria-hidden="true" tabindex="-1"
          disablepictureinpicture disableremoteplayback>
-    <source src="promo_web.mp4" type="video/mp4">
+    <!-- 419 KB en vez de 1.828: 560x560 sin audio, con el color ya ajustado. Es
+         un fondo al 34 %, no necesita mas. El original sigue en la carpeta. -->
+    <source src="promo_web_lite.mp4" type="video/mp4">
   </video>
   <div class="velo" aria-hidden="true"></div>
   <div class="dentro">
@@ -1031,7 +1039,7 @@ if (io) {
   // a tirones y parece que la web "no carga". Ahora solo dibuja cuando de
   // verdad se ve, y al volver a verla se reanuda sola. El dibujo es el mismo.
   var visible = true, programado = false;
-  var N = 45;
+  var N = 30;   // 45 nodos con resplandor en cada fotograma pesaban de mas
   for(var i=0;i<N;i++){
     nodes.push({x: Math.random(), y: Math.random(),
       vx: (Math.random()-.5)*0.0009, vy: (Math.random()-.5)*0.0009,
@@ -1067,10 +1075,12 @@ if (io) {
     for(i=0;i<nodes.length;i++){
       a = nodes[i];
       if(a.gpu){
+        // Sin shadowBlur: obliga a un desenfoque por nodo y por fotograma. Un
+        // cuadrado translucido grande + otro solido da el mismo brillo barato.
+        ctx.fillStyle = 'rgba(0,255,136,.22)';
+        ctx.fillRect(a.x*W-7, a.y*H-7, 14, 14);
         ctx.fillStyle = '#00ff88';
-        ctx.shadowColor = '#00ff88'; ctx.shadowBlur = 12;
         ctx.fillRect(a.x*W-3, a.y*H-3, 6, 6);
-        ctx.shadowBlur = 0;
       } else {
         ctx.fillStyle = 'rgba(0,229,255,.85)';
         ctx.beginPath(); ctx.arc(a.x*W, a.y*H, a.r, 0, 6.283); ctx.fill();
