@@ -89,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>5b99b903c20c2b2a378852381a3fd16af848aa4b63114712a1ea7dc991413aef</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>a432cc8417fcfc2a9a27385c5e18dd960bbe362eed11f0ff94c8a32d40a30a1d</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -4905,8 +4905,19 @@ def transferir(t: TransferIn):
         except Exception:
             raise HTTPException(503, &quot;Core ocupado, reintentar&quot;)
         try:
+            # P-1 (27-10-2026): el CREATE declaraba 6 columnas y el INSERT de
+            # abajo escribe 7 valores con `firma` y `clave_publica`. En una base
+            # NUEVA la tabla se creaba sin esas dos y el INSERT reventaba; el
+            # except generico de mas abajo lo contaba como &quot;nonce ya usado&quot;
+            # (409), asi que la PRIMERA transferencia de una instalacion nueva no
+            # se guardaba nunca y el mensaje encima mentia. En un ledger ya
+            # migrado el CREATE no se ejecuta (la tabla existe con sus 8
+            # columnas), por eso en produccion no saltaba. Se declaran las 8 con
+            # el MISMO DEFAULT que la migracion de arriba, para que una base
+            # nueva quede igual que una migrada.
             con.execute(&quot;CREATE TABLE IF NOT EXISTS transferencias(id INTEGER PRIMARY KEY AUTOINCREMENT, &quot;
                         &quot;de_nodo TEXT, a_direccion TEXT, monto REAL, nonce TEXT, ts TEXT, &quot;
+                        &quot;firma TEXT DEFAULT &#x27;&#x27;, clave_publica TEXT DEFAULT &#x27;&#x27;, &quot;
                         &quot;UNIQUE(de_nodo, nonce))&quot;)
             # El destino solo puede ser una direccion KUK... o un nodo que
             # exista: antes se aceptaba cualquier cadena y el saldo se quemaba.
