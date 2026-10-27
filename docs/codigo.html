@@ -89,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>e08abc88727e1f60708f44a024bb72b78a9a1c5c9b641517c147ae72e18a6f06</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>37f6cc6edaf2e4f5167579d47a36cdfb62b28f55add6160dff8a413e80f3b5ac</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -1821,6 +1821,9 @@ LIMITES_POR_RUTA = {
     # mineros en el mismo Core sin abrir la puerta a un bucle desbocado.
     &quot;/nodos/telemetria&quot;: 600,
     &quot;/transferir&quot;: 60,
+    # Mismo cupo para el camino poscuantico: una transferencia cuesta lo mismo
+    # de verificar y no tiene sentido darle mas manga ancha que al v1.
+    &quot;/transferir/v2&quot;: 60,
     # Un validador independiente manda una atestacion por vuelta (cada 30 s).
     # 240/min deja sitio a varios validadores en el mismo Core sin abrir la
     # puerta a un bucle desbocado.
@@ -4865,6 +4868,128 @@ class TransferIn(BaseModel):
     nonce: str = &quot;&quot;
     firma: str = &quot;&quot;
     clave_publica: str = &quot;&quot;   # solo si el origen es una billetera (no un nodo)
+
+# ============================================================
+#  FIRMAS HIBRIDAS POSCUANTICAS (rama pqc-hibrido, 27-10-2026)
+#
+#  Camino NUEVO y paralelo: /transferir (v1) queda intacto, byte a byte. Si
+#  esta integracion tiene un fallo, no puede llevarse por delante las
+#  transferencias que hoy funcionan, porque no las toca.
+#
+#  Apagado por defecto: sin KUKIA_PQC=1 el Core se comporta como siempre y
+#  /transferir/v2 solo contesta &quot;desactivado&quot;. Una rama experimental no debe
+#  cambiar el comportamiento de un Core que ya esta atendiendo.
+#
+#  El puente (pqc/puente_core.py) solo VERIFICA. El dinero se mueve aqui, con
+#  el MISMO _pago_lock y el MISMO _asiento que el camino v1: una sola cadena
+#  de hashes, un solo suministro, ninguna contabilidad paralela.
+# ============================================================
+try:
+    from pqc import puente_core as PQC
+except Exception as _e_pqc:          # el Core arranca aunque falte el paquete
+    PQC = None
+    print(f&quot;[KUKIA] AVISO: firmas poscuanticas no disponibles ({_e_pqc})&quot;, flush=True)
+
+
+class TransferInPQ(BaseModel):
+    sobre: dict | str = &quot;&quot;            # sobre hibrido (JSON ya parseado o texto)
+    clave_publica_ed25519: str = &quot;&quot;
+    clave_publica_mldsa65: str = &quot;&quot;
+
+
+@app.get(&quot;/pqc/estado&quot;)
+def pqc_estado():
+    &quot;&quot;&quot;Si este Core verifica firmas poscuanticas y con que politica.
+
+    Publico y de solo lectura a proposito: un cliente tiene que poder saber si
+    mandar el sobre hibrido o quedarse en el camino v1, sin adivinar.
+    &quot;&quot;&quot;
+    if PQC is None:
+        return {&quot;activo&quot;: False, &quot;motivo&quot;: &quot;el paquete pqc no esta instalado&quot;}
+    return PQC.estado()
+
+
+@app.post(&quot;/transferir/v2&quot;)
+def transferir_pq(t: TransferInPQ):
+    &quot;&quot;&quot;Transfiere KIA con sobre hibrido Ed25519 + ML-DSA-65.
+
+    Que aporta frente a /transferir, y es la razon de que exista:
+      - La firma cubre un mensaje canonico con dominio, red, version y la
+        LISTA de algoritmos. Quitar la firma poscuantica cambia los bytes
+        firmados, asi que el downgrade no verifica (no es &quot;vale la que pase&quot;).
+      - El origen es una direccion KQ1... que compromete las DOS claves
+        publicas: presentar una clave y cobrar en otra no cuadra.
+      - El importe va firmado como texto decimal y se comprueba que el float
+        que llega al ledger es exactamente ese decimal.
+      - El nonce se guarda en una tabla con UNIQUE: repetir un sobre es 409,
+        tambien despues de reiniciar el Core.
+    No crea moneda: debita y acredita lo mismo, asi que supply no cambia.
+    &quot;&quot;&quot;
+    if PQC is None:
+        raise HTTPException(503, &quot;firmas poscuanticas no instaladas en este Core&quot;)
+    if not PQC.ACTIVO:
+        raise HTTPException(503, PQC.estado().get(&quot;motivo&quot;) or
+                            &quot;firmas poscuanticas desactivadas&quot;)
+    if LEDGER_ROTO:
+        raise HTTPException(503, &quot;ledger alterado: transferencias bloqueadas (ver /ledger/integridad)&quot;)
+    try:
+        mov = PQC.transferencia(t.sobre, t.clave_publica_ed25519, t.clave_publica_mldsa65)
+    except PQC.Rechazo as e:
+        raise HTTPException(401, f&quot;sobre rechazado: {e}&quot;)
+    de, a, monto, nonce = mov[&quot;de&quot;], mov[&quot;a&quot;], mov[&quot;monto&quot;], mov[&quot;nonce&quot;]
+    with _pago_lock:
+        try:
+            con.execute(&quot;BEGIN IMMEDIATE&quot;)
+        except Exception:
+            raise HTTPException(503, &quot;Core ocupado, reintentar&quot;)
+        try:
+            # Tabla PROPIA del camino v2: no se toca la de v1 ni su UNIQUE.
+            con.execute(&quot;CREATE TABLE IF NOT EXISTS transferencias_pq(&quot;
+                        &quot;id INTEGER PRIMARY KEY AUTOINCREMENT, de_nodo TEXT, &quot;
+                        &quot;a_direccion TEXT, monto REAL, nonce TEXT, ts TEXT, &quot;
+                        &quot;modo TEXT, sobre_hash TEXT, UNIQUE(de_nodo, nonce))&quot;)
+            # El destino solo puede ser una direccion (v1 o v2) o un nodo que
+            # exista. Igual que v1: un destino inventado quemaria el saldo.
+            if (not direccion_valida(a) and not PQC.es_direccion_v2(a)
+                    and not con.execute(&quot;SELECT 1 FROM nodos WHERE id=?&quot;, (a,)).fetchone()):
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(400, &quot;destino invalido: usa una direccion &quot;
+                                         &quot;KUK.../KQ1... o un nodo registrado&quot;)
+            saldo = float(con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger &quot;
+                                      &quot;WHERE nodo_id=?&quot;, (de,)).fetchone()[&quot;s&quot;] or 0.0)
+            if saldo &lt; monto:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(409, &quot;saldo insuficiente&quot;)
+            try:
+                con.execute(&quot;INSERT INTO transferencias_pq(de_nodo,a_direccion,monto,&quot;
+                            &quot;nonce,ts,modo,sobre_hash) VALUES(?,?,?,?,?,?,?)&quot;,
+                            (de, a, monto, nonce, time.ctime(), mov[&quot;modo&quot;],
+                             mov[&quot;sobre_hash&quot;]))
+            except Exception:
+                con.execute(&quot;ROLLBACK&quot;)
+                raise HTTPException(409, &quot;nonce ya usado (repeticion bloqueada)&quot;)
+            # ID propio (&#x27;tx-pq-&#x27;) para que un asiento v2 no pueda confundirse
+            # con uno v1 aunque el nonce se llame igual.
+            _asiento(f&quot;tx-pq-{nonce}&quot;, de, -monto, &quot;transferencia pq salida&quot;)
+            _asiento(f&quot;tx-pq-{nonce}&quot;, a, monto, &quot;transferencia pq entrada&quot;)
+            con.commit()
+            return {&quot;ok&quot;: True, &quot;de&quot;: de, &quot;a&quot;: a, &quot;monto&quot;: monto,
+                    &quot;monto_firmado&quot;: mov[&quot;monto_texto&quot;], &quot;modo&quot;: mov[&quot;modo&quot;],
+                    &quot;nonce&quot;: nonce, &quot;sobre_hash&quot;: mov[&quot;sobre_hash&quot;],
+                    &quot;supply&quot;: round(supply_emitido(), 6)}
+        except HTTPException:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            raise
+        except Exception as e:
+            try:
+                con.execute(&quot;ROLLBACK&quot;)
+            except Exception:
+                pass
+            raise _error_escritura(e, &quot;error interno en transferencia pq&quot;)
+
 
 @app.post(&quot;/transferir&quot;)
 def transferir(t: TransferIn):
@@ -12468,6 +12593,29 @@ print(&quot;OK&quot;)
               and stats.get(&quot;version&quot;) == _ver_esperada,
               f&quot;version={stats.get(&#x27;version&#x27;)} esperada={_ver_esperada}&quot;)
 
+        # ESQUEMA CONTRA INSERT (27-10-2026): P-1 fue una tabla que declaraba
+        # menos columnas de las que escribe su INSERT (6 contra 7) y estuvo a la
+        # vista sin que lo viera nadie: el CREATE y su INSERT viven en sitios
+        # distintos del mismo fichero. Aqui se revisa TODO el codigo de producto
+        # en cada vuelta, para que el siguiente no llegue a produccion.
+        print(&quot;\n== ESQUEMA DE TABLAS CONTRA SUS INSERT ==&quot;)
+        _esq = subprocess.run([sys.executable, str(RAIZ / &quot;tools&quot; / &quot;esquema_vs_insert.py&quot;),
+                               &quot;--json&quot;], capture_output=True, text=True, timeout=120)
+        try:
+            _datos = json.loads(_esq.stdout)
+        except Exception:
+            _datos = {}
+        check(&quot;ningun esquema declara menos columnas de las que escribe su INSERT&quot;,
+              _esq.returncode == 0 and not _datos.get(&quot;cortas&quot;),
+              &quot;; &quot;.join(f&quot;{c[&#x27;tabla&#x27;]} sin {c[&#x27;faltan&#x27;]} ({c[&#x27;fichero&#x27;]})&quot;
+                        for c in (_datos.get(&quot;cortas&quot;) or []))[:200]
+              or (_esq.stderr or &quot;&quot;)[:200])
+        _auto = subprocess.run([sys.executable, str(RAIZ / &quot;tools&quot; / &quot;esquema_vs_insert.py&quot;),
+                                &quot;--autoprueba&quot;], capture_output=True, text=True, timeout=120)
+        check(&quot;el revisor de esquemas detecta el fallo de P-1 (su autoprueba)&quot;,
+              _auto.returncode == 0,
+              (_auto.stdout.strip().splitlines() or [&quot;&quot;])[-1][:160])
+
         print(&quot;\n== RESUMEN ==&quot;)
         fails = [r for r in resultados if not r[1]]
         print(f&quot;{len(resultados) - len(fails)}/{len(resultados)} pruebas OK&quot;)
@@ -13585,6 +13733,14 @@ except Exception as _e:  # pragma: no cover
     core_destino = None
     print(f&quot;[guardia] AVISO: sin core_destino ({_e}); se usa la linea tal cual&quot;, flush=True)
 
+try:
+    import rotar_logs
+    # La rotacion de logs tampoco puede tumbar al guardia: si falta el modulo,
+    # se sigue como antes (logs sin cortar) y se avisa una vez.
+except Exception as _e:  # pragma: no cover
+    rotar_logs = None
+    print(f&quot;[guardia] AVISO: sin rotar_logs ({_e}); los logs no se rotaran&quot;, flush=True)
+
 
 _LOCAL = &quot;http://127.0.0.1:8300&quot;
 
@@ -13632,12 +13788,43 @@ def log(msg: str) -&gt; None:
     print(linea, flush=True)
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
-        if LOG.exists() and LOG.stat().st_size &gt; MAX_LOG_BYTES:
+        # 27-10-2026: antes se renombraba a `.log.1` (una sola generacion, y sin
+        # copiar la cola). Ahora la rotacion es la misma para todos los logs
+        # (tools/rotar_logs.py): guarda la cola y conserva varias generaciones.
+        if rotar_logs is not None:
+            rotar_logs.rota_ahora(LOG, max_bytes=MAX_LOG_BYTES)
+        elif LOG.exists() and LOG.stat().st_size &gt; MAX_LOG_BYTES:
             LOG.replace(LOG.with_suffix(&quot;.log.1&quot;))
         with LOG.open(&quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
             f.write(linea + &quot;\n&quot;)
     except Exception:
         pass
+
+
+def rotar_logs_hijos(hijos: dict) -&gt; None:
+    &quot;&quot;&quot;Corta la salida de los hijos si ha pasado del tope (cada vuelta).
+
+    POR QUE AQUI Y NO EN CADA HIJO: los hijos son uvicorn, el minero o el
+    tunel, y su salida la abre ESTE proceso (`Hijo.arrancar`, modo &quot;ab&quot;) para
+    pasarsela como descriptor. Desde fuera no se puede renombrar un fichero
+    abierto en Windows, pero si truncarlo: con O_APPEND el hijo sigue
+    escribiendo al final del fichero ya vacio. Ver tools/rotar_logs.py.
+
+    FALLO REAL (27-10-2026): logs/core.log llego a 209 MB (1,35 millones de
+    lineas, casi todas de peticiones 200 OK) y logs/minero_visible.log a 68 MB
+    porque nadie cortaba la salida de los hijos.
+    &quot;&quot;&quot;
+    if rotar_logs is None:
+        return
+    for h in hijos.values():
+        try:
+            n = rotar_logs.rota_ahora(h.logfile)
+        except Exception as e:
+            log(f&quot;[logs] no se pudo rotar {getattr(h, &#x27;logfile&#x27;, &#x27;?&#x27;)}: &quot;
+                f&quot;{type(e).__name__}: {e}&quot;)
+            continue
+        if n:
+            log(f&quot;[logs] {h.logfile.name} rotado: se sueltan {rotar_logs.mb(n)}&quot;)
 
 
 def _peticion(ruta: str, timeout: float = 6.0):
@@ -14276,6 +14463,11 @@ class Estado:
 
 def ciclo(hijos: dict, estado: Estado, verbose: bool) -&gt; int:
     problemas = 0
+
+    # -1. LOGS. La salida de los hijos se corta aqui: si un log pasa del tope,
+    #     se guarda su cola y se vacia el fichero vivo. Va lo primero porque es
+    #     barato (un stat por hijo) y no depende de nada mas.
+    rotar_logs_hijos(hijos)
 
     # 0. MUERTE CONOCIDA (el camino rapido). Si un hijo que arranco el guardia
     #    ya no existe, se sabe por el propio proceso: se relanza en el acto.
