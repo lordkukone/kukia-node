@@ -1431,6 +1431,29 @@ print("OK")
               and stats.get("version") == _ver_esperada,
               f"version={stats.get('version')} esperada={_ver_esperada}")
 
+        # ESQUEMA CONTRA INSERT (27-10-2026): P-1 fue una tabla que declaraba
+        # menos columnas de las que escribe su INSERT (6 contra 7) y estuvo a la
+        # vista sin que lo viera nadie: el CREATE y su INSERT viven en sitios
+        # distintos del mismo fichero. Aqui se revisa TODO el codigo de producto
+        # en cada vuelta, para que el siguiente no llegue a produccion.
+        print("\n== ESQUEMA DE TABLAS CONTRA SUS INSERT ==")
+        _esq = subprocess.run([sys.executable, str(RAIZ / "tools" / "esquema_vs_insert.py"),
+                               "--json"], capture_output=True, text=True, timeout=120)
+        try:
+            _datos = json.loads(_esq.stdout)
+        except Exception:
+            _datos = {}
+        check("ningun esquema declara menos columnas de las que escribe su INSERT",
+              _esq.returncode == 0 and not _datos.get("cortas"),
+              "; ".join(f"{c['tabla']} sin {c['faltan']} ({c['fichero']})"
+                        for c in (_datos.get("cortas") or []))[:200]
+              or (_esq.stderr or "")[:200])
+        _auto = subprocess.run([sys.executable, str(RAIZ / "tools" / "esquema_vs_insert.py"),
+                                "--autoprueba"], capture_output=True, text=True, timeout=120)
+        check("el revisor de esquemas detecta el fallo de P-1 (su autoprueba)",
+              _auto.returncode == 0,
+              (_auto.stdout.strip().splitlines() or [""])[-1][:160])
+
         print("\n== RESUMEN ==")
         fails = [r for r in resultados if not r[1]]
         print(f"{len(resultados) - len(fails)}/{len(resultados)} pruebas OK")
