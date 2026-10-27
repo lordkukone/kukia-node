@@ -89,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>bded3d4b1fb4483f321b0cdabb7ff71d10c50131e91f1d7afbf5f1f1691a17de</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>5b99b903c20c2b2a378852381a3fd16af848aa4b63114712a1ea7dc991413aef</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -3237,9 +3237,33 @@ def ledger_integridad():
     ahora = time.time()
     if _integridad_cache[&quot;datos&quot;] is None or ahora - _integridad_cache[&quot;ts&quot;] &gt; 30:
         sellos = _sellos_leidos()
-        est = SELLOS.estado_ledger(con) if SELLOS else {}
-        cadena = SELLOS.verificar_cadena_db(con) if SELLOS else {&quot;ok&quot;: False, &quot;ids_alterados&quot;: []}
-        r = SELLOS.verificar_sellos(con, sellos, _sello_pub) if SELLOS else {&quot;ok&quot;: False, &quot;problemas&quot;: []}
+        # 27-10-2026 (H-01, hipotesis de concurrencia): las lecturas van dentro
+        # de UNA transaccion de solo lectura. En WAL eso les da la MISMA foto del
+        # ledger; sin esto, un asiento que entra entre la pasada de la cadena y
+        # la de los sellos puede hacer que la respuesta mezcle dos estados. No
+        # frena a los escritores (WAL) y no cambia QUE se comprueba.
+        _en_tx = True
+        try:
+            con.execute(&quot;BEGIN&quot;)
+        except Exception:
+            _en_tx = False          # ya habia transaccion en este hilo: se sigue sin foto
+        try:
+            est = SELLOS.estado_ledger(con) if SELLOS else {}
+            cadena = (SELLOS.verificar_cadena_db(con) if SELLOS
+                      else {&quot;ok&quot;: False, &quot;ids_alterados&quot;: []})
+            # La cadena ya esta recorrida: verificar_sellos la reutiliza en vez
+            # de volver a pasar por el ledger entero.
+            r = (SELLOS.verificar_sellos(con, sellos, _sello_pub, cadena=cadena)
+                 if SELLOS else {&quot;ok&quot;: False, &quot;problemas&quot;: []})
+        finally:
+            if _en_tx:
+                try:
+                    con.execute(&quot;COMMIT&quot;)
+                except Exception:
+                    try:
+                        con.execute(&quot;ROLLBACK&quot;)
+                    except Exception:
+                        pass
         _integridad_cache[&quot;datos&quot;] = {
             &quot;cadena_ok&quot;: bool(cadena.get(&quot;ok&quot;)),
             &quot;ids_alterados&quot;: cadena.get(&quot;ids_alterados&quot;, [])[:20],
@@ -8601,9 +8625,14 @@ def verificar_cadena_db(con) -&gt; dict:
     prev = &quot;&quot;
     problemas = []
     estado = {&quot;hasta&quot;: 0, &quot;hash&quot;: &quot;&quot;, &quot;asientos&quot;: 0}
+    # 27-10-2026 (H-01): recorrido en STREAMING. Con .fetchall() esta pasada
+    # materializaba el ledger entero en memoria (medido: 352 MB con 400.000
+    # asientos, ~725 MB con los 913.838 reales) para devolver un veredicto.
+    # El calculo es identico: lo unico que cambia es que no se guardan todas
+    # las filas a la vez.
     for r in con.execute(
             &quot;SELECT id,tarea_id,nodo_id,kuki,motivo,ts,hash_prev,hash &quot;
-            &quot;FROM ledger ORDER BY id&quot;).fetchall():
+            &quot;FROM ledger ORDER BY id&quot;):
         if not r[&quot;hash&quot;]:
             continue
         base = f&quot;{r[&#x27;tarea_id&#x27;]}|{r[&#x27;nodo_id&#x27;]}|{r[&#x27;kuki&#x27;]}|{r[&#x27;motivo&#x27;]}|{r[&#x27;ts&#x27;]}|{r[&#x27;hash_prev&#x27;] or &#x27;&#x27;}&quot;
@@ -8619,7 +8648,8 @@ def _parece_huella(h: str) -&gt; bool:
     return len(h) == 64 and all(c in &quot;0123456789abcdef&quot; for c in h.lower())
 
 
-def verificar_sellos(con, sellos: list, publica_hex: str) -&gt; dict:
+def verificar_sellos(con, sellos: list, publica_hex: str,
+                     cadena: dict | None = None) -&gt; dict:
     &quot;&quot;&quot;Comprueba la cadena de sellos Y que cada sello cuadre con el .db.
 
     Devuelve {ok, problemas:[...], cadena:{...}, ultimo:{...}}.
@@ -8630,7 +8660,11 @@ def verificar_sellos(con, sellos: list, publica_hex: str) -&gt; dict:
     &quot;&quot;&quot;
     problemas = []
     # 1) Cadena de hashes del propio .db.
-    cadena = verificar_cadena_db(con)
+    # 27-10-2026 (H-01): si quien llama ya la calculo, se reutiliza. Antes esta
+    # funcion volvia a recorrer el ledger entero, asi que UNA peticion a
+    # /ledger/integridad lo recorria dos veces (y una tercera con la ventana).
+    if cadena is None:
+        cadena = verificar_cadena_db(con)
     if not cadena[&quot;ok&quot;]:
         problemas.append(f&quot;asientos alterados en el .db: {cadena[&#x27;ids_alterados&#x27;][:10]}&quot;)
     # 2) Firmas y encadenado de los sellos.
@@ -8690,16 +8724,25 @@ def verificar_sellos(con, sellos: list, publica_hex: str) -&gt; dict:
     # La ventana de SQL acumula en el mismo motor y el mismo orden que usa el
     # sello, asi que la comparacion vuelve a ser exacta.
     if sellos:
-        filas = con.execute(
-            &quot;SELECT id,hash,SUM(kuki) OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) s &quot;
-            &quot;FROM ledger ORDER BY id&quot;).fetchall()
-        n_hash = 0
+        # 27-10-2026 (H-01): solo hacen falta las filas que son corte de sello.
+        # Se recorre el cursor en streaming y se guardan decenas de entradas en
+        # vez de un dict con TODAS (913.838 en el ledger real). La suma la sigue
+        # haciendo SQLite con la misma ventana que usa el sello, para no
+        # reintroducir la deriva de coma flotante del sello 91
+        # (15084442,6813 en Python frente a ,6814 en SQL).
+        cortes = {int(s.get(&quot;hasta&quot;) or 0) for s in sellos if isinstance(s, dict)}
+        cortes.discard(0)
         por_id = {}
-        for r in filas:
+        n_hash = 0
+        for r in con.execute(
+                &quot;SELECT id,hash,SUM(kuki) OVER (ORDER BY id ROWS UNBOUNDED PRECEDING) s &quot;
+                &quot;FROM ledger ORDER BY id&quot;):
             if r[&quot;hash&quot;]:
                 n_hash += 1
-            por_id[int(r[&quot;id&quot;])] = (r[&quot;hash&quot;], n_hash,
-                                     round(float(r[&quot;s&quot;] or 0.0), DECIMALES))
+            i_id = int(r[&quot;id&quot;])
+            if i_id in cortes:
+                por_id[i_id] = (r[&quot;hash&quot;], n_hash,
+                                round(float(r[&quot;s&quot;] or 0.0), DECIMALES))
         for i, s in enumerate(sellos):
             if not isinstance(s, dict):
                 continue
@@ -11228,11 +11271,20 @@ def main() -&gt; int:
             cwd=str(COORD), env=entorno, stdout=archivo, stderr=subprocess.STDOUT)
         return proceso, archivo
 
-    # Dos intentos con puerto nuevo: en Windows el Core aislado se ha visto
-    # morir al arrancar sin escribir NADA en el log (ni traceback), mientras el
-    # mismo binario arrancaba bien a mano segundos antes; parece del sistema,
-    # no del Core. Si el Core falla de verdad (import roto, DB ilegible) fallan
-    # los dos intentos y la prueba se cae igual, con el codigo de salida.
+    # UN SOLO arranque, sin reintento.
+    #
+    # Aqui habia un parche de &quot;dos intentos con puerto nuevo&quot; que se puso cuando
+    # el Core aislado se veia morir al arrancar sin escribir NADA en el log (ni
+    # traceback). Esa firma -morir sin rastro- era la del vigilante `Watch_Core`
+    # matando al Core de pruebas, no un fallo del Core. La causa ya no existe:
+    # el vigilante solo puede tocar al proceso que OCUPA el puerto 8300
+    # (tools/vigilante_core.ps1) y esta suite usa un puerto libre.
+    #
+    # Comprobado el 27-10-2026 con 6 vueltas (107/107 OK y codigo 0 en todas):
+    # 3 seguidas y 3 alineadas para que un tick del vigilante cayera DENTRO de
+    # la vuelta con el Core ya vivo. Las 6 arrancaron al primer intento y no hubo
+    # ni un aviso. Se quita para que un fallo de arranque se vea tal cual, sin
+    # que un reintento lo disimule, y sin gastar un puerto extra por si acaso.
     proc, log = arrancar(puerto)
 
     def fallo_arranque(msg):
@@ -11254,51 +11306,44 @@ def main() -&gt; int:
 
     try:
         listo = False
-        for intento in (1, 2):
-            print(f&quot;arrancando Core aislado en {base} (intento {intento})...&quot;, flush=True)
-            t0 = time.time()
-            while time.time() - t0 &lt; 240:
-                if proc.poll() is not None:
-                    break
-                try:
-                    if requests.get(f&quot;{base}/stats&quot;, timeout=3).status_code == 200:
-                        listo = True
-                        break
-                except Exception:
-                    pass
-                time.sleep(1)
-            if listo:
+        print(f&quot;arrancando Core aislado en {base}...&quot;, flush=True)
+        t0 = time.time()
+        while time.time() - t0 &lt; 240:
+            if proc.poll() is not None:
                 break
-            # Se guarda lo que haya escrito para poder diagnosticarlo.
+            try:
+                if requests.get(f&quot;{base}/stats&quot;, timeout=3).status_code == 200:
+                    listo = True
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        if not listo:
+            # Se cierra el log antes de leerlo para que la cola salga entera y se
+            # vea POR QUE no arranco (import roto, DB ilegible, puerto ocupado).
+            escrito = &quot;&quot;
             try:
                 log.flush()
                 log.close()
+                escrito = (tmp / &quot;core.log&quot;).read_text(encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;)
             except Exception:
                 pass
-            escrito = (tmp / &quot;core.log&quot;).read_text(encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;)
-            print(f&quot;[aviso] intento {intento}: sin respuesta (codigo {proc.returncode}, &quot;
+            print(f&quot;[aviso] sin respuesta al arrancar (codigo {proc.returncode}, &quot;
                   f&quot;{len(escrito.splitlines())} lineas de log)&quot;, flush=True)
-            if intento == 1:
-                puerto = puerto_libre()
-                base = f&quot;http://127.0.0.1:{puerto}&quot;
-                proc, log = arrancar(puerto)
-        if not listo:
-            return fallo_arranque(&quot;el Core no respondio tras 2 intentos&quot;)
+            return fallo_arranque(&quot;el Core no respondio al arrancar&quot;)
 
         s = requests.Session()
-        # El Core aislado corre en esta misma maquina: Windows a veces resetea
-        # una conexion keep-alive suelta (no es un fallo del Core, que no
-        # registra nada). Reintentar la CONEXION es lo que hace cualquier
-        # cliente serio; si el Core esta muerto de verdad, el reintento falla
-        # igual y la prueba se cae como debe.
-        try:
-            from requests.adapters import HTTPAdapter
-            from urllib3.util.retry import Retry
-            _reintentos = Retry(total=2, connect=2, read=0, status=0,
-                                backoff_factor=0.4, raise_on_status=False)
-            s.mount(&quot;http://&quot;, HTTPAdapter(max_retries=_reintentos))
-        except Exception:
-            pass
+        # 27-10-2026 (H-01/F-02): aqui habia un reintento de CONEXION (un `Retry`
+        # de urllib3 montado en la sesion) que se puso como parche cuando el
+        # vigilante `Watch_Core` mataba el Core aislado de esta suite y el corte
+        # se veia como un `ConnectionResetError 10054`. La causa ya no existe: el
+        # vigilante solo puede tocar al proceso que OCUPA el puerto 8300
+        # (tools/vigilante_core.ps1) y este Core de prueba usa un puerto libre.
+        # Se ha quitado para que un corte de verdad se vea tal cual, sin que un
+        # reintento lo disimule. Comprobado el 27-10-2026: 3 vueltas sin este
+        # reintento, 107/107 OK las tres (exit 0), con un tick del vigilante A
+        # MITAD de la suite en dos de ellas. Las 3 vueltas previas, con el
+        # reintento puesto, tambien dieron 107/107.
         admin = {&quot;X-Admin-Token&quot;: token}
 
         print(&quot;\n== INTEGRIDAD INICIAL ==&quot;)
