@@ -1,0 +1,36 @@
+# Ficheros que la web carga con hash de integridad (SRI) en el <script>.
+#
+# POR QUE ESTA ESTE FICHERO (fallo real, 26-10-2026): en GitHub Pages, el
+# navegador bloqueaba nacl.min.js con
+#
+#   Failed to find a valid digest in the 'integrity' attribute for resource
+#   '.../nacl.min.js' ... The resource has been blocked.
+#
+# y la portada se quedaba en «DESCONECTADO · el relé no responde» sin datos en
+# vivo, y la billetera sin criptografía ni QR. Medido byte a byte: en el disco
+# los ficheros tienen 18458 y 20389 bytes (terminan en \r\n) y por GitHub
+# llegaban 18457 y 20388 (git les quitaba el \r final). Un byte de diferencia =
+# otro sha384 = el navegador bloquea el script. En Surge llegaban intactos y por
+# eso allí la web funcionaba.
+#
+# Con `-text` git guarda estos ficheros tal cual, sin tocar sus saltos de línea.
+# Si algún día se cambia un fichero de estos hay que recalcular su sha384 y
+# actualizar el `integrity` de los HTML que lo cargan (index, wallet,
+# calculadora).
+nacl.min.js -text
+qrcode.min.js -text
+
+# Piezas del vigilante y de la suite, guardadas TAL CUAL (mismo motivo que las de
+# arriba). El manifiesto `tools\vigilante_core.hashes.json` guarda el SHA-256 de los
+# bytes de estos ficheros: si git convierte sus finales de linea, el clon trae otros
+# bytes y el sello sale roto sin que nadie haya tocado nada.
+# Medido el 27-10-2026: clonado a pelo, vigilante_core.ps1 salia con 38.131 bytes
+# (CRLF) en vez de los 37.355 sellados; con -text salen los mismos bytes.
+tools/vigilante_core.ps1 -text
+tools/vigilante_core.config.json -text
+tools/vigilante_core.hashes.json -text
+tools/vigilante_core_oculto.vbs -text
+tools/lanzar_core.cmd -text
+tools/lanzar_core_oculto.vbs -text
+tools/instalar_tareas_core.ps1 -text
+tools/pruebas_seguridad.py -text
