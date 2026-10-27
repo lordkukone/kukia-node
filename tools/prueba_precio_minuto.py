@@ -38,6 +38,10 @@ def _entorno(db: Path, carpeta: Path) -> dict:
         "KUKIA_AUTO_TAREAS": "0",
         "KUKIA_ARCHIVAR": "0",
         "KUKIA_PAGO_POR_FLOP": "1",
+        # Sin suelo por tarea: esta prueba mide que el pago sea proporcional al
+        # trabajo (x8 GFLOP, x8 KIA), y con el suelo las tareas pequenas pagan
+        # el minimo. El suelo se prueba en tools/prueba_suelo_transferible.py.
+        "KUKIA_PAGO_MIN_KIA": "0",
         "PYTHONUNBUFFERED": "1",
         "PYTHONIOENCODING": "utf-8",
     })

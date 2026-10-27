@@ -97,12 +97,25 @@ REWARD_BASE = 10.0                # KIA por tarea base
 # completa. NO es una billetera: es una cuenta del ledger, y el titular no
 # tiene clave privada, asi que solo el Core puede moverla.
 CUENTA_ESCROW = os.environ.get("KUKIA_ESCROW", "KUKIA_ESCROW")
+# INGRESOS EN EUROS (25-10-2026): la cuenta donde se anota el dinero REAL que
+# entra por un servicio de fuera de la red (transcripcion, etc.). Se anota con
+# asientos de 0 KIA a proposito: el euro no se convierte en KIA ni emite nada,
+# solo queda escrito en la cadena que alguien pago, cuanto y por que trabajo.
+# Ese es el dato que convierte "KIA vale 0" en "KIA vale lo que alguien pago".
+CUENTA_INGRESOS = os.environ.get("KUKIA_CUENTA_INGRESOS", "INGRESOS_EUR")
 # Tope por defecto si el cliente no dice cuanto autoriza. Evita que una firma
 # vieja o un error de script vacie la billetera del cliente con una tarea cara.
 CLIENTE_TOPE_DEFECTO = abs(float(os.environ.get("KUKIA_CLIENTE_TOPE", "25")))
 # Cuantas tareas puede tener en cola un cliente a la vez. Sin esto, un cliente
 # (o quien robe su clave) puede encolar mil y bloquear la cola de los mineros.
 CLIENTE_MAX_EN_COLA = max(1, int(os.environ.get("KUKIA_CLIENTE_MAX_EN_COLA", "8")))
+# AUDITORIA 24-10-2026: esta lista vivia SOLO dentro de /cliente/precio. En
+# POST /cliente/tareas no se comprobaba el tipo, asi que un tipo inventado se
+# aceptaba, se cobraba (al minimo facturable) y se quedaba en la cola para
+# siempre: ningun minero sabe ejecutarlo. Ahora la lista es una sola y se usa
+# en las dos puertas, antes de tocar dinero.
+TIPOS_CLIENTE = ("checksum", "matriz", "inferencia", "embeddings",
+                 "lote_embeddings", "difusion_calor")
 # --- Bloque genesis fundacional (una sola vez) ---
 GENESIS_DIR = "KUK77D72508BD940C9BA969B0402A3CF1F9679BE3"   # wallet fundador (Kuki)
 GENESIS_MONTO = 15_000_000.0      # 15M reservados al fundador dentro del techo de 100M
@@ -113,12 +126,59 @@ TIER_MULT = {12: 1.0, 16: 1.3, 24: 1.6}   # Rent-Tier por VRAM (mejora 1)
 # ACTIVO por defecto desde el 22-10-2026: el pago sigue a los FLOPs verificados.
 # Para volver a la tarifa plana: KUKIA_PAGO_POR_FLOP=0 (y reiniciar el Core).
 PAGO_POR_FLOP = os.environ.get("KUKIA_PAGO_POR_FLOP", "1").strip().lower() not in ("0", "", "no", "false", "off")
+# ANCLA GPU-MINUTO (25-10-2026) - ENCENDIDA POR DEFECTO.
+# El precio por GFLOP deja de salir del trabajo medido el minuto anterior y sale
+# de una GPU de referencia a tope: un minuto de GPU cuesta el presupuesto del
+# minuto, o sea la emision de un mes paga exactamente un mes de GPU. Con los
+# numeros del 25-10 son 1,3106 KIA por minuto de GPU, 78,6 KIA la hora y
+# 1,4562e-6 KIA/GFLOP (antes, sin medida de red, se cobraba ~480 veces mas).
+# Se apaga con KUKIA_ANCLA_GPU_MIN=0 (y reiniciar) y vuelve el reparto por
+# trabajo medido. Ver tools/prueba_ancla.py y PLAN_DEMANDA.md.
+ANCLA_GPU_MIN = os.environ.get("KUKIA_ANCLA_GPU_MIN", "1").strip().lower() not in ("0", "", "no", "false", "off")
+# DEFINICION DEL KIA EN MINUTOS DE GPU (25-10-2026) - APAGADA POR DEFECTO
+# desde el 25-10-2026 por decision de Kuki (16:20).
+#
+# ENCENDIDA (KUKIA_PRECIO_DEFINIDO=1): 1 KIA = 1 minuto de la GPU de referencia
+# (60 x 15.000 GFLOP = 900.000 GFLOP), asi que precio = 1/900.000 = 0,000001111111
+# KIA/GFLOP y una GPU a tope cobra 1 KIA por minuto.
+#
+# APAGADA (defecto, y lo que corre hoy): el precio sale del PRESUPUESTO del
+# minuto repartido entre el trabajo medido, con SUELO de una GPU-minuto de
+# capacidad (`ANCLA_GPU_MIN`). Con los numeros de hoy: 1,310592 KIA/min entre
+# 900.000 GFLOP = 1,456213e-6 KIA/GFLOP. Es decir, un minuto de GPU vale lo que
+# paga la emision de ese minuto (1,31 KIA), no 1 fijo: el precio sube cuando la
+# red esta floja y se queda en el suelo cuando va a tope.
+#
+# Se vuelve a la definicion con KUKIA_PRECIO_DEFINIDO=1 y reiniciar. El factor
+# de la definicion se cambia con KUKIA_KIA_POR_MINUTO_GPU.
+# Ver tools/prueba_kia_minuto.py, tools/prueba_ancla.py y PLAN_DEMANDA.md.
+PRECIO_DEFINIDO = os.environ.get("KUKIA_PRECIO_DEFINIDO", "0").strip().lower() not in (
+    "0", "", "no", "false", "off")
+KIA_POR_MINUTO_GPU = abs(float(os.environ.get("KUKIA_KIA_POR_MINUTO_GPU", "1") or 1.0)) or 1.0
+# GFLOP/s de la GPU de referencia (RTX 5070 medida en esta maquina: 15.000).
+GPU_REF_GFLOPS = max(1.0, float(os.environ.get("KUKIA_GPU_REF_GFLOPS", "15000")))
 # Suelo facturable por tarea, en GFLOP. A 0 (defecto desde el 22-10-2026) el
 # pago es ESTRICTAMENTE proporcional al trabajo: una tarea de 0,4 GFLOP cobra
-# 0,4 y un checksum (0 FLOPs) cobra 0. La decision es de Kuki: el que no tiene
-# potencia cobra menos, sea GPU o CPU. Si algun dia se quiere un fijo minimo
-# por tarea (para que los nodos pequenos no se queden a cero), se pone >0.
+# 0,4 y un checksum (0 FLOPs) cobra 0.
 GFLOP_MIN_FACTURABLE = max(0.0, float(os.environ.get("KUKIA_GFLOP_MIN", "0")))
+# SUELO TRANSFERIBLE POR TAREA (25-10-2026) - ENCENDIDO POR DEFECTO.
+# Con la definicion (1 KIA = 1 minuto de GPU) una tarea pequena paga 1e-9 KIA, y
+# `POST /transferir` redondea el monto a 4 decimales: por debajo de 0,0001 KIA un
+# saldo no se puede mover, nunca. Para que nadie trabaje por menos de lo
+# transferible, ninguna tarea paga menos de PAGO_MIN_KIA (0,0001 KIA, que es el
+# monto minimo que acepta /transferir).
+#
+# Se aplica EN KIA, no en GFLOP, a proposito: si el precio cambia (definicion
+# apagada, otro KIA_POR_MINUTO_GPU), 90 GFLOP dejarian de valer 0,0001 y la
+# garantia se romperia en silencio. En KIA el suelo vale siempre lo mismo.
+# NO toca la medicion de GFLOP de la red (`gflop_red_por_min` sigue siendo
+# trabajo real): solo cambia lo que se paga por una tarea minima.
+# Consecuencia medible: las tareas de milisegundos pasan a pagar el suelo, asi
+# que el KIA/dia de un minero sube sin que suba el trabajo entregado. El tope
+# sigue siendo el presupuesto del minuto (1,31 KIA/min: 13.100 tareas de suelo).
+# Se apaga con KUKIA_PAGO_MIN_KIA=0 y el fijo se cambia con la misma variable.
+# Ver tools/prueba_suelo_transferible.py.
+PAGO_MIN_KIA = max(0.0, float(os.environ.get("KUKIA_PAGO_MIN_KIA", "0.0001") or 0.0))
 # Ventana para medir lo que entrega la red: corta, para que el precio siga a la
 # realidad, pero no tanto como para oscilar con cada tarea.
 GFLOPS_VENTANA_MIN = max(2, int(os.environ.get("KUKIA_VENTANA_MIN", "10")))
@@ -306,6 +366,22 @@ def _origen_ok(origen: str) -> bool:
         return False
     return (u.hostname or "").lower() in {"127.0.0.1", "localhost", "::1"}
 
+# CUANTO ESPERAR si otro programa tiene la base cogida (25-10-2026)
+# Antes: 30 s por hilo. Medido con una herramienta ajena leyendo el ledger
+# (una auditoria, una copia, /publico/verificar_sellos): el telemetraje y el
+# cobro de una transferencia se quedaron esperando el turno uno detras de
+# otro, la transferencia tardo 64,8 s y contesto 500 "error interno en
+# transferencia", que es mentira y ademas el cliente no sabe que reintentar.
+# Con 5 s (configurable con KUKIA_BUSY_TIMEOUT_MS) se contesta 503 "ocupado,
+# reintentar" en segundos y el cliente sabe que no se ha movido nada.
+def _espera_bloqueo_s() -> float:
+    texto = (os.environ.get("KUKIA_BUSY_TIMEOUT_MS") or "").strip()
+    try:
+        ms = int(texto)
+    except Exception:
+        ms = 5000
+    return max(0.2, min(60.0, ms / 1000.0))
+
 class _ConSegura:
     """Una conexion SQLite POR HILO (antes: una sola compartida por todos).
 
@@ -328,9 +404,11 @@ class _ConSegura:
     sentencia de otro. Las escrituras siguen serializadas con _pago_lock +
     BEGIN IMMEDIATE, y busy_timeout (30 s) absorbe el turno de escritura.
 
-    Nota: el modo de diario sigue siendo DELETE a proposito. WAL seria mas
-    comodo para lectores, pero entonces el .db no se puede copiar suelto (haría
-    falta el -wal) y las copias de seguridad que ya existen se romperian.
+    MODO DE DIARIO (25-10-2026): se pasa a WAL al arrancar (ver `_poner_en_wal`).
+    Antes era DELETE a proposito para que el .db se pudiera copiar suelto, pero
+    eso costaba caro: con un lector ajeno encima, un pago contestaba 503 a los
+    5,5 s. En WAL el lector no frena al escritor. A cambio, el .db YA NO se
+    puede copiar suelto: se copia con VACUUM INTO o con la API backup().
     """
 
     def __init__(self, ruta):
@@ -344,11 +422,14 @@ class _ConSegura:
             with self._lk:
                 conexion = getattr(_local_bd, "con", None)
                 if conexion is None:
-                    conexion = sqlite3.connect(self._ruta, timeout=30)
+                    espera = _espera_bloqueo_s()
+                    conexion = sqlite3.connect(self._ruta, timeout=espera)
                     conexion.row_factory = self._row_factory
-                    # Un escritor puede tardar (archivado en lote); esperar en
-                    # vez de devolver 500 por "database is locked".
-                    conexion.execute("PRAGMA busy_timeout=30000")
+                    # Esperar un poco y, si la base sigue cogida por otro
+                    # programa, contestar 503 "ocupado" en seguida (ver
+                    # _espera_bloqueo_s): esperar 30 s por hilo convertia un
+                    # bloqueo ajeno en una peticion de 65 s que acababa en 500.
+                    conexion.execute(f"PRAGMA busy_timeout={int(espera * 1000)}")
                     # SOLO PRUEBAS (tools/pruebas_caos.py, seccion DISCO LLENO):
                     # pone un tope de paginas a la base para simular un disco
                     # lleno sin llenar el disco. SQLite responde SQLITE_FULL
@@ -420,11 +501,82 @@ def _disco_lleno(e) -> bool:
             or "sqlite_full" in t)
 
 
+def _base_ocupada(e) -> bool:
+    """¿La escritura no entro porque OTRO programa tiene la base cogida?
+
+    No es un fallo interno: no se ha escrito nada y se puede reintentar. Con
+    el ledger leido por una auditoria o una copia, esto pasaba a menudo y se
+    contestaba 500 "error interno" (medido el 25-10-2026, 64,8 s de espera
+    para acabar en un 500).
+    """
+    t = str(e).lower()
+    return ("database is locked" in t or "database table is locked" in t
+            or "database schema is locked" in t or "database is busy" in t
+            or "sqlite_busy" in t)
+
+
 def _error_escritura(e, defecto="error interno escribiendo"):
     if _disco_lleno(e):
         return HTTPException(507, "sin espacio en disco: no se ha escrito nada, "
                                   "reintentar cuando haya espacio")
+    if _base_ocupada(e):
+        return HTTPException(503, "Core ocupado: otro programa esta leyendo el "
+                                  "ledger; no se ha escrito nada, reintentar",
+                             headers={"Retry-After": "2"})
     return HTTPException(500, defecto)
+
+
+def _poner_en_wal() -> str:
+    """Pone la base en modo WAL al arrancar (25-10-2026). Devuelve el modo final.
+
+    POR QUE (medido en tools/estudio_wal.py):
+      - En DELETE, cualquier otro programa leyendo el ledger (una auditoria,
+        una copia, verificar_sellos) bloquea las escrituras: un pago tardaba
+        5,5 s y contestaba 503.
+      - En WAL, el mismo pago con el mismo lector encima: 200 en 0,0 s.
+
+    LO QUE HAY QUE SABER:
+      - En WAL lo ultimo vive en `<db>-wal`. Copiar SOLO el .db pierde esos
+        asientos y el `quick_check` sigue diciendo "ok": se pierde EN SILENCIO.
+        Se copia con VACUUM INTO (tools/copia_seguridad.py) o con la API
+        backup() (tools/backup_ledger.py), que si se llevan el -wal.
+      - Las copias ANTIGUAS no se rompen: el modo va en la cabecera de cada
+        fichero. Probado: una copia de backups/ del 25-10 arranca como Core.
+      - Si no se pudiera poner en WAL, el Core sigue arrancando como antes: se
+        avisa en el log y se devuelve el modo que haya.
+    """
+    try:
+        modo = str(con.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
+    except Exception as e:
+        print(f"[KUKIA] AVISO: no se pudo mirar el modo de diario ({e})", flush=True)
+        return ""
+    if modo == "wal":
+        try:
+            # ~4 MB de -wal antes de volcar a la base (no crece sin freno).
+            con.execute("PRAGMA wal_autocheckpoint=1000")
+        except Exception:
+            pass
+    else:
+        print(f"[KUKIA] AVISO: la base NO se puso en WAL (dice '{modo}'); "
+              f"sigue como antes", flush=True)
+    return modo
+
+
+def _rollback_seguro() -> None:
+    """ROLLBACK que nunca tapa el error de verdad.
+
+    AUDITORIA 24-10-2026 (medido en tools/pruebas_caos.py, seccion G): cuando
+    una escritura falla por falta de espacio, SQLite DESHACE la transaccion
+    el solo. El ROLLBACK que se lanzaba al recoger el error contestaba a su
+    vez "cannot rollback - no transaction is active" y ESA era la excepcion
+    que llegaba arriba: el Core devolvia 500 "error interno" en vez de 507
+    "sin espacio" (15 de 40 transferencias dieron 500 y 0 dieron 507). El
+    minero se quedaba sin saber que podia reintentar.
+    """
+    try:
+        con.execute("ROLLBACK")
+    except Exception:
+        pass
 
 
 @contextmanager
@@ -453,13 +605,13 @@ def _escritura():
             con.commit()
         except HTTPException:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise _error_escritura(e)
@@ -486,6 +638,16 @@ def schema():
                 "token_hash TEXT UNIQUE, direccion TEXT, creado TEXT, activo INT DEFAULT 1, "
                 "tareas INT DEFAULT 0, gastado REAL DEFAULT 0)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_clientes_token ON clientes(token_hash)")
+    # INGRESOS REALES EN EUROS (25-10-2026). Una fila por trabajo cobrado fuera de
+    # la red. `huella` es unica: el mismo trabajo no se puede anotar dos veces
+    # (contar dos veces el primer euro seria mentir en la unica cifra que importa).
+    # `asiento_hash` apunta al asiento de 0 KIA del ledger que lo respalda: si el
+    # asiento desaparece o se cambia, la cadena y los sellos lo delatan.
+    con.execute("CREATE TABLE IF NOT EXISTS ingresos(id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "huella TEXT UNIQUE, servicio TEXT, cliente TEXT, trabajo TEXT, "
+                "minutos REAL, precio_eur REAL, detalle TEXT, fecha TEXT, "
+                "asiento_id INTEGER, asiento_hash TEXT)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ingresos_fecha ON ingresos(fecha)")
     # Cupo anti-Sybil de registros (IP + clave publica), persistente.
     con.execute("CREATE TABLE IF NOT EXISTS registros_nodo(ip TEXT, clave_publica TEXT, ts REAL)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_registros_nodo ON registros_nodo(ip, ts)")
@@ -626,6 +788,14 @@ def schema():
     con.commit()
 
 schema()
+
+# MODO DE DIARIO: WAL desde el 25-10-2026 (lectores ajenos ya no frenan los
+# pagos). Ver `_poner_en_wal`. Si el cambio no entra, se sigue en DELETE.
+_MODO_DIARIO = _poner_en_wal()
+if _MODO_DIARIO == "wal":
+    print("[KUKIA] base en diario WAL (una auditoria o una copia ya no frenan "
+          "los pagos)", flush=True)
+
 
 def podar_nodos(horas: float = None) -> int:
     """Borra nodos que no tienen dinero ni trabajo pagado.
@@ -1010,7 +1180,10 @@ def _coste_tarea_cliente(tipo: str, params: dict) -> float:
         # SIMULAR: consultar el precio no puede gastar el presupuesto del
         # minuto ni mover la bolsa. Antes, pedir precio dejaba la tarea a 0.
         kuki, _ = pago_por_trabajo(tipo, params, 1.0, simular=True)
-        return round(max(0.0, float(kuki)), 6)
+        # 12 decimales, no 6 (25-10-2026): con el ancla una tarea minima cuesta
+        # ~1e-9 KIA y redondear a 6 la dejaba en "cuesta 0", que es mentira y
+        # ademas deja al cliente sin saber que tope firmar.
+        return round(max(0.0, float(kuki)), 12)
     except Exception:
         return 0.0
 
@@ -1030,9 +1203,14 @@ def _pagar_tarea_de_cliente(tid: str, pagos, cliente: str, prepago: float) -> tu
     se reparte el deposito en proporcion y se avisa; nunca se emite de mas para
     tapar el hueco.
     """
-    pagos = [(n, round(max(0.0, float(k)), 6)) for n, k in pagos if float(k) > 0]
-    total = round(sum(k for _, k in pagos), 6)
-    deposito = round(max(0.0, float(prepago)), 6)
+    # 12 decimales y no 6 (25-10-2026, con la definicion 1 KIA = 1 minuto de
+    # GPU): una tarea cuesta ~1e-4 KIA y redondear a 6 dejaba 2e-7 KIA de
+    # diferencia entre lo retenido y lo pagado. Eso hacia el escrow NEGATIVO:
+    # dinero creado de la nada en cada tarea de cliente. Lo cazo
+    # tools/prueba_kia_minuto.py.
+    pagos = [(n, round(max(0.0, float(k)), 12)) for n, k in pagos if float(k) > 0]
+    total = round(sum(k for _, k in pagos), 12)
+    deposito = round(max(0.0, float(prepago)), 12)
     if total <= 0 or deposito <= 0:
         if deposito > 0:
             _asiento(tid, CUENTA_ESCROW, -deposito, "devolucion deposito")
@@ -1042,13 +1220,13 @@ def _pagar_tarea_de_cliente(tid: str, pagos, cliente: str, prepago: float) -> tu
     factor = min(1.0, deposito / total)
     pagado = 0.0
     for nodo_id, kuki in pagos:
-        parte = round(kuki * factor, 6)
+        parte = round(kuki * factor, 12)
         if parte <= 0:
             continue
         _asiento(tid, CUENTA_ESCROW, -parte, "pago a minero (cliente)")
         _asiento(tid, _cuenta_de(nodo_id), parte, "trabajo verificado")
-        pagado = round(pagado + parte, 6)
-    sobrante = round(max(0.0, deposito - pagado), 6)
+        pagado = round(pagado + parte, 12)
+    sobrante = round(max(0.0, deposito - pagado), 12)
     if sobrante > 0:
         _asiento(tid, CUENTA_ESCROW, -sobrante, "devolucion sobrante")
         _asiento(tid, cliente, sobrante, "devolucion sobrante")
@@ -1070,7 +1248,7 @@ def _devolver_prepago(tid: str, motivo: str = "tarea fallida") -> float:
     if f is None:
         return 0.0
     cliente = (f["cliente"] or "").strip().upper()
-    deposito = round(max(0.0, float(f["prepago"] or 0.0)), 6)
+    deposito = round(max(0.0, float(f["prepago"] or 0.0)), 12)
     if not cliente or deposito <= 0:
         return 0.0
     con.execute("UPDATE tareas SET prepago=0 WHERE id=?", (tid,))
@@ -1113,13 +1291,13 @@ def recalcular_resumen() -> dict:
             return {"supply": round(total, 6), "cuentas": int(cuentas)}
         except HTTPException:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise _error_escritura(e, "error reconstruyendo totales")
@@ -1677,13 +1855,19 @@ class ClienteTareaIn(BaseModel):
 
     La firma es del cliente sobre
         cliente:<nonce>:<tipo>:<sha256(params ordenados)>:<tope>
-    con la clave privada de la billetera `direccion`. Asi el token de API no
-    basta para gastar: hace falta la clave.
+    y, si se deposita de mas, sobre la misma cadena con `:<retenido>` al final
+    (25-10-2026): el importe que se queda retenido tambien va firmado, para que
+    nadie pueda subir la retencion con el token robado.
+
+    `deposito` (25-10-2026): KIA que se dejan RETENIDOS. Si no se manda, se
+    retiene el coste justo. Si se manda, tiene que cubrir el coste: el minero
+    cobra su tarifa entera y el sobrante vuelve al cliente al cerrar la tarea.
     """
     tipo: str
     params: dict = {}
     nonce: str                     # unico por peticion (anti-repeticion)
     tope: float = 0.0              # KIA maximos que autoriza para esta tarea
+    deposito: float = 0.0          # KIA a retener (0 = el coste justo)
     clave_publica: str = ""
     firma: str = ""
     vram_min: int = 0
@@ -1764,18 +1948,24 @@ def gflops_de_tarea(tipo: str, params, seg_servidor: float) -> float:
         return 0.0
     return flops / seg / 1e9
 
-# --- Calendario de emision: la ultima moneda sale el 01-01-2150 ---
-# 6 halvings en 124 anos -> era de 20,67 anos. Tras esa fecha, emision = 0.
+# --- Calendario de emision: la ultima moneda sale el 13-04-2150 ---
+# 6 halvings en 124,28 anos -> era de 20,71 anos. Tras esa fecha, emision = 0.
 #
 # POR QUE 2150 (23-10-2026): decision del dueno. El 22-10 se habia movido al
 # 01-01-2152 (126 anos, 6 eras de 21) porque un requisito propio pedia 125 anos
 # o mas desde hoy; Kuki lo corrigio: el calendario acaba en 2150, no en 2152.
-# Se mantienen las 6 eras, ahora de 20,67 anos cada una (124 anos desde el
-# 01-01-2026). Lo comprueba `python tools/calculo_moneda.py`.
+#
+# POR QUE EL 13 DE ABRIL (25-10-2026): Kuki fijo la fecha exacta. El calendario
+# ya no acaba el 1 de enero, acaba el 13-04-2150: 45.392 dias desde el
+# 01-01-2026, o sea 124,28 anos y 6 eras de 20,71. Eso son 103 dias mas, asi
+# que el presupuesto del minuto baja un pelin (de 1,310593 a 1,307607 KIA/min)
+# y la red tiene 148.320 minutos mas para emitir los mismos 100M: con el mismo
+# trabajo, la ultima moneda ya NO sale antes del 13-04-2150.
+# Lo comprueba `python tools/calculo_moneda.py`.
 from datetime import date, datetime, timedelta
 EMISSION_START = date(2026, 1, 1)
-EMISSION_END = date(2150, 1, 1)
-HALVING_YEARS = (EMISSION_END - EMISSION_START).days / 365.25 / 6  # 20,67
+EMISSION_END = date(2150, 4, 13)
+HALVING_YEARS = (EMISSION_END - EMISSION_START).days / 365.25 / 6  # 20,71
 def emission_mult() -> float:
     """Multiplicador de recompensa por era: 1.0, 0.5, 0.25... 0 tras la fecha final."""
     hoy = date.today()
@@ -2261,7 +2451,7 @@ def liberar_atascadas(max_abandonos: int = MAX_ABANDONOS, forzar: bool = False):
             return (recuperadas.rowcount + nuevas.rowcount, cerradas.rowcount)
         except Exception:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             return (0, 0)
@@ -2375,7 +2565,7 @@ def pendiente(nodo_id: str, excluir: str = "", colas: str = "", ts: float = 0.0,
                                     "AND estado='reclamando'", (nodo_id,)).fetchone()["c"]
             cap = MAX_TAREAS_NODO if int(node["tareas_ok"] or 0) > 0 else MAX_TAREAS_NODO_NUEVO
             if int(en_curso or 0) >= cap:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 return {"tarea": None, "motivo": "limite de tareas simultaneas por nodo"}
             vram = int(node["vram_gb"] or 0)
             excl = [e.strip()[:64] for e in (excluir or "").split(",") if e.strip()]
@@ -2403,11 +2593,11 @@ def pendiente(nodo_id: str, excluir: str = "", colas: str = "", ts: float = 0.0,
                             "replica": True}
             row = con.execute(_q, _args).fetchone()
             if not row:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 return {"tarea": None}
             chk = con.execute("SELECT estado FROM tareas WHERE id=?", (row["id"],)).fetchone()
             if not chk or chk["estado"] != "queued":
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 return {"tarea": None}
             con.execute("UPDATE tareas SET estado='ejecutando', nodo_id=?, asignado=? WHERE id=?",
                         (nodo_id, time.time(), row["id"]))
@@ -2424,7 +2614,7 @@ def pendiente(nodo_id: str, excluir: str = "", colas: str = "", ts: float = 0.0,
             raise
         except Exception as e:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise _error_escritura(e, "error interno asignando tarea")
@@ -2631,21 +2821,21 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
                 # por ser antigua. Antes `task2["estado"]` lanzaba TypeError y el
                 # minero recibia un 500 opaco; ahora es un 409 claro y NO se paga
                 # nada (la tarea ya estaba cerrada, no habia premio que dar).
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(
                     409, "la tarea ya no existe (cerrada por abandono y archivada); "
                          "no hay nada que pagar, no reintentes")
             if task2["estado"] == "ok":
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(409, "tarea ya pagada (doble pago bloqueado)")
             if task2["estado"] == "fallo":
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(409, "tarea ya cerrada con fallo (no reintentable)")
             if task2["estado"] != "ejecutando":
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(409, f"tarea en estado '{task2['estado']}', no pagable")
             if task2["nodo_id"] and task2["nodo_id"] != nodo_id:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(409, "tarea asignada a otro nodo")
 
             kuki = 0.0
@@ -2668,8 +2858,13 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
                 # dejaria de ser cierta.
                 kuki_rep = 0.0
                 if replica is not None and _rep_ok:
-                    kuki_rep = round(kuki * PARTE_REPLICA, 6)
-                    kuki = round(kuki - kuki_rep, 6)
+                    # 12 decimales, no 6 (25-10-2026, ancla GPU-minuto): con el
+                    # ancla una tarea pequena paga ~1e-6 KIA, y round(...,6)
+                    # dejaba al verificador con CERO mientras el ejecutor se
+                    # llevaba todo. Con _redondear_kia cada uno cobra su parte
+                    # y el total sigue cuadrando al decimal.
+                    kuki_rep = _redondear_kia(kuki * PARTE_REPLICA)
+                    kuki = _redondear_kia(kuki - kuki_rep)
                     info_pago["parte_replica"] = kuki_rep
                 # Muestra de potencia: FLOPs de la tarea / segundos CRONOMETRADOS
                 # POR EL CORE (asignado -> ahora). El minero no puede acortarlo.
@@ -2795,13 +2990,13 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
             # DESPUES de abrir la transaccion. Sin este ROLLBACK la transaccion
             # se quedaba abierta (y el siguiente pago fallaba con 503 en bucle).
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             # AUDITORIA 2026-10-21: antes esto se comia la excepcion y solo
@@ -2944,9 +3139,33 @@ def ledger_integridad():
     ahora = time.time()
     if _integridad_cache["datos"] is None or ahora - _integridad_cache["ts"] > 30:
         sellos = _sellos_leidos()
-        est = SELLOS.estado_ledger(con) if SELLOS else {}
-        cadena = SELLOS.verificar_cadena_db(con) if SELLOS else {"ok": False, "ids_alterados": []}
-        r = SELLOS.verificar_sellos(con, sellos, _sello_pub) if SELLOS else {"ok": False, "problemas": []}
+        # 27-10-2026 (H-01, hipotesis de concurrencia): las lecturas van dentro
+        # de UNA transaccion de solo lectura. En WAL eso les da la MISMA foto del
+        # ledger; sin esto, un asiento que entra entre la pasada de la cadena y
+        # la de los sellos puede hacer que la respuesta mezcle dos estados. No
+        # frena a los escritores (WAL) y no cambia QUE se comprueba.
+        _en_tx = True
+        try:
+            con.execute("BEGIN")
+        except Exception:
+            _en_tx = False          # ya habia transaccion en este hilo: se sigue sin foto
+        try:
+            est = SELLOS.estado_ledger(con) if SELLOS else {}
+            cadena = (SELLOS.verificar_cadena_db(con) if SELLOS
+                      else {"ok": False, "ids_alterados": []})
+            # La cadena ya esta recorrida: verificar_sellos la reutiliza en vez
+            # de volver a pasar por el ledger entero.
+            r = (SELLOS.verificar_sellos(con, sellos, _sello_pub, cadena=cadena)
+                 if SELLOS else {"ok": False, "problemas": []})
+        finally:
+            if _en_tx:
+                try:
+                    con.execute("COMMIT")
+                except Exception:
+                    try:
+                        con.execute("ROLLBACK")
+                    except Exception:
+                        pass
         _integridad_cache["datos"] = {
             "cadena_ok": bool(cadena.get("ok")),
             "ids_alterados": cadena.get("ids_alterados", [])[:20],
@@ -3253,10 +3472,13 @@ def recompensa_pago(tier: float) -> tuple:
 #  calculan el doble, el precio por GFLOP baja a la mitad: la emision total y
 #  la fecha final siguen siendo ciertas (techo de 100M intacto).
 #
-#  SUELO: por defecto NO hay (GFLOP_MIN_FACTURABLE = 0): una tarea cobra sus
-#  FLOPs y punto, asi que un checksum cobra 0. Se puede poner un minimo por
-#  tarea con KUKIA_GFLOP_MIN (>0) para que los nodos pequenos no se queden a
-#  cero, pero hoy no esta puesto: manda el trabajo medido.
+#  SUELO: desde el 25-10-2026 hay un suelo de 0,0001 KIA por tarea
+#  (PAGO_MIN_KIA), el minimo que acepta /transferir. Sin el, una tarea de
+#  milisegundos paga 1e-9 KIA: trabajo real que no se puede mover nunca.
+#  El suelo es en KIA, no en GFLOP, para que siga valiendo lo mismo si un dia
+#  cambia el precio. Ojo: con el suelo, un checksum (0 FLOPs) ya no cobra 0,
+#  cobra el minimo; por eso los checksums siguen fuera de MEZCLA_AUTO.
+#  Se apaga con KUKIA_PAGO_MIN_KIA=0.
 #
 #  EL TIER NO MULTIPLICA en este modo: pagar dos veces por lo mismo (mas VRAM y
 #  mas FLOPs) es justo lo que se quiere quitar de en medio.
@@ -3310,14 +3532,40 @@ def precio_gflop() -> dict:
         objetivo_min = 0.0
         print(f"[KUKIA Core] precio_gflop: {type(e).__name__}: {e}", flush=True)
     gpm = _gflop_por_minuto()
-    if objetivo_min <= 0 or gpm <= 0:
+    if PRECIO_DEFINIDO:
+        # Mismo precio que `precio_unico_minuto`: la definicion. Si aqui se
+        # publicara el precio por presupuesto, /stats daria DOS precios distintos
+        # a la vez y no habria forma de saber cual manda. Con la definicion
+        # ademas hay precio siempre, aunque la red no haya medido nada todavia.
+        precio_def = KIA_POR_MINUTO_GPU / (GPU_REF_GFLOPS * 60.0)
+        datos = {"modo": "potencia", "fuente": "definicion",
+                 # 18 decimales: el precio es 1,111111111111e-6 y redondear a 12
+                 # lo dejaba en 1,111111e-6 (milesima de millon por GFLOP de
+                 # diferencia con el precio que se paga de verdad).
+                 "precio_gflop": round(precio_def, 18),
+                 "gflop_por_min": round(gpm, 3),
+                 "objetivo_kia_min": round(precio_def * gpm, 9),
+                 "ventana_min": GFLOPS_VENTANA_MIN}
+    elif objetivo_min <= 0 or gpm <= 0:
         datos = {"modo": "plano", "motivo": "sin GFLOP medidos en la ventana"}
     else:
-        datos = {"modo": "potencia",
-                 "precio_gflop": round(objetivo_min / gpm, 12),
-                 "gflop_por_min": round(gpm, 3),
-                 "objetivo_kia_min": round(objetivo_min, 6),
-                 "ventana_min": GFLOPS_VENTANA_MIN}
+        # SIN DEFINICION: se publica el precio que se PAGA de verdad, que es el
+        # del minuto (presupuesto / divisor con suelo de capacidad). Antes aqui
+        # se dividia por el trabajo medido sin suelo, asi que /stats daba un
+        # precio y se pagaba otro (25-10-2026, al pasar al ancla por defecto).
+        pm = precio_unico_minuto()
+        precio_pagado = pm.get("precio")
+        if not precio_pagado or precio_pagado <= 0:
+            datos = {"modo": "plano", "motivo": pm.get("fuente") or "sin precio"}
+        else:
+            divisor = max(gpm, GPU_REF_GFLOPS * 60.0) if ANCLA_GPU_MIN else gpm
+            datos = {"modo": "potencia",
+                     "precio_gflop": round(float(precio_pagado), 18),
+                     "fuente": pm.get("fuente"),
+                     "gflop_divisor": round(divisor, 3),
+                     "gflop_por_min": round(gpm, 3),
+                     "objetivo_kia_min": round(float(precio_pagado) * divisor, 9),
+                     "ventana_min": GFLOPS_VENTANA_MIN}
     _precio_cache["ts"] = ahora
     _precio_cache["datos"] = datos
     return datos
@@ -3359,11 +3607,15 @@ def precio_gflop() -> dict:
 #  acaba de cerrar, limitado a un presupuesto) y se aplica al precio del
 #  siguiente. Asi el total se queda en el presupuesto, no un 5 % arriba.
 #
-#  FUSIBLE: si un minuto se desmadra de golpe (10 veces mas trabajo), se corta
-#  en 2 presupuestos. Es una red de seguridad, no el mecanismo: en regimen
-#  normal el precio ya deja el minuto en el presupuesto.
+#  FUSIBLE: red de seguridad para que un minuto no pueda emitir de mas.
+#  Desde el 25-10-2026 esta en 1x: el minuto no puede pagar mas que su
+#  presupuesto, ni con una rafaga. Antes era 2x, o sea que una rafaga podia
+#  emitir el doble de lo que tocaba y adelantar la fecha final de la emision.
+#  Con el reparto proporcional el fusible casi nunca muerde: el precio ya deja
+#  el minuto cuadrado, y solo corta si alguien entrega de golpe mucho mas
+#  trabajo del que la red venia haciendo.
 # ============================================================
-FUSIBLE_MINUTO_X = max(1.0, float(os.environ.get("KUKIA_FUSIBLE_MINUTO_X", "2")))
+FUSIBLE_MINUTO_X = max(1.0, float(os.environ.get("KUKIA_FUSIBLE_MINUTO_X", "1")))
 
 
 def presupuesto_por_minuto() -> float:
@@ -3518,13 +3770,17 @@ def _cerrar_minuto_si_toca(minuto: int) -> None:
     c = _minuto_actual
     if c["minuto"] == minuto:
         return
-    if c["minuto"] >= 0:
-        # Se cierra con el presupuesto que de verdad se uso en ese minuto.
+    if c["minuto"] >= 0 and not PRECIO_DEFINIDO:
+        # El credito es el sobrante de un minuto flojo para el siguiente. Con el
+        # precio DEFINIDO no sirve para nada (el precio no depende del
+        # presupuesto) y ademas confunde: se deja en cero.
         presu = float(c.get("presupuesto") or presupuesto_por_minuto())
         c["credito"] += presu - c["pagado"]
         # Nunca mas de un presupuesto de credito: asi una red parada un mes no
         # se pone a pagar el doble durante dias al volver.
         c["credito"] = max(-presu, min(presu, c["credito"]))
+    elif PRECIO_DEFINIDO:
+        c["credito"] = 0.0
     c["minuto"], c["pagado"] = minuto, 0.0
     # Tope nuevo, congelado para todo el minuto (ver presupuesto_del_minuto).
     c["presupuesto"] = presupuesto_por_minuto()
@@ -3538,7 +3794,12 @@ def precio_unico_minuto() -> dict:
     _cerrar_minuto_si_toca(minuto)
     presu = presupuesto_del_minuto()
     ajuste = max(-presu, min(presu, _minuto_actual["credito"]))
-    objetivo = max(0.0, presu + ajuste)
+    # El credito (lo que sobro de minutos flojos) puede empujar el objetivo por
+    # encima de lo que el minuto puede pagar. Si se deja, el fusible recorta el
+    # pago por unas millonésimas y el minero ve un recorte que no es suyo
+    # (pasaba el 25-10: 4e-7 por minuto). Se recorta AQUI, en el precio: el
+    # objetivo nunca apunta mas alto de lo que el minuto puede soltar.
+    objetivo = min(max(0.0, presu + ajuste), presu * FUSIBLE_MINUTO_X)
     gflop = _gflop_entre((minuto - 1) * 60.0, minuto * 60.0)
     fuente = "minuto anterior"
     if gflop <= 0:
@@ -3550,14 +3811,68 @@ def precio_unico_minuto() -> dict:
     if gflop <= 0:
         gflop = _gflop_ventana_larga()
         fuente = "media de lo ultimo que hay (hasta 6 h)"
-    if presu > 0 and gflop > 0:
+    gflop_medido = gflop
+    # ANCLA GPU-MINUTO (25-10-2026, revisada el mismo dia): el ancla no es un
+    # numero fijo, es un SUELO de capacidad. El divisor es el trabajo medido,
+    # pero nunca menos que una GPU de referencia a tope durante un minuto:
+    #
+    #     divisor = max(trabajo medido, 60 * GPU_REF)
+    #
+    # Asi se cumplen las tres cosas a la vez:
+    #   1) Red parada o con poca faena: manda el suelo y el precio no se dispara
+    #      (antes, sin medida, cada GFLOP se cobraba a precio de oro y ningun
+    #      cliente podia comprar).
+    #   2) Red con mas faena que una GPU: manda lo medido, asi que el
+    #      presupuesto se reparte entre TODOS en proporcion a sus GFLOP. Una GPU
+    #      el doble de rapida cobra el doble por el mismo tiempo de reloj, que es
+    #      lo que se busca: pagar por trabajo entregado, no por modelo.
+    #   3) El total del minuto no pasa del presupuesto: el precio ya lo deja
+    #      cuadrado y el fusible (1x por defecto) lo garantiza al decimal.
+    suelo = GPU_REF_GFLOPS * 60.0
+    if ANCLA_GPU_MIN:
+        if gflop_medido < suelo:
+            gflop = suelo
+            fuente = "ancla GPU-minuto (suelo)"
+        else:
+            gflop = gflop_medido
+            fuente = "trabajo medido (reparto proporcional)"
+    if PRECIO_DEFINIDO and suelo > 0:
+        # DEFINICION (25-10-2026): un minuto de la GPU de referencia vale
+        # KIA_POR_MINUTO_GPU KIA, con 1 por defecto. El precio del GFLOP no sale
+        # del presupuesto: sale de dividir la definicion entre los GFLOP de un
+        # minuto de GPU. Asi cada KIA se puede leer como "un minuto de GPU" sin
+        # consultar el calendario, y el presupuesto del minuto queda de TOPE
+        # (el fusible), que es su papel.
+        precio_def = KIA_POR_MINUTO_GPU / suelo
+        datos = {"minuto": minuto, "precio": precio_def,
+                 "fuente": "definicion: 1 KIA = 1 minuto de GPU",
+                 "objetivo_def_kia": round(precio_def * gflop_medido, 9)}
+    elif presu > 0 and gflop > 0:
         datos = {"minuto": minuto, "precio": objetivo / gflop, "fuente": fuente}
     else:
         datos = {"minuto": minuto, "precio": None, "fuente": "plano"}
-    datos.update({"gflop_anterior": round(gflop, 3),
+    # Cuantos minutos de GPU de referencia paga el presupuesto de este minuto a
+    # este precio. Es el limite real: por encima de esto el fusible muerde a
+    # quien llegue tarde. Hoy son ~1,31 GPUs.
+    capacidad = None
+    if PRECIO_DEFINIDO and KIA_POR_MINUTO_GPU > 0:
+        capacidad = round(presu / KIA_POR_MINUTO_GPU, 6)
+    datos.update({"gflop_anterior": round(gflop_medido, 3),
                   "presupuesto_kia_min": round(presu, 6),
                   "credito_kia": round(_minuto_actual["credito"], 6),
-                  "objetivo_kia_min": round(objetivo, 6)})
+                  "objetivo_kia_min": round(objetivo, 6),
+                  "modo_precio": ("definido" if PRECIO_DEFINIDO
+                                  else ("ancla" if ANCLA_GPU_MIN else "trabajo medido")),
+                  "precio_definido": PRECIO_DEFINIDO,
+                  "ancla": (ANCLA_GPU_MIN and not PRECIO_DEFINIDO),
+                  "gpu_ref_gflops": GPU_REF_GFLOPS,
+                  "gflop_divisor": round(gflop, 3),
+                  "suelo_gflop_min": round(suelo, 3),
+                  "capacidad_gpu_min": capacidad,
+                  # Lo que paga un minuto de la GPU de referencia a este precio.
+                  "kia_por_minuto_gpu": (KIA_POR_MINUTO_GPU if PRECIO_DEFINIDO else
+                                         (round(objetivo / gflop * suelo, 9)
+                                          if ANCLA_GPU_MIN else None))})
     _precio_minuto["minuto"], _precio_minuto["datos"] = minuto, datos
     return datos
 
@@ -3615,15 +3930,217 @@ def bolsa_disponible(ahora: float = None) -> float:
 
 
 def _redondear_kia(x: float) -> float:
-    """Redondea HACIA ABAJO a 9 decimales.
+    """Redondea HACIA ABAJO a 12 decimales.
 
     POR QUE (23-10-2026): `round(x, 9)` puede subir. Al recortar un pago a lo
     que queda en la bolsa, redondear hacia arriba devolvia un pelin mas que el
     presupuesto: con 25 tareas el minuto cerraba 1e-8 por encima y la promesa
     "la bolsa nunca se pasa" dejaba de ser cierta al decimal. KIA no se regala
     por redondeo: hacia abajo siempre.
+
+    POR QUE 12 Y NO 9 (25-10-2026, ancla GPU-minuto): con el ancla un GFLOP
+    cuesta ~1,46e-6 KIA, asi que una tarea pequena (matriz 64 = 0,0005 GFLOP)
+    vale 7,3e-10 KIA. A 9 decimales eso se cortaba a CERO y el minero trabajaba
+    gratis. A 12 decimales se cobra lo que pesa, sin regalar nada (sigue siendo
+    floor: la bolsa no se pasa). Ver tools/prueba_ancla.py.
     """
-    return math.floor(float(x) * 1e9) / 1e9
+    return math.floor(float(x) * 1e12) / 1e12
+
+
+# ============================================================
+#  ADAPTADOR DE REPARTO (25-10-2026)
+#  QUE COBRA CADA GPU SEGUN LAS QUE SE UNAN A REPARTIR EL MINUTO.
+#
+#  El pago ya es proporcional al trabajo (precio unico del minuto x GFLOP
+#  verificados), pero eso solo se veia en el asiento de cada uno. Este adaptador
+#  cierra el minuto y dice, para cada cuenta que entrego trabajo verificado:
+#    - cuanto trabajo entrego (GFLOP facturables, contados como se pagan),
+#    - que parte del minuto le toca (su GFLOP / el GFLOP de todos),
+#    - su cuota de lo que se pago (lo pagado en el minuto x su parte) y
+#    - cuanto cobro de verdad (asientos 'trabajo verificado' del mismo minuto).
+#  La cifra que BAJA cuando mas GPUs se unen es `cuota_igual_kia`
+#  (lo pagado / participantes): si todos entregan lo mismo, cada uno cobra eso.
+#
+#  OJO CON LOS DOS NUMEROS: `pagado_kia` es lo que se solto de verdad en el
+#  minuto y `presupuesto_kia_min` lo que el calendario permitia soltar. Hoy el
+#  pago va por el ancla GPU-minuto, que es un SUELO de capacidad (900.000 GFLOP
+#  por minuto), asi que con la red casi vacia se paga mucho menos que el tope:
+#  el margen no se pierde, se queda en la hucha de lo que falta por emitir.
+#
+#  NO cambia ningun pago: mide y publica lo que ya se reparte (/stats →
+#  `reparto`). Asi el minero puede comprobar que su parte es su trabajo y no el
+#  orden de llegada, y que el reparto crece o mengua con los que se unan.
+#  Lo comprueba `python tools/prueba_adaptador_reparto.py`.
+# ============================================================
+_reparto_cache = {"minuto": -1, "datos": None}
+
+
+def reparto_minuto(minuto: int = None) -> dict:
+    """Reparto del minuto ya cerrado entre los que entregaron trabajo.
+
+    `minuto` es indice de minuto (epoch // 60); por defecto, el anterior, que es
+    el unico que esta completo. Se cachea por minuto: /stats lo pide cada 2 s y
+    el resultado no cambia dentro del mismo minuto.
+    """
+    minuto = int(minuto if minuto is not None else (time.time() // 60) - 1)
+    if _reparto_cache["minuto"] == minuto and _reparto_cache["datos"] is not None:
+        return _reparto_cache["datos"]
+    desde, hasta = minuto * 60.0, (minuto + 1) * 60.0
+    # trabajo[cuenta][(nodo, device)] = GFLOP verificados en el minuto. La
+    # cuenta (billetera de cobro) es la unidad de pago: dos GPUs de la misma
+    # casa cobran en la misma cuenta, y el asiento es uno solo. Por eso la
+    # parte se calcula por cuenta y DESPUES se abre en maquinas: asi la suma de
+    # lo que cobra cada GPU es exactamente lo que entro en la billetera.
+    trabajo: dict = {}
+    tareas_de: dict = {}
+    try:
+        filas = con.execute("SELECT nodo_id, COALESCE(device,'') AS device, "
+                            "tipo, params, fin FROM tareas "
+                            "WHERE estado='ok' AND fin IS NOT NULL "
+                            "ORDER BY rowid DESC LIMIT 20000").fetchall()
+    except Exception:
+        try:
+            filas = con.execute("SELECT nodo_id, '' AS device, tipo, params, fin "
+                                "FROM tareas WHERE estado='ok' AND fin IS NOT NULL "
+                                "ORDER BY rowid DESC LIMIT 20000").fetchall()
+        except Exception:
+            filas = []
+    cuenta_de: dict = {}
+    for r in filas:
+        try:
+            t = _epoch(r[4])
+            if t is None or t < desde or t >= hasta:
+                continue
+            # Se cuenta igual que se paga (max(FLOPs, suelo)): si no, la parte
+            # de una GPU que solo hizo tareas minusculas saldria a cero y su
+            # cuota no cuadraria con el asiento que cobro.
+            g = max(_flops_tarea(r[2], r[3]) / 1e9, GFLOP_MIN_FACTURABLE)
+        except Exception:
+            continue
+        nodo = r[0] or "?"
+        if nodo not in cuenta_de:
+            cuenta_de[nodo] = _cuenta_de(nodo) or nodo
+        clave = (nodo, str(r[1] or ""))
+        trabajo.setdefault(cuenta_de[nodo], {})
+        trabajo[cuenta_de[nodo]][clave] = trabajo[cuenta_de[nodo]].get(clave, 0.0) + g
+        tareas_de[clave] = tareas_de.get(clave, 0) + 1
+    # Lo cobrado de verdad en ese minuto, por cuenta y solo por trabajo. Se
+    # separa lo que pago un cliente (escrow) de lo que pago la emision: el
+    # dinero del cliente no sale del presupuesto y no se reparte como emision.
+    cobrado: dict = {}
+    escrow = 0.0
+    try:
+        filas = con.execute("SELECT l.nodo_id AS nodo_id, l.kuki AS kuki, l.ts AS ts, "
+                            "COALESCE(t.cliente,'') AS cliente "
+                            "FROM ledger l LEFT JOIN tareas t ON t.id = l.tarea_id "
+                            "WHERE l.motivo=? ORDER BY l.id DESC LIMIT 20000",
+                            ("trabajo verificado",)).fetchall()
+    except Exception:
+        try:
+            filas = con.execute("SELECT nodo_id, kuki, ts, '' AS cliente FROM ledger "
+                                "WHERE motivo=? ORDER BY id DESC LIMIT 20000",
+                                ("trabajo verificado",)).fetchall()
+        except Exception:
+            filas = []
+    for r in filas:
+        try:
+            t = _epoch(r[2])
+            if t is None or t < desde or t >= hasta:
+                continue
+            kia = float(r[1] or 0.0)
+            if str(r[3] or "").strip():
+                escrow = round(escrow + kia, 12)
+                continue
+            cuenta = r[0] or "?"
+            cobrado[cuenta] = cobrado.get(cuenta, 0.0) + kia
+        except Exception:
+            continue
+    total = sum(sum(g.values()) for g in trabajo.values())
+    gpus = sum(len(g) for g in trabajo.values())
+    presu = presupuesto_por_minuto()
+    participantes = len(trabajo)
+    # El pastel que de verdad se reparte: los asientos de trabajo del minuto.
+    # Es lo que cobraron entre todos, y nunca pasa del presupuesto (el fusible
+    # del minuto ya lo garantiza antes de llegar aqui).
+    pagado = round(sum(cobrado.values()), 12)
+    filas_salida = []
+    for cuenta in sorted(trabajo, key=lambda c: (-sum(trabajo[c].values()), c)):
+        g_cuenta = sum(trabajo[cuenta].values())
+        parte = (g_cuenta / total) if total > 0 else 0.0
+        cuota = _redondear_kia(pagado * parte)
+        cobro = round(cobrado.get(cuenta, 0.0), 12)
+        maquinas = []
+        for (nodo, device), g in sorted(trabajo[cuenta].items(), key=lambda kv: -kv[1]):
+            parte_cuenta = (g / g_cuenta) if g_cuenta > 0 else 0.0
+            maquinas.append({"nodo": nodo,
+                             "device": device,
+                             "tareas": int(tareas_de.get((nodo, device), 0)),
+                             "gflop": round(g, 6),
+                             "parte_cuenta": round(parte_cuenta, 12),
+                             "cuota_kia": _redondear_kia(cobro * parte_cuenta)})
+        filas_salida.append({"cuenta": cuenta,
+                             "gpus": len(maquinas),
+                             "tareas": sum(m["tareas"] for m in maquinas),
+                             "gflop": round(g_cuenta, 6),
+                             "parte": round(parte, 12),
+                             "cuota_kia": cuota,
+                             "cobrado_kia": cobro,
+                             # Lo que le falta a su asiento para ser exactamente
+                             # su parte del pastel (0 = reparto perfecto).
+                             "desvio_kia": round(cobro - cuota, 12),
+                             "maquinas": maquinas})
+    suma_cuotas = round(sum(f["cuota_kia"] for f in filas_salida), 12)
+    datos = {"minuto": minuto,
+             "participantes": participantes,
+             "gpus": gpus,
+             "gflop_total": round(total, 6),
+             "pagado_kia": pagado,
+             "pagado_cliente_kia": escrow,
+             "presupuesto_kia_min": round(presu, 9),
+             # Lo que cobra cada uno si todos entregan lo mismo: las dos cifras
+             # que bajan segun se van uniendo GPUs (por billetera y por GPU).
+             "cuota_igual_kia": (_redondear_kia(pagado / participantes)
+                                 if participantes else None),
+             "cuota_igual_por_gpu_kia": (_redondear_kia(pagado / gpus)
+                                         if gpus else None),
+             "suma_cuotas_kia": suma_cuotas,
+             # El reparto es proporcional al trabajo si cada uno cobro su parte
+             # del pastel. Si no, es que el fusible recorto a alguien.
+             "proporcional": bool(all(abs(f["desvio_kia"]) <= 1e-9
+                                      for f in filas_salida)),
+             "regla": ("cada uno cobra lo pagado en el minuto x "
+                       "(su GFLOP / GFLOP de todos)"),
+             "cuentas": filas_salida}
+    _reparto_cache["minuto"], _reparto_cache["datos"] = minuto, datos
+    return datos
+
+
+def _resumen_reparto(max_filas: int = 12) -> dict:
+    """Version corta del reparto para /stats (el panel lo pide cada 2 s)."""
+    try:
+        r = reparto_minuto()
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+    cuentas = r.get("cuentas") or []
+    cortas = []
+    for c in cuentas[:max_filas]:
+        fila = dict(c)
+        fila["maquinas"] = (c.get("maquinas") or [])[:6]
+        cortas.append(fila)
+    return {"minuto": r["minuto"],
+            "participantes": r["participantes"],
+            "gpus": r["gpus"],
+            "gflop_total": r["gflop_total"],
+            "pagado_kia": r["pagado_kia"],
+            "pagado_cliente_kia": r["pagado_cliente_kia"],
+            "presupuesto_kia_min": r["presupuesto_kia_min"],
+            "cuota_igual_kia": r["cuota_igual_kia"],
+            "cuota_igual_por_gpu_kia": r["cuota_igual_por_gpu_kia"],
+            "suma_cuotas_kia": r["suma_cuotas_kia"],
+            "proporcional": r["proporcional"],
+            "regla": r["regla"],
+            "cuentas_mostradas": len(cortas),
+            "top": cortas}
 
 
 def pago_plano(tier: float = 1.0, simular: bool = False) -> tuple:
@@ -3684,9 +4201,21 @@ def pago_por_trabajo(tipo: str, params, tier: float = 1.0,
     # 9 decimales y no 6: el pago por tarea puede ser mucho mas pequeno que con
     # la tarifa plana, y redondear a 6 lo dejaria en cero si la red crece.
     pago = _redondear_kia(min(precio * cobrable, techo, restante))
+    # SUELO TRANSFERIBLE (25-10-2026): ninguna tarea paga menos de lo que se
+    # puede mover por /transferir. Se aplica aqui, despues del precio y antes
+    # del fusible, para que el cliente vea el mismo numero (la puerta de cliente
+    # usa esta funcion en modo simular=True) y el escrow lo cubra.
+    por_suelo = False
+    if PAGO_MIN_KIA > 0 and pago < PAGO_MIN_KIA:
+        pago = _redondear_kia(min(PAGO_MIN_KIA, techo, restante))
+        por_suelo = True
     # FUSIBLE del minuto: solo actua si algo va muy desmadrado (de golpe, diez
     # veces el trabajo del minuto anterior). En regimen normal no toca nada.
-    disp = max(0.0, pm["presupuesto_kia_min"] * FUSIBLE_MINUTO_X - pagado_en_minuto())
+    # El tope se toma EXACTO, sin redondear a 6 decimales: el precio se calcula
+    # con el presupuesto exacto, asi que comparandolo con el redondeado un pago
+    # de 1 minuto de GPU salia 4e-7 por encima del tope y el fusible recortaba
+    # al minero por una millonésima (visto el 25-10-2026 en prueba_minero_mes).
+    disp = max(0.0, presupuesto_del_minuto() * FUSIBLE_MINUTO_X - pagado_en_minuto())
     recortado = max(0.0, pago - disp)
     if recortado > 0:
         pago = _redondear_kia(disp)
@@ -3701,6 +4230,8 @@ def pago_por_trabajo(tipo: str, params, tier: float = 1.0,
                   "techo_por_tarea": round(techo, 4),
                   "pagado_por_fusible": round(pago, 9),
                   "recortado_por_fusible": round(recortado, 9),
+                  "pago_min_kia": round(PAGO_MIN_KIA, 9),
+                  "pagado_por_suelo": por_suelo,
                   "suelo_servicios": gl < GFLOP_MIN_FACTURABLE}
 
 
@@ -3742,10 +4273,14 @@ def stats():
         # En modo potencia no hay "pago base por tarea": el numero que se
         # publica es lo que cobra una tarea minima (servicios), que es lo que
         # de verdad cobra un checksum o una inferencia pequena.
-        pago1 = round(_pot["precio_gflop"] * GFLOP_MIN_FACTURABLE, 6)
+        # Lo que cobra como minimo una tarea: el suelo transferible (25-10-2026),
+        # no precio x 0 GFLOP. Si no, /stats publicaba "pago_por_tarea: 0" y no
+        # era verdad: una tarea siempre cobra al menos PAGO_MIN_KIA.
+        pago1 = round(max(_pot["precio_gflop"] * GFLOP_MIN_FACTURABLE, PAGO_MIN_KIA), 6)
         info1 = dict(info1 or {}, modo_pago="potencia",
                      precio_gflop=_pot["precio_gflop"],
-                     gflop_por_min=_pot.get("gflop_por_min"))
+                     gflop_por_min=_pot.get("gflop_por_min"),
+                     pago_min_kia=round(PAGO_MIN_KIA, 9))
     total_ok = int(_meta_float("tareas_ok_total", -1.0))
     if total_ok < 0:
         total_ok = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"]
@@ -3781,7 +4316,22 @@ def stats():
                               "gflop_min_facturable": GFLOP_MIN_FACTURABLE,
                               "ventana_min": GFLOPS_VENTANA_MIN,
                               "precio_gflop": _pot.get("precio_gflop"),
-                              "gflop_red_por_min": _pot.get("gflop_por_min")},
+                              # De donde sale el precio que se paga: definicion,
+                              # ancla GPU-minuto (suelo) o trabajo medido.
+                              "fuente": _pot.get("fuente"),
+                              "gflop_divisor": _pot.get("gflop_divisor"),
+                              "gflop_red_por_min": _pot.get("gflop_por_min"),
+                              # Suelo por tarea (25-10-2026): ninguna paga menos
+                              # de esto, que es el minimo que acepta /transferir.
+                              "pago_min_kia": round(PAGO_MIN_KIA, 9),
+                              # Definicion del KIA (25-10-2026): 1 KIA = 1 minuto
+                              # de GPU de referencia. Se publica con el precio
+                              # para que cualquiera pueda comprobarlo.
+                              "definicion": ({"kia_por_minuto_gpu": KIA_POR_MINUTO_GPU,
+                                              "gflop_por_minuto_gpu": GPU_REF_GFLOPS * 60.0,
+                                              "precio_gflop": (KIA_POR_MINUTO_GPU /
+                                                               (GPU_REF_GFLOPS * 60.0))}
+                                             if PRECIO_DEFINIDO else None)},
         # El precio unico del minuto (23-10-2026): con esto se reparte el
         # presupuesto por trabajo, no por orden de llegada. Se publica el
         # precio, de donde sale y lo que llevamos pagado en el minuto.
@@ -3789,13 +4339,29 @@ def stats():
                           "presupuesto_kia_min": round(presupuesto_del_minuto(), 6),
                           "pagado_en_minuto": round(pagado_en_minuto(), 6),
                           "tope_min": 1,
-                          "precio_minuto": (round(float(precio_unico_minuto()["precio"]), 12)
+                          "precio_minuto": (round(float(precio_unico_minuto()["precio"]), 18)
                                             if precio_unico_minuto()["precio"] else None),
                           "fuente_precio": precio_unico_minuto()["fuente"],
                           "gflop_minuto_anterior": precio_unico_minuto()["gflop_anterior"],
                           "credito_kia": precio_unico_minuto()["credito_kia"],
                           "objetivo_kia_min": precio_unico_minuto()["objetivo_kia_min"],
+                          "ancla_gpu_min": precio_unico_minuto()["ancla"],
+                          "gpu_ref_gflops": precio_unico_minuto()["gpu_ref_gflops"],
+                          "gflop_divisor": precio_unico_minuto()["gflop_divisor"],
+                          "suelo_gflop_min": precio_unico_minuto()["suelo_gflop_min"],
+                          "kia_por_minuto_gpu": precio_unico_minuto()["kia_por_minuto_gpu"],
+                          "modo_precio": precio_unico_minuto()["modo_precio"],
+                          "precio_definido": PRECIO_DEFINIDO,
+                          # Cuantos minutos de GPU de referencia paga la emision
+                          # del minuto a la definicion (hasta donde no hay
+                          # recorte). Por encima, el fusible reparte el tope.
+                          "capacidad_gpu_min": precio_unico_minuto()["capacidad_gpu_min"],
                           "fusible_x": FUSIBLE_MINUTO_X},
+        # ADAPTADOR DE REPARTO (25-10-2026): el minuto anterior, repartido entre
+        # las GPUs que entregaron trabajo. `cuota_igual_kia` es lo que cobra
+        # cada una si entregan lo mismo, y baja segun se unen mas: el total
+        # nunca pasa del presupuesto, que es lo que sostiene el 13-04-2150.
+        "reparto": _resumen_reparto(),
         # Verificacion redundante (23-10-2026): desde fuera se puede comprobar
         # que reglas estan aplicando de verdad los nodos que se verifican.
         "replicas": {"activa": REPLICA_ACTIVA,
@@ -3810,6 +4376,9 @@ def stats():
                       "lote": ARCHIVAR_LOTE, "intervalo_seg": ARCHIVAR_INTERVALO},
         # Resumen barato (sin recorrer la cadena): el detalle completo esta en
         # /ledger/integridad. El panel lo usa para el semaforo de seguridad.
+        # DINERO REAL COBRADO (25-10-2026): los euros de la transcripcion y de
+        # cualquier otro servicio de fuera de la red. No es emision: son euros.
+        "ingresos": _resumen_ingresos(),
         "integridad": {"sellos": len(_ss),
                        "ultimo_sello_hash": (_ss[-1].get("hash") if _ss else None),
                        "pagos_bloqueados": LEDGER_ROTO},
@@ -3981,7 +4550,7 @@ def archivar_tareas(retencion: int = None, lote: int = None) -> dict:
             con.commit()
         except Exception:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise
@@ -4156,14 +4725,17 @@ def saldo(direccion: str):
     valor = float(s or 0.0)
     if abs(valor) < 1e-9:
         valor = 0.0
-    return {"direccion": direccion, "saldo": round(valor, 6)}
+    # 12 decimales, no 6 (25-10-2026, definicion 1 KIA = 1 minuto de GPU): una
+    # tarea de cliente cuesta ~4e-8 KIA, y redondear a 6 publicaba "0" un saldo
+    # que existe. Un cero falso es peor que un numero feo.
+    return {"direccion": direccion, "saldo": round(valor, 12)}
 
 @app.get("/saldos")
 def saldos():
     """Mapa publico direccion -> saldo (desde los totales materializados)."""
     filas = con.execute("SELECT cuenta,total FROM saldos_cuenta").fetchall()
     return {"saldos": {r["cuenta"]: (0.0 if abs(float(r["total"] or 0.0)) < 1e-9
-                                      else round(float(r["total"] or 0.0), 6)) for r in filas},
+                                      else round(float(r["total"] or 0.0), 12)) for r in filas},
             "direcciones": len(filas)}
 
 class TransferIn(BaseModel):
@@ -4203,15 +4775,26 @@ def transferir(t: TransferIn):
     if a == de:
         raise HTTPException(400, "origen y destino iguales")
     try:
-        monto = round(float(t.monto), 4)
+        crudo = float(t.monto)
     except Exception:
         raise HTTPException(400, "monto invalido")
     # AUDITORIA: NaN esquiva "monto <= 0" y "saldo < monto" (NaN no es ni
     # mayor ni menor), y acababa escribiendo asientos NULL y devolviendo 500.
-    if not math.isfinite(monto):
+    if not math.isfinite(crudo):
         raise HTTPException(400, "monto debe ser un numero finito")
-    if monto <= 0:
+    if crudo <= 0:
         raise HTTPException(400, "monto debe ser positivo")
+    # AUDITORIA 25-10-2026 (hallazgo A2): antes se redondeaba a 4 decimales ANTES
+    # de mirar la firma, asi que la firma podia no cubrir el importe movido. El
+    # cliente firmaba 1,00005 y el Core verificaba "...:1.0001:..." (401 de
+    # "firma invalida" sin explicar nada, o un asiento por un importe distinto
+    # del firmado). Ahora el importe que se pide es el que se mueve: con mas de
+    # 4 decimales se rechaza con 400 y no se toca el saldo. La billetera web ya
+    # pide "maximo 4 decimales" y el suelo transferible son 0,0001, asi que
+    # ningun cliente legitimo pierde nada.
+    monto = round(crudo, 4)
+    if abs(crudo - monto) > 1e-12:
+        raise HTTPException(400, "monto con mas de 4 decimales (4 como maximo)")
     if monto > MAX_SUPPLY:
         raise HTTPException(400, "monto mayor que el suministro total")
     if not t.nonce or len(t.nonce) > 64:
@@ -4231,7 +4814,7 @@ def transferir(t: TransferIn):
             # exista: antes se aceptaba cualquier cadena y el saldo se quemaba.
             if not direccion_valida(a) and not con.execute(
                     "SELECT 1 FROM nodos WHERE id=?", (a,)).fetchone():
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(400, "destino invalido: usa una direccion KUK... o un nodo registrado")
             node = con.execute("SELECT clave_publica FROM nodos WHERE id=?", (de,)).fetchone()
             pub = ((node["clave_publica"] if node else "") or "").strip().lower()
@@ -4240,12 +4823,12 @@ def transferir(t: TransferIn):
                 # exactamente en esa direccion (nada que registrar).
                 candidata = (t.clave_publica or "").strip().lower()
                 if not pubkey_valida(candidata) or direccion_de_pubkey(candidata) != de:
-                    con.execute("ROLLBACK")
+                    _rollback_seguro()
                     raise HTTPException(401, "emisor sin clave registrada "
                                              "(billetera: envia clave_publica y firma)")
                 pub = candidata
             if not t.firma:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(401, "falta firma")
             try:
                 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -4253,20 +4836,27 @@ def transferir(t: TransferIn):
                     bytes.fromhex(t.firma),
                     f"transferir:{de}:{a}:{monto}:{t.nonce}".encode())
             except Exception:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(401, "firma invalida")
             saldo = float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?",
                                       (de,)).fetchone()["s"] or 0.0)
             if saldo < monto:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(409, "saldo insuficiente")
             try:
                 con.execute("INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts,"
                             "firma,clave_publica) VALUES(?,?,?,?,?,?,?)",
                             (de, a, monto, t.nonce, time.ctime(), t.firma, pub))
-            except Exception:
-                con.execute("ROLLBACK")
+            except sqlite3.IntegrityError:
+                _rollback_seguro()
                 raise HTTPException(409, "nonce ya usado (repeticion bloqueada)")
+            except Exception as e:
+                # AUDITORIA 24-10-2026: antes CUALQUIER fallo de este INSERT se
+                # contaba como "nonce ya usado". Con la base llena (SQLITE_FULL)
+                # la transferencia decia 409 "repeticion" cuando el problema era
+                # el espacio: mentia y nadie reintentaba. Ahora FULL -> 507.
+                _rollback_seguro()
+                raise _error_escritura(e, "error guardando la transferencia")
             # ID COMPLETO (23-10-2026): antes era el nonce cortado a 12 letras y
             # dos transferencias distintas podian caer en el MISMO id de asiento
             # (paso el 19-10 con tres barridos). El importe y las cuentas estaban
@@ -4279,13 +4869,13 @@ def transferir(t: TransferIn):
                     "supply": round(supply_emitido(), 6)}
         except HTTPException:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise _error_escritura(e, "error interno en transferencia")
@@ -4766,20 +5356,234 @@ def admin_lista_clientes(_ok: None = Depends(exigir_admin)):
     return {"clientes": [dict(f) for f in filas]}
 
 
+class BajaClientesIn(BaseModel):
+    """Baja LOGICA de clientes de prueba (25-10-2026). No borra nada."""
+    ids: list[str] = []
+    nombre_contiene: str = ""
+    todos: bool = False
+    seco: bool = True        # por defecto: solo dice lo que haria
+    forzar: bool = False     # baja tambien a quien tiene tareas en curso
+
+
+@app.post("/admin/clientes/baja")
+def admin_baja_clientes(b: BajaClientesIn, _ok: None = Depends(exigir_admin)):
+    """Da de baja clientes en bloque: `activo=0` y NADA mas.
+
+    Por que asi, y no borrando:
+      - los asientos del ledger no se tocan (la cadena de hashes y los sellos
+        siguen valiendo: borrar una fila romperia las dos cosas);
+      - sus tareas, su nombre, su billetera y su saldo quedan como estaban;
+      - con `activo=0` el token deja de valer al instante (`exigir_cliente`
+        exige `activo=1`), asi que el cliente no puede pedir ni gastar;
+      - es reversible: se puede volver a dar de alta con la misma billetera.
+
+    Hay que decir a quien: `ids`, `nombre_contiene` o `todos=True`. Un cliente
+    con tareas en cola o ejecutandose se SALTA salvo `forzar`: su prepago
+    seguiria retenido en escrow y no podria recoger el resultado.
+    """
+    if not (b.ids or b.nombre_contiene.strip() or b.todos):
+        raise HTTPException(400, "di a quien dar de baja: ids, nombre_contiene o todos")
+    asientos_antes = con.execute("SELECT COUNT(*) n, COALESCE(MAX(id),0) m FROM ledger").fetchone()
+    supply_antes = supply_emitido()
+    quieren = {str(i).strip() for i in (b.ids or []) if str(i).strip()}
+    pat = b.nombre_contiene.strip().lower()
+    filas = con.execute("SELECT id,nombre,direccion,tareas,gastado,creado FROM clientes "
+                        "WHERE activo=1 ORDER BY creado").fetchall()
+    bajas, saltados = [], []
+    for f in filas:
+        if not b.todos:
+            if quieren:
+                if f["id"] not in quieren:
+                    continue
+            elif pat:
+                if pat not in (f["nombre"] or "").lower():
+                    continue
+        d = (f["direccion"] or "").strip().upper()
+        en_curso, saldo, asientos = 0, 0.0, 0
+        if d:
+            en_curso = int(con.execute(
+                "SELECT COUNT(*) n FROM tareas WHERE cliente=? AND estado IN ('queued','ejecutando')",
+                (d,)).fetchone()["n"] or 0)
+            s = con.execute("SELECT total FROM saldos_cuenta WHERE cuenta=?", (d,)).fetchone()
+            saldo = float(s["total"] if s else 0.0)
+            asientos = int(con.execute("SELECT COUNT(*) n FROM ledger WHERE nodo_id=?",
+                                       (d,)).fetchone()["n"] or 0)
+        info = {"id": f["id"], "nombre": f["nombre"], "direccion": d,
+                "tareas": int(f["tareas"] or 0), "gastado": round(float(f["gastado"] or 0.0), 12),
+                "saldo": round(saldo, 12), "asientos": asientos, "en_curso": en_curso}
+        if en_curso and not b.forzar:
+            info["motivo"] = "tareas en curso: usa forzar=True o espera a que acaben"
+            saltados.append(info)
+            continue
+        bajas.append(info)
+    if b.seco:
+        return {"seco": True, "bajadas": [], "bajarian": bajas, "saltados": saltados,
+                "asientos": int(asientos_antes["n"]), "supply": supply_antes,
+                "aviso": "nada escrito: repite con seco=false para darlos de baja"}
+    with _escritura():
+        for x in bajas:
+            con.execute("UPDATE clientes SET activo=0 WHERE id=? AND activo=1", (x["id"],))
+    asientos_despues = con.execute("SELECT COUNT(*) n, COALESCE(MAX(id),0) m FROM ledger").fetchone()
+    return {"seco": False, "bajadas": bajas, "saltados": saltados,
+            "asientos_antes": int(asientos_antes["n"]),
+            "asientos_despues": int(asientos_despues["n"]),
+            "asientos_borrados": int(asientos_antes["n"]) - int(asientos_despues["n"]),
+            "supply_antes": supply_antes, "supply_despues": supply_emitido(),
+            # Los dos numeros de arriba se leen con el minero trabajando: suben
+            # por la emision normal, no por la baja. Lo que importa es que NUNCA
+            # bajen (`asientos_borrados` negativo = el ledger crecio).
+            "nota": "baja logica: el ledger, las tareas y los saldos quedan intactos"}
+
+
+# ============================================================
+#  INGRESOS REALES EN EUROS (25-10-2026)
+#
+#  El ledger lleva KIA. El servicio de transcripcion cobra en EUROS. Mezclar
+#  las dos cosas (convertir el euro a KIA y abonarlo) seria emitir dinero por
+#  vender un servicio: aqui NO se crea ni un KIA.
+#
+#  Lo que se hace, y basta para lo que importa:
+#    - una fila en `ingresos` con el servicio, el trabajo, los minutos y el
+#      precio en euros;
+#    - un asiento de 0 KIA en el ledger (cuenta INGRESOS_EUR) cuyo motivo lleva
+#      el importe y el trabajo: queda en la cadena de hashes y bajo los sellos
+#      igual que cualquier pago;
+#    - el hash de ese asiento se guarda en la fila, asi que el ingreso y el
+#      asiento no se pueden separar sin que se note.
+#
+#  Asi "el primer euro facturado" es un hecho verificable: sale en /ingresos,
+#  en /stats y en /ledger/verificar, sin creerse a nadie.
+# ============================================================
+
+class IngresoIn(BaseModel):
+    precio_eur: float
+    servicio: str = "transcripcion"
+    cliente: str = ""
+    trabajo: str = ""
+    minutos: float = 0.0
+    detalle: dict | None = None
+
+
+def _huella_ingreso(servicio: str, cliente: str, trabajo: str, precio_eur: float) -> str:
+    """Identidad del cobro: mismo servicio + trabajo + importe = el mismo euro."""
+    base = (f"{(servicio or '').strip().lower()}|{(cliente or '').strip().lower()}|"
+            f"{(trabajo or '').strip()}|{round(float(precio_eur), 2):.2f}")
+    return hashlib.sha256(base.encode()).hexdigest()[:32]
+
+
+def _resumen_ingresos() -> dict:
+    """Totales de dinero real cobrado. Barato: la tabla es diminuta."""
+    try:
+        f = con.execute("SELECT COUNT(*) n, COALESCE(SUM(precio_eur),0) t, "
+                        "COALESCE(MIN(fecha),'') primera FROM ingresos").fetchone()
+        return {"n": int(f["n"] or 0), "total_eur": round(float(f["t"] or 0.0), 2),
+                "primera": (f["primera"] or None)}
+    except Exception:
+        return {"n": 0, "total_eur": 0.0, "primera": None}
+
+
+@app.post("/admin/ingresos")
+def admin_anotar_ingreso(i: IngresoIn, _ok: None = Depends(exigir_admin)):
+    """Anota un trabajo COBRADO fuera de la red (transcripcion, etc.).
+
+    No emite KIA: el asiento va a 0. Lo que se guarda es la prueba de que
+    alguien pago dinero real por trabajo de esta casa.
+    """
+    try:
+        precio = round(float(i.precio_eur), 2)
+        minutos = round(float(i.minutos or 0.0), 2)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "precio_eur y minutos tienen que ser numeros")
+    if not math.isfinite(precio) or precio <= 0:
+        raise HTTPException(400, "precio_eur tiene que ser mayor que 0")
+    if not math.isfinite(minutos) or minutos < 0:
+        raise HTTPException(400, "minutos invalidos")
+    if precio > 100_000:
+        raise HTTPException(400, "precio_eur fuera de rango (max 100000)")
+    servicio = (i.servicio or "transcripcion").strip()[:40]
+    cliente = (i.cliente or "").strip()[:80]
+    trabajo = (i.trabajo or "").strip()[:200]
+    huella = _huella_ingreso(servicio, cliente, trabajo, precio)
+    with _escritura():
+        ya = con.execute("SELECT id FROM ingresos WHERE huella=?", (huella,)).fetchone()
+        if ya is not None:
+            # Contar dos veces el mismo euro seria mentir justo en la cifra que
+            # se publica como prueba de demanda.
+            raise HTTPException(409, f"ese trabajo ya esta anotado (ingreso #{ya['id']})")
+        cur = con.execute(
+            "INSERT INTO ingresos(huella,servicio,cliente,trabajo,minutos,precio_eur,"
+            "detalle,fecha) VALUES(?,?,?,?,?,?,?,?)",
+            (huella, servicio, cliente, trabajo, minutos, precio,
+             json.dumps(i.detalle or {}, ensure_ascii=False)[:4000],
+             time.ctime()))
+        iid = int(cur.lastrowid)
+        motivo = (f"ingreso real {precio:.2f} EUR · {servicio} · "
+                  f"{minutos:.1f} min · {trabajo or '(sin nombre)'}")
+        h = _asiento(f"ingreso:{iid}", CUENTA_INGRESOS, 0.0, motivo[:180])
+        con.execute("UPDATE ingresos SET asiento_id=?, asiento_hash=? WHERE id=?",
+                    (iid, h, iid))
+    resumen = _resumen_ingresos()
+    return {"id": iid, "precio_eur": precio, "minutos": minutos,
+            "asiento_hash": h, "cuenta": CUENTA_INGRESOS,
+            "kia_emitidos": 0.0, "total_eur": resumen["total_eur"],
+            "ingresos": resumen["n"],
+            "nota": "anotado sin emitir KIA: el euro no se convierte en moneda"}
+
+
+@app.get("/ingresos")
+def ingresos_publico():
+    """Prueba de demanda, publica: cuanto se ha cobrado y cuando.
+
+    Sin nombre del cliente ni del trabajo: el importe y la fecha bastan para
+    verificar que el dinero existe, y el cliente no tiene por que salir en una
+    web publica. El detalle con nombres esta en /admin/ingresos.
+    """
+    filas = con.execute("SELECT servicio,minutos,precio_eur,fecha,asiento_hash "
+                        "FROM ingresos ORDER BY id DESC LIMIT 50").fetchall()
+    d = _resumen_ingresos()
+    d["ultimos"] = [dict(f) for f in filas]
+    d["moneda"] = "EUR"
+    d["como_se_verifica"] = "cada fila apunta al asiento de 0 KIA del ledger "
+    d["ledger"] = "/ledger/verificar"
+    return d
+
+
+@app.get("/admin/ingresos")
+def admin_lista_ingresos(_ok: None = Depends(exigir_admin)):
+    """Lista completa, con cliente y trabajo (no se publica)."""
+    filas = con.execute("SELECT id,servicio,cliente,trabajo,minutos,precio_eur,"
+                        "fecha,asiento_id,asiento_hash FROM ingresos "
+                        "ORDER BY id DESC LIMIT 200").fetchall()
+    d = _resumen_ingresos()
+    d["ingresos"] = [dict(f) for f in filas]
+    return d
+
+
 @app.get("/cliente/precio")
-def cliente_precio(tipo: str, _c=Depends(exigir_cliente)):
+def cliente_precio(tipo: str, params: str = "", _c=Depends(exigir_cliente)):
     """Cuanto costaria una tarea de este tipo (para saber que tope firmar).
 
-    El precio final depende de los params; aqui se da el de una tarea minima
-    del tipo pedido, que es el suelo que hay que autorizar.
+    Sin `params` da el de una tarea minima del tipo pedido, que es el suelo.
+    Con `params` (JSON en la query) da el coste EXACTO de esa tarea, que es lo
+    que hace falta para depositar de mas y ver volver el sobrante sin firmar a
+    ciegas (25-10-2026).
     """
-    if tipo not in ("checksum", "matriz", "inferencia", "embeddings",
-                    "lote_embeddings", "difusion_calor"):
+    if tipo not in TIPOS_CLIENTE:
         raise HTTPException(400, "tipo de tarea no soportado")
     suelo = _coste_tarea_cliente(tipo, {} if tipo != "checksum" else {"n": 10})
-    return {"tipo": tipo, "coste_minimo": suelo,
-            "moneda": "KIA", "nota": "el coste real depende de los params; "
-                                      "firma un tope igual o mayor"}
+    salida = {"tipo": tipo, "coste_minimo": suelo,
+              "moneda": "KIA", "nota": "el coste real depende de los params; "
+                                        "firma un tope igual o mayor"}
+    if params.strip():
+        try:
+            p = validar_params(tipo, json.loads(params))
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(400, "params no es un JSON valido")
+        salida["params"] = p
+        salida["coste"] = _coste_tarea_cliente(tipo, p)
+    return salida
 
 
 @app.get("/cliente/saldo")
@@ -4792,8 +5596,8 @@ def cliente_saldo(c=Depends(exigir_cliente)):
     saldo = float((fila["total"] if fila else 0.0) or 0.0)
     ret = con.execute("SELECT COALESCE(SUM(prepago),0) s FROM tareas "
                       "WHERE cliente=? AND estado IN ('queued','ejecutando')", (d,)).fetchone()
-    return {"direccion": d, "saldo": round(saldo, 6),
-            "retenido": round(float(ret["s"] or 0.0), 6),
+    return {"direccion": d, "saldo": round(saldo, 12),
+            "retenido": round(float(ret["s"] or 0.0), 12),
             "tareas": int(c["tareas"] or 0)}
 
 
@@ -4811,6 +5615,9 @@ def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
     La firma va sobre `cliente:<nonce>:<tipo>:<sha256(params)>:<tope>`; incluye
     el tope para que nadie pueda cambiar el importe autorizado despues.
     """
+    if t.tipo not in TIPOS_CLIENTE:
+        # Antes de nada: un tipo que ningun minero sabe ejecutar no se cobra.
+        raise HTTPException(400, f"tipo de tarea no soportado: {t.tipo}")
     dir_cliente = (c["direccion"] or "").strip().upper()
     if not direccion_valida(dir_cliente):
         raise HTTPException(400, "el cliente no tiene billetera: pide al Core que la asocie")
@@ -4824,7 +5631,18 @@ def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
                                  f"autorizaste {tope}. Sube el tope y firma de nuevo")
     if not t.nonce or len(t.nonce) > 64:
         raise HTTPException(400, "nonce invalido")
-    # 3) FIRMA del cliente sobre el tope y los params
+    # DEPOSITO (25-10-2026): se puede dejar retenido mas que el coste. Se paga
+    # la tarifa entera al minero y el sobrante vuelve al cliente. Nunca menos
+    # del coste: un deposito corto haria que el minero cobrase de menos.
+    deposito = float(t.deposito or 0.0)
+    if not math.isfinite(deposito) or deposito < 0:
+        raise HTTPException(400, "deposito invalido")
+    if 0 < deposito < coste:
+        raise HTTPException(402, f"deposito insuficiente: este trabajo cuesta {coste} KIA "
+                                 f"y depositaste {deposito}. El minero cobra el trabajo "
+                                 f"entero; deposita al menos el coste")
+    retenido = round(max(coste, deposito), 12)
+    # 3) FIRMA del cliente sobre el tope y los params (y el deposito, si lo hay)
     pub = (t.clave_publica or "").strip().lower()
     if not pubkey_valida(pub) or direccion_de_pubkey(pub) != dir_cliente:
         raise HTTPException(401, "la clave_publica no corresponde a la billetera del cliente")
@@ -4832,6 +5650,8 @@ def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
         raise HTTPException(401, "falta firma del cliente")
     hash_params = hashlib.sha256(json.dumps(params, sort_keys=True).encode()).hexdigest()
     mensaje = f"cliente:{t.nonce}:{t.tipo}:{hash_params}:{tope}"
+    if deposito > 0:
+        mensaje += f":{retenido}"
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
         Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
@@ -4850,20 +5670,20 @@ def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
             # nonce ya usado por este cliente (firma reutilizada)
             if con.execute("SELECT 1 FROM tareas WHERE cliente=? AND nonce_cliente=?",
                            (dir_cliente, t.nonce)).fetchone():
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(409, "nonce ya usado por este cliente")
             en_cola = con.execute("SELECT COUNT(*) n FROM tareas WHERE cliente=? AND "
                                   "estado IN ('queued','ejecutando')",
                                   (dir_cliente,)).fetchone()["n"]
             if int(en_cola) >= CLIENTE_MAX_EN_COLA:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
                 raise HTTPException(429, f"ya tienes {en_cola} tareas en curso "
                                          f"(maximo {CLIENTE_MAX_EN_COLA}); espera a que acaben")
             saldo = con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger WHERE nodo_id=?",
                                 (dir_cliente,)).fetchone()["s"]
-            if float(saldo or 0.0) < coste:
-                con.execute("ROLLBACK")
-                raise HTTPException(402, f"saldo insuficiente: necesitas {coste} KIA y "
+            if float(saldo or 0.0) < retenido:
+                _rollback_seguro()
+                raise HTTPException(402, f"saldo insuficiente: necesitas {retenido} KIA y "
                                          f"tienes {round(float(saldo or 0.0), 6)}")
             tid = uuid.uuid4().hex[:12]
             con.execute("INSERT INTO tareas(id,tipo,params,estado,creado,cola,campana,"
@@ -4871,25 +5691,26 @@ def cliente_crear_tarea(t: ClienteTareaIn, c=Depends(exigir_cliente)):
                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         (tid, t.tipo, json.dumps(params), "queued", time.ctime(),
                          "B", "cliente", 0.0, int(t.vram_min or 0),
-                         dir_cliente, coste, t.nonce, coste))
-            _retener_prepago(tid, dir_cliente, coste)
+                         dir_cliente, retenido, t.nonce, coste))
+            _retener_prepago(tid, dir_cliente, retenido)
             con.execute("UPDATE clientes SET tareas=tareas+1, gastado=gastado+? WHERE id=?",
                         (coste, c["id"]))
             con.commit()
         except HTTPException:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise
         except Exception as e:
             try:
-                con.execute("ROLLBACK")
+                _rollback_seguro()
             except Exception:
                 pass
             raise HTTPException(500, f"no se pudo encolar: {type(e).__name__}")
     return {"tarea_id": tid, "estado": "queued", "tipo": t.tipo,
-            "coste": coste, "params": params,
+            "coste": coste, "deposito": retenido,
+            "sobrante_previsto": round(retenido - coste, 12), "params": params,
             "recoger_en": f"/cliente/tareas/{tid}"}
 
 

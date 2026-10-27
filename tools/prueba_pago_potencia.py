@@ -120,6 +120,11 @@ salida["techo"] = C.REWARD_BASE * C.emission_mult()
 # El doble de trabajo en la VENTANA de 10 min -> el estimador baja.
 if C.PAGO_POR_FLOP:
     sembrar(40, "difusion_calor", DIF)
+    # El precio del minuto tambien se cachea por minuto: se limpia para medir
+    # con el trabajo nuevo y no con el de la tarea anterior (sin esto, el
+    # precio publicado y el pagado pueden diferir por la cache, no por la regla).
+    C._precio_minuto["minuto"] = -1
+    C._precio_minuto["datos"] = None
     p2 = medida()
     salida["precio_2x"] = p2
     pago3, _ = C.pago_de_tarea({"tipo": "difusion_calor", "params": json.dumps(DIF)}, 1.0)
@@ -170,6 +175,21 @@ def cargar(flag) -> dict:
             KUKIA_DB=str(tmp / "coordinator" / "ledger" / "kukia.db"),
             KUKIA_AUTO_TAREAS="0",
             KUKIA_GFLOP_MIN=str(GFLOP_MIN),
+            # Esta suite prueba el reparto por TRABAJO MEDIDO (el precio sale
+            # de los GFLOP del minuto anterior). Desde el 25-10-2026 el modo por
+            # defecto es el ancla GPU-minuto, que fija el precio y no depende de
+            # la medida, asi que aqui se apaga a proposito. El ancla tiene su
+            # propia prueba en tools/prueba_ancla.py.
+            KUKIA_ANCLA_GPU_MIN="0",
+            # Y la definicion (1 KIA = 1 minuto de GPU) tambien: con ella el
+            # precio es fijo y no baja al entregar mas GFLOP, que es justo lo
+            # que comprueba esta suite del reparto por trabajo medido.
+            KUKIA_PRECIO_DEFINIDO="0",
+            # Y el suelo transferible por tarea (0,0001 KIA, 25-10-2026): esta
+            # suite mide que el pago sea EXACTAMENTE precio x GFLOP, y con el
+            # suelo una tarea pequena paga el minimo en vez de su trabajo. El
+            # suelo tiene su prueba en tools/prueba_suelo_transferible.py.
+            KUKIA_PAGO_MIN_KIA="0",
             PYTHONIOENCODING="utf-8",
         )
         if flag is not None:
@@ -260,12 +280,14 @@ def main() -> int:
         check(abs(on["pago_minuto_2x"] - on["pago_minuto_1x"] / 2) < 1e-6,
               f"y el pago de la misma difusion se parte "
               f"({on['pago_minuto_1x']:.6f} -> {on['pago_minuto_2x']:.6f})")
-    # El estimador de 10 min (pago_por_potencia) si reacciona al instante;
-    # sigue publicado, pero NO es el precio con el que se paga.
-    check(on["precio_2x"].get("precio_gflop", 0) < on["precio_1x"].get("precio_gflop", 0),
-          f"el estimador de 10 min baja al doble de trabajo "
-          f"({on['precio_1x'].get('precio_gflop', 0):.9f} -> "
-          f"{on['precio_2x'].get('precio_gflop', 0):.9f})")
+    # UN SOLO PRECIO (25-10-2026): `pago_por_potencia` ya no publica un
+    # "estimador de 10 min" aparte del precio con el que se paga. Antes /stats
+    # daba dos cifras distintas y no habia forma de saber cual mandaba.
+    _pg = on["precio_2x"].get("precio_gflop")
+    _pm = (on.get("precio_minuto_2x") or {}).get("precio")
+    check(_pg is not None and _pm is not None and abs(float(_pg) - float(_pm)) < 1e-15,
+          f"el precio publicado es el mismo que se paga "
+          f"({_pg} vs {_pm})")
 
     # --- 6. la emision por minuto cuadra con el calendario de 2150 ----------
     pr = on["precio_1x"]

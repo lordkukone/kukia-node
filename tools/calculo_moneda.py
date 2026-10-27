@@ -95,7 +95,7 @@ def main() -> int:
     restante = max(0.0, techo - emitido)
     pago = float(d.get("pago_por_tarea") or 0)
     emision_min = float(d.get("emision_por_min") or 0)
-    fin = fecha(str(e.get("fin_emision") or "2150-01-01"))
+    fin = fecha(str(e.get("fin_emision") or "2150-04-13"))
     # El Core no publica la fecha de inicio: se deshacen las 6 eras y se baja al
     # 1 de enero, que es como esta definido. (Restando dias de calendario el
     # redondeo de 365,25 se comia dos dias y se caia al año anterior.)

@@ -524,7 +524,19 @@ def fijar_canonico(destino: Path, canonico: str) -> int:
             # operacion es idempotente y vale para dominio raiz y subcarpeta.
             return m.group(1) + url_limpia(canonico, nombre) + m.group(3)
         nuevo, n = patron.subn(_sub, texto)
-        if n and nuevo != texto:
+        if not n and "</head>" in nuevo:
+            # Si la pagina NO trae la etiqueta, hasta ahora no se tocaba: esta
+            # funcion solo REESCRIBIA las que ya existian, y su docstring decia
+            # "en TODAS las .html". Asi se colo docs/seguro.html al sitemap sin
+            # canonica, y el 27-10-2026 eso hizo que IndexNow se negara a
+            # enviar (tools/indexar.py no avisa de una pagina sin canonica).
+            # Se anade antes de </head>, con el mismo destino que las demas
+            # (url_limpia, para que siga siendo idempotente).
+            nuevo = nuevo.replace(
+                "</head>",
+                f'<link rel="canonical" href="{url_limpia(canonico, ruta.name)}">\r\n</head>',
+                1)
+        if nuevo != texto:
             ruta.write_text(nuevo, encoding="utf-8")
             tocadas += 1
     return tocadas

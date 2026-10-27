@@ -129,7 +129,18 @@ def verificar(carpeta: Path, sin_clave: bool) -> dict:
         r = S.verificar_sellos(con, sellos, pub)
         supply = float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger").fetchone()["s"] or 0.0)
         filas = int(con.execute("SELECT COUNT(*) c FROM ledger").fetchone()["c"])
-        return {"ok": bool(r["ok"]), "problemas": (r.get("problemas") or [])[:10],
+        problemas = list(r.get("problemas") or [])
+        ok = bool(r["ok"])
+        # AUDITORIA 2026-10-25 (hallazgo B1): con CERO sellos, verificar_sellos
+        # devuelve ok (no hay nada que lo contradiga) y esta herramienta decia
+        # "copia VERIFICADA". Pero una copia sin sellos no demuestra nada del
+        # historial: si el fichero falta o esta vacio, la copia no vale como
+        # prueba. Ahora se marca como NO verificada y el script sale con 4.
+        if not sellos:
+            ok = False
+            problemas.insert(0, "la copia no trae sellos: no se puede demostrar "
+                                "el historial (sellos.jsonl vacio o ausente)")
+        return {"ok": ok, "problemas": problemas[:10],
                 "sellos": len(sellos), "asientos": filas,
                 "supply": round(supply, 6), "clave_publica": pub}
     finally:

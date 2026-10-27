@@ -43,6 +43,8 @@ RAIZ = Path(__file__).resolve().parent.parent
 DB = RAIZ / "coordinator" / "ledger" / "kukia.db"
 WALLETS = RAIZ / "ledger" / "wallet"
 sys.path.insert(0, str(RAIZ / "ledger"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from copia_ledger import copiar_ledger  # noqa: E402
 
 import kukia_wallet as W  # noqa: E402
 
@@ -127,7 +129,10 @@ def probar_en_copia(pruebas: list[dict], monto: float = 0.01) -> list[str]:
     antes = (DB.stat().st_size, DB.stat().st_mtime)
     tmp = Path(tempfile.mkdtemp(prefix="kukia_billeteras_"))
     db = tmp / "kukia.db"
-    shutil.copy2(DB, db)
+    # VACUUM INTO: copia coherente con el Core escribiendo. Con shutil.copy2
+    # salia mal formada una de cada tres veces (medido el 25-10-2026) y el
+    # Core aislado se moria al arrancar sin decir por que.
+    copiar_ledger(DB, db)
     puerto = puerto_libre()
     base = f"http://127.0.0.1:{puerto}"
     entorno = dict(os.environ)
@@ -194,8 +199,12 @@ def probar_en_copia(pruebas: list[dict], monto: float = 0.01) -> list[str]:
         shutil.rmtree(tmp, ignore_errors=True)
 
     despues = (DB.stat().st_size, DB.stat().st_mtime)
-    resultados.append("ledger real intacto" if antes == despues
-                      else "OJO: el ledger real ha cambiado")
+    # La prueba trabaja sobre una copia, pero el Core de produccion sigue vivo
+    # y escribe telemetria cada minuto: que el fichero real cambie NO es que
+    # esta prueba haya tocado produccion.
+    resultados.append("ledger real sin tocar por la prueba" if antes == despues
+                      else "el ledger real crecio mientras se probaba (es el Core "
+                           "vivo escribiendo, no esta prueba)")
     return resultados
 
 

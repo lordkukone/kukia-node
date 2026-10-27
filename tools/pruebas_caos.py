@@ -81,6 +81,10 @@ def entorno_core(tmp: Path, token: str) -> dict:
         "KUKIA_REGISTRO_CUPO_HORA": "50",
         "PYTHONUNBUFFERED": "1",
         "PYTHONIOENCODING": "utf-8",
+        # Si el proceso se cae por un fallo nativo (no una excepcion de Python),
+        # que lo cuente en el log en vez de morirse en silencio: es lo que hacia
+        # que un Core desaparecido pareciera "peticiones que fallan".
+        "PYTHONFAULTHANDLER": "1",
     })
     return e
 
@@ -107,6 +111,52 @@ def esperar(base: str, proc, limite=240.0) -> bool:
             pass
         time.sleep(0.5)
     return False
+
+
+def arrancar_vivo(tmp: Path, entorno: dict, proc=None, log=None,
+                  intentos: int = 2):
+    """Arranca el Core y espera a que conteste. Devuelve (proc, log, puerto, base).
+
+    POR QUE REINTENTA (medido el 25-10-2026)
+      Una de cada cuatro pasadas de la suite perdia un Core al arrancarlo:
+      el proceso se moria con codigo -1 y el `core.log` quedaba VACIO (ni una
+      linea: no llego a importar). Todas las comprobaciones siguientes fallaban
+      en cascada y parecia que el fallo estaba en el Core.
+      Solo se reintenta en ese caso exacto -el hijo no escribio NADA-, que no
+      puede ser un fallo del Core (el Core siempre imprime algo al importar).
+      Si el hijo escribio algo y se murio, se deja morir: eso si es un fallo
+      de verdad y se ensena el log.
+    """
+    for intento in range(1, intentos + 1):
+        antes = 0
+        if proc is not None:
+            matar(proc)
+            try:
+                if log is not None:
+                    log.close()
+            except Exception:
+                pass
+        ruta_log = tmp / "core.log"
+        try:
+            antes = ruta_log.stat().st_size
+        except Exception:
+            antes = 0
+        puerto = PS.puerto_libre()
+        base = f"http://127.0.0.1:{puerto}"
+        proc, log = arrancar(tmp, entorno, puerto)
+        if esperar(base, proc):
+            return proc, log, puerto, base
+        try:
+            log.flush()
+            despues = ruta_log.stat().st_size
+        except Exception:
+            despues = antes
+        if despues > antes:
+            return proc, log, puerto, base      # el Core dijo algo: fallo de verdad
+        if intento < intentos:
+            print("  (el Core no llego a arrancar y no escribio nada; "
+                  "se reintenta en otro puerto)", flush=True)
+    return proc, log, puerto, base
 
 
 def matar(proc) -> None:
@@ -350,12 +400,11 @@ def prueba_corte(base, tmp, entorno, puerto, proc, log, admin):
         pass
     print("   Core muerto a lo bruto; rearrancando sobre el MISMO .db...")
 
-    puerto = PS.puerto_libre()
-    base = f"http://127.0.0.1:{puerto}"
-    proc, log = arrancar(tmp, entorno, puerto)
+    proc, log, puerto, base = arrancar_vivo(tmp, entorno, proc, log)
     vivo = esperar(base, proc)
     check("el Core rearranca solo tras un corte seco", vivo, f"puerto {puerto}")
     if not vivo:
+        _volcar_log(tmp, log, proc)
         return proc, log, puerto, base
 
     integ = requests.get(f"{base}/ledger/verificar", timeout=180).json()
@@ -384,8 +433,12 @@ def prueba_corte(base, tmp, entorno, puerto, proc, log, admin):
         cobradas = {n: float(m) for n, m in movies}
         huerfanos = []
         for n in nonces:
+            # El id del asiento lleva el nonce ENTERO desde el 23-10-2026
+            # (antes se cortaba a 12 y dos transferencias podian compartir id).
+            # Se aceptan las dos formas para no romper con bases antiguas.
             movs = con.execute(
-                "SELECT COUNT(*) FROM ledger WHERE tarea_id=?", (f"tx-{n[:12]}",)).fetchone()[0]
+                "SELECT COUNT(*) FROM ledger WHERE tarea_id IN (?,?)",
+                (f"tx-{n}", f"tx-{n[:12]}")).fetchone()[0]
             if n in cobradas and movs != 2:
                 huerfanos.append((n[:8], "cobrada con %d asientos" % movs))
             if n not in cobradas and movs != 0:
@@ -402,23 +455,39 @@ def prueba_corte(base, tmp, entorno, puerto, proc, log, admin):
         print("   (corte a mitad de faena de verdad: parte entro, parte no)")
 
     # E. REPLAY TRAS EL CORTE: un nonce ya cobrado sigue gastado.
+    # Si el Core se ha muerto, esto lo dice como FALLO con el motivo (antes
+    # reventaba la suite entera con un traceback y no se veia nada mas).
+    def pide(que: str, fn):
+        try:
+            return fn()
+        except Exception as e:
+            check(que, False, f"no se pudo preguntar al Core ({type(e).__name__}: {e})"[:160])
+            return None
+
     if cobradas:
         n = next(iter(cobradas))
-        r = transferir(base, de, destino, monto, n, seed, pub)
-        check("nonce ya cobrado sigue bloqueado tras reiniciar (anti-replay persistente)",
-              r.status_code == 409, r.text[:120])
-    saldo_final = float(requests.get(f"{base}/saldo/{destino}", timeout=30).json()["saldo"])
-    check("el destino tiene justo lo que dicen las transferencias cobradas",
-          abs(saldo_final - monto * estado_tx) < 1e-6,
-          f"{saldo_final} KIA por {estado_tx} transferencias")
+        r = pide("nonce ya cobrado sigue bloqueado tras reiniciar (anti-replay persistente)",
+                 lambda: transferir(base, de, destino, monto, n, seed, pub))
+        if r is not None:
+            check("nonce ya cobrado sigue bloqueado tras reiniciar (anti-replay persistente)",
+                  r.status_code == 409, r.text[:120])
+    saldo = pide("el destino tiene justo lo que dicen las transferencias cobradas",
+                 lambda: requests.get(f"{base}/saldo/{destino}", timeout=30))
+    if saldo is not None:
+        saldo_final = float(saldo.json()["saldo"])
+        check("el destino tiene justo lo que dicen las transferencias cobradas",
+              abs(saldo_final - monto * estado_tx) < 1e-6,
+              f"{saldo_final} KIA por {estado_tx} transferencias")
 
     # Las que NO entraron no pueden haber dejado el nonce quemado: el dinero
     # sigue en el origen y se tiene que poder reintentar.
     sin_cobrar = [n for n in nonces if n not in cobradas]
     if sin_cobrar:
-        r = transferir(base, de, destino, monto, sin_cobrar[0], seed, pub)
-        check("una transferencia que no entro se puede reintentar (nonce libre)",
-              r.status_code == 200, r.text[:120])
+        r = pide("una transferencia que no entro se puede reintentar (nonce libre)",
+                 lambda: transferir(base, de, destino, monto, sin_cobrar[0], seed, pub))
+        if r is not None:
+            check("una transferencia que no entro se puede reintentar (nonce libre)",
+                  r.status_code == 200, r.text[:120])
     return proc, log, puerto, base
 
 
@@ -531,6 +600,11 @@ def _llenar_bd(db: Path, hasta_paginas: int) -> int:
     cuanto el fichero llega al tope cualquier escritura suya devuelve
     SQLITE_FULL, igual que un disco lleno de verdad. Se rellena con una tabla
     de basura en una conexion aparte para no gastar peticiones ni tiempo.
+
+    Se llama solo con el Core QUIETO (auto-tareas apagadas y sin trafico en
+    vuelo), asi que durante el relleno la unica conexion que escribe es esta:
+    el escenario no depende de quien gane el bloqueo entre conexiones, ni de
+    cuanto tarde el Core en soltar la suya.
     """
     con = sqlite3.connect(str(db), timeout=30)
     try:
@@ -578,7 +652,111 @@ def _sellos_resisten_un_corte(tmp: Path) -> None:
           and leidos[-1].get("hasta") == 400, f"{len(leidos)} leidos")
 
 
-def prueba_disco_lleno(token: str) -> None:
+def prueba_ledger_cogido(base, tmp: Path) -> None:
+    """H. Otro programa leyendo el ledger (auditoria, copia, replica).
+
+    Un lector ajeno no puede reventar un pago. Lo que cambia es COMO se nota:
+
+      - en DELETE, el lector bloquea al escritor: el Core tiene que contestar
+        503 rapido, con Retry-After y sin escribir nada. Antes del arreglo del
+        25-10-2026 eran 64,8 s y un 500 "error interno en transferencia", que
+        mentia y no le decia al cliente que podia reintentar.
+      - en WAL (desde el 25-10-2026, ver `_poner_en_wal` en el Core), el lector
+        no bloquea al escritor: el pago entra normal. Es justo la mejora que
+        se buscaba, asi que aqui lo correcto es 200, no 503.
+
+    Se comprueba en el modo en que este la copia, para que la prueba valga en
+    los dos mundos (y avise si alguien vuelve a DELETE sin darse cuenta).
+    """
+    print("\n== H. LEDGER COGIDO POR OTRO PROGRAMA (auditoria o copia) ==")
+    con = sqlite3.connect(f"file:{(tmp / 'kukia.db').as_posix()}?mode=ro", uri=True)
+    try:
+        modo = str(con.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    finally:
+        con.close()
+    print(f"  (la base de la prueba esta en modo {modo})")
+
+    mejor = PS.elegir_cartera(base)
+    if not mejor:
+        check("hay billetera con saldo para probar el bloqueo", False)
+        return
+    _saldo, de, seed, pub, _f = mejor
+    _a, _b, destino = clave_nueva()
+    nonce = secrets.token_hex(16)
+
+    otro = sqlite3.connect(str(tmp / "kukia.db"), timeout=5, isolation_level=None)
+    otro.execute("BEGIN")
+    otro.execute("SELECT COUNT(*) FROM ledger").fetchone()
+    try:
+        t0 = time.time()
+        r = transferir(base, de, destino, 1.0, nonce, seed, pub)
+        tardanza = time.time() - t0
+        if modo == "wal":
+            check("en WAL el lector ajeno NO impide el pago",
+                  r.status_code == 200, f"{r.status_code} en {tardanza:.1f} s {r.text[:80]}")
+            check("y no hay que esperar: contesta al momento",
+                  tardanza <= 5.0, f"{tardanza:.1f} s")
+        else:
+            check("en DELETE, con el ledger cogido se contesta 503 (no 500 ni cuelgue)",
+                  r.status_code == 503, f"{r.status_code} en {tardanza:.1f} s")
+            check("no tarda mas de 30 s en decirlo (antes: 64,8 s)",
+                  tardanza <= 30.0, f"{tardanza:.1f} s")
+            check("dice que no se ha escrito nada y que se reintente",
+                  "no se ha escrito nada" in r.text and "reintentar" in r.text,
+                  r.text[:120])
+            check("dice cuanto esperar (Retry-After)",
+                  bool(r.headers.get("Retry-After")),
+                  str(r.headers.get("Retry-After")))
+    finally:
+        otro.execute("ROLLBACK")
+        otro.close()
+
+    if modo == "wal":
+        # Ya entro: repetir el mismo nonce tiene que dar 409 (anti-replay).
+        r2 = transferir(base, de, destino, 1.0, nonce, seed, pub)
+        check("el nonce ya cobrado se sigue rechazando (anti-replay)",
+              r2.status_code == 409, f"{r2.status_code} {r2.text[:100]}")
+    else:
+        # Soltado el bloqueo, el MISMO nonce tiene que entrar: no quedo quemado.
+        r2 = transferir(base, de, destino, 1.0, nonce, seed, pub)
+        check("soltado el bloqueo, la misma transferencia entra (nonce no quemado)",
+              r2.status_code == 200, r2.text[:120])
+
+    con = sqlite3.connect(str(tmp / "kukia.db"), timeout=20)
+    try:
+        filas = con.execute("SELECT COUNT(*) FROM transferencias WHERE nonce=?",
+                            (nonce,)).fetchone()[0]
+        asientos = con.execute("SELECT COUNT(*) FROM ledger WHERE tarea_id=?",
+                               (f"tx-{nonce}",)).fetchone()[0]
+    finally:
+        con.close()
+    check("queda UNA transferencia y DOS asientos (nada a medias)",
+          filas == 1 and asientos == 2, f"transferencias={filas} asientos={asientos}")
+
+
+def _volcar_log(tmp: Path, log=None, proc=None) -> None:
+    """Cuando un Core no arranca o se muere, ensenar su log y como acabo."""
+    try:
+        if log is not None:
+            log.flush()
+    except Exception:
+        pass
+    if proc is not None:
+        codigo = proc.poll()
+        print(f"  el Core termino con codigo {codigo}"
+              + (" (0 = salio solo, <0 = lo mataron)" if codigo is not None else ""))
+    try:
+        texto = (tmp / "core.log").read_text(encoding="utf-8", errors="replace")
+        lineas = texto.splitlines()[-25:]
+    except Exception as e:
+        lineas = [f"(no se pudo leer el log: {e})"]
+    print("  --- log del Core (cola) ---")
+    for linea in lineas:
+        print("  " + linea)
+    print(f"  carpeta: {tmp}")
+
+
+def prueba_disco_lleno(token: str, dejar: bool = False) -> None:
     print("\n== G. DISCO LLENO: se acaba el espacio a mitad de faena ==")
     tmp = Path(tempfile.mkdtemp(prefix="kukia_lleno_"))
     _sellos_resisten_un_corte(tmp)
@@ -590,12 +768,13 @@ def prueba_disco_lleno(token: str) -> None:
         margen = 400
         cap = _paginas(tmp / "kukia.db") + margen
         entorno["KUKIA_DB_MAX_PAGINAS"] = str(cap)
-        puerto = PS.puerto_libre()
-        base = f"http://127.0.0.1:{puerto}"
-        proc, log = arrancar(tmp, entorno, puerto)
+        proc, log, puerto, base = arrancar_vivo(tmp, entorno)
         vivo = esperar(base, proc)
         check("el Core arranca con el disco casi lleno", vivo, f"puerto {puerto}")
         if not vivo:
+            _volcar_log(tmp, log, proc)
+            if dejar:
+                print(f"  carpeta conservada: {tmp}")
             return
 
         # 1. Trabajo previo con sitio: nodo, tarea y asignacion.
@@ -623,14 +802,7 @@ def prueba_disco_lleno(token: str) -> None:
             check("tarea asignada antes de llenar", tarea.get("id") == tid,
                   str(tarea.get("id"))[:12])
 
-        # 2. Disco lleno de verdad (para el Core).
-        paginas = _llenar_bd(tmp / "kukia.db", cap)
-        print(f"   base llenada hasta {paginas} paginas (tope {cap})")
-        r = requests.get(f"{base}/stats", timeout=30)
-        check("con el disco lleno el Core sigue sirviendo lecturas (/stats 200)",
-              r.status_code == 200, f"{r.status_code}")
-
-        # 3. Transferencias contra el disco lleno.
+        # 2. Transferencias contra el disco lleno.
         mejor = PS.elegir_cartera(base)
         if not mejor or mejor[0] <= 1.0:
             check("hay billetera con saldo para la prueba", False, "ninguna")
@@ -639,25 +811,47 @@ def prueba_disco_lleno(token: str) -> None:
         _s2, _p2, destino = clave_nueva()
         antes = estado_bd(tmp)
         codigos, nonces = [], []
-        for i in range(40):
+
+        def _transferir_una() -> int:
             n = secrets.token_hex(16)
             nonces.append(n)
             codigos.append(transferir(base, de, destino, 1.0, n, wseed, wpub).status_code)
-            if codigos[-1] == 507:
+            return codigos[-1]
+
+        # Con sitio: estas TIENEN que cobrarse. Se hacen ANTES de llenar para
+        # no depender de cuantas paginas queden libres despues del relleno.
+        for _ in range(3):
+            _transferir_una()
+
+        # Disco lleno de verdad (para el Core).
+        paginas = _llenar_bd(tmp / "kukia.db", cap)
+        print(f"   base llenada hasta {paginas} paginas (tope {cap})")
+        r = requests.get(f"{base}/stats", timeout=30)
+        check("con el disco lleno el Core sigue sirviendo lecturas (/stats 200)",
+              r.status_code == 200, f"{r.status_code}")
+
+        # Contra el disco lleno: hasta el primer 507. La base queda justo en el
+        # tope (freelist 0), asi que el primer INSERT que necesita pagina nueva
+        # ya no cabe: normalmente el 507 sale a la primera. El tope de 40 vueltas
+        # se queda por debajo del limite de 60/min de /transferir y solo actua
+        # si algun dia la base deja paginas sueltas.
+        for _ in range(40):
+            if _transferir_una() == 507:
                 break
         ok = [c for c in codigos if c == 200]
         llenos = [c for c in codigos if c == 507]
         check("sin espacio nada devuelve 500 (200 mientras cabe, 507 al llenarse)",
-              all(c in (200, 507) for c in codigos), f"codigos={codigos}")
+              all(c in (200, 507) for c in codigos),
+              f"{len(ok)} x200, {len(llenos)} x507, otros={[c for c in codigos if c not in (200, 507)]}")
         check("SQLite llega a decir 'disco lleno' (el escenario se probo de verdad)",
-              bool(llenos), f"{len(llenos)} respuestas 507 de {len(codigos)}")
+              bool(llenos), f"{len(llenos)} respuestas 507 de {len(codigos)} transferencias")
         if llenos:
             r = transferir(base, de, destino, 1.0, secrets.token_hex(16), wseed, wpub)
             check("el 507 lo dice claro (menciona el espacio) y no miente",
                   r.status_code == 507 and "espacio" in r.text.lower(),
                   f"{r.status_code} {r.text[:120]}")
 
-        # 4. Cobrar una tarea con el disco lleno.
+        # 3. Cobrar una tarea con el disco lleno.
         estado_pago = None
         pago_kuki = 0.0
         if tarea.get("id") == tid:
@@ -689,13 +883,13 @@ def prueba_disco_lleno(token: str) -> None:
                 check("si se pago, fue un solo asiento", filas == 1,
                       f"estado={est} asientos={filas}")
 
-        # 5. Invariantes del ledger: ni medio asiento ni dinero suelto.
+        # 4. Invariantes del ledger: ni medio asiento ni dinero suelto.
         con = sqlite3.connect(str(tmp / "kukia.db"), timeout=20)
         try:
             huerfanos = []
             for n in nonces:
-                movs = con.execute("SELECT COUNT(*) FROM ledger WHERE tarea_id=?",
-                                   (f"tx-{n[:12]}",)).fetchone()[0]
+                movs = con.execute("SELECT COUNT(*) FROM ledger WHERE tarea_id IN (?,?)",
+                                   (f"tx-{n}", f"tx-{n[:12]}")).fetchone()[0]
                 cobrada = con.execute("SELECT COUNT(*) FROM transferencias WHERE nonce=?",
                                       (n,)).fetchone()[0]
                 if movs not in (0, 2) or (movs == 2) != (cobrada == 1):
@@ -716,38 +910,58 @@ def prueba_disco_lleno(token: str) -> None:
         print(f"   transferencias: {len(ok)} cobradas, {len(llenos)} rechazadas por espacio;"
               f" pago de tarea: {estado_pago}")
 
-        # 6. Con espacio otra vez: el historial sigue bien y todo se reintenta.
+        # 5. Con espacio otra vez: el historial sigue bien y todo se reintenta.
         matar(proc)
         try:
             log.close()
         except Exception:
             pass
         entorno2 = entorno_core(tmp, token)
-        puerto = PS.puerto_libre()
-        base = f"http://127.0.0.1:{puerto}"
-        proc, log = arrancar(tmp, entorno2, puerto)
+        proc, log, puerto, base = arrancar_vivo(tmp, entorno2, proc, log)
         vivo = esperar(base, proc)
         check("el Core rearranca con espacio y el historial lleno", vivo, f"puerto {puerto}")
         if not vivo:
+            _volcar_log(tmp, log, proc)
+            if dejar:
+                print(f"  carpeta conservada: {tmp}")
             return
-        integ = requests.get(f"{base}/ledger/verificar", timeout=240).json()
-        check("la cadena sigue intacta tras el disco lleno", integ.get("cadena_ok") is True,
-              str(integ.get("ids_alterados"))[:160])
-        completo = requests.get(f"{base}/ledger/integridad", timeout=240).json()
-        check("los sellos cuadran y los pagos NO quedan bloqueados",
-              completo.get("sellos_ok") is True and completo.get("pagos_bloqueados") is False,
-              str(completo.get("problemas"))[:200])
+        def pide(que: str, fn):
+            """Peticion que, si el Core se ha muerto, sale como FALLO con log."""
+            try:
+                return fn()
+            except Exception as e:
+                check(que, False,
+                      f"no se pudo preguntar al Core ({type(e).__name__}: {e})"[:160])
+                _volcar_log(tmp, log, proc)
+                return None
+
+        integ = pide("la cadena sigue intacta tras el disco lleno",
+                     lambda: requests.get(f"{base}/ledger/verificar", timeout=240).json())
+        if integ is not None:
+            check("la cadena sigue intacta tras el disco lleno",
+                  integ.get("cadena_ok") is True, str(integ.get("ids_alterados"))[:160])
+        completo = pide("los sellos cuadran y los pagos NO quedan bloqueados",
+                        lambda: requests.get(f"{base}/ledger/integridad", timeout=240).json())
+        if completo is not None:
+            check("los sellos cuadran y los pagos NO quedan bloqueados",
+                  completo.get("sellos_ok") is True and completo.get("pagos_bloqueados") is False,
+                  str(completo.get("problemas"))[:200])
         rechazadas = [n for n, c in zip(nonces, codigos) if c == 507]
         if rechazadas:
-            r = transferir(base, de, destino, 1.0, rechazadas[0], wseed, wpub)
-            check("una transferencia rechazada por espacio se puede reintentar",
-                  r.status_code == 200, r.text[:120])
+            r = pide("una transferencia rechazada por espacio se puede reintentar",
+                     lambda: transferir(base, de, destino, 1.0, rechazadas[0], wseed, wpub))
+            if r is not None:
+                check("una transferencia rechazada por espacio se puede reintentar",
+                      r.status_code == 200, r.text[:120])
         if estado_pago == 507 and tarea.get("id") == tid:
             metrica = hashlib.sha256(datos.encode()).hexdigest()
-            r = requests.post(f"{base}/tareas/resultado", timeout=240, params={
-                "tid": tid, "nodo_id": nid, "metrica": metrica,
-                "firma": PS.firmar(seed, f"{tid}:{metrica}"),
-                "device": "cpu", "duracion_ms": 5.0})
+            r = pide("la tarea que no cobro se paga ahora (una sola vez)",
+                     lambda: requests.post(f"{base}/tareas/resultado", timeout=240, params={
+                         "tid": tid, "nodo_id": nid, "metrica": metrica,
+                         "firma": PS.firmar(seed, f"{tid}:{metrica}"),
+                         "device": "cpu", "duracion_ms": 5.0}))
+            if r is None:
+                return
             check("la tarea que no cobro se paga ahora (una sola vez)",
                   r.status_code == 200 and (r.json() or {}).get("ok") is True,
                   f"{r.status_code} {r.text[:120]}")
@@ -768,7 +982,8 @@ def prueba_disco_lleno(token: str) -> None:
             log.close()
         except Exception:
             pass
-        shutil.rmtree(tmp, ignore_errors=True)
+        if not dejar:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main() -> int:
@@ -790,9 +1005,7 @@ def main() -> int:
         admin = {"X-Admin-Token": token}
         entorno = entorno_core(tmp, token)
 
-        puerto = PS.puerto_libre()
-        base = f"http://127.0.0.1:{puerto}"
-        proc, log = arrancar(tmp, entorno, puerto)
+        proc, log, puerto, base = arrancar_vivo(tmp, entorno)
         print(f"arrancando Core aislado en {base} ...", flush=True)
         if not esperar(base, proc):
             print("ERROR: el Core no arranco")
@@ -801,12 +1014,30 @@ def main() -> int:
             matar(proc)
             return 3
 
+        # Si el Core se muere entre seccion y seccion, decirlo AQUI y con su
+        # codigo de salida: antes se veia como "peticiones que fallan" y no se
+        # sabia ni cuando ni por que.
+        def sigue_vivo(donde: str) -> None:
+            codigo = proc.poll()
+            if codigo is not None:
+                check(f"el Core sigue vivo tras la seccion {donde}", False,
+                      f"termino con codigo {codigo}")
+                _volcar_log(tmp, log, proc)
+                raise SystemExit(1)
+
         prueba_doble_gasto(base, tmp)
+        sigue_vivo("A/B (doble gasto)")
         prueba_doble_pago(base, tmp, admin)
+        sigue_vivo("C (doble pago)")
         proc, log, puerto, base = prueba_corte(base, tmp, entorno, puerto, proc, log, admin)
+        sigue_vivo("CORTE")
         prueba_basura(base, admin)
+        sigue_vivo("D (basura)")
         prueba_host(base)
-        prueba_disco_lleno(token)
+        sigue_vivo("F (host)")
+        prueba_ledger_cogido(base, tmp)
+        sigue_vivo("H (ledger cogido)")
+        prueba_disco_lleno(token, args.dejar)
 
         matar(proc)
         try:

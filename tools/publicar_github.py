@@ -58,7 +58,13 @@ PROHIBIDOS = [
     r"\.cloudflared",
     r"(^|/)dominio_core\.txt$",
     r"(^|/)RECUPERACION_[^/]*\.txt$",
-    r"(^|/)\.env",
+    # 24-10-2026: antes era `\.env` a secas y bloqueaba `despliegue/.env.ejemplo`
+    # (la PLANTILLA, que existe justo para copiarla y no lleva ni un secreto).
+    # Efecto: el publicador se negaba en redondo y GitHub Pages se quedo con la
+    # version de las 12:57 mientras Surge si publicaba. Ahora se veta el .env y
+    # sus variantes de verdad, y las plantillas pasan (su contenido se sigue
+    # escaneando con SECRETOS, asi que una plantilla con un token no cuela).
+    r"(^|/)\.env(\.(local|production|development|test|staging|prod|dev))?$",
     r"\.(pem|key|p12|pfx)$",
 ]
 # Lo que no puede aparecer DENTRO de un fichero. Cada patron con su etiqueta.

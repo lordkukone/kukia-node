@@ -50,24 +50,43 @@ def main() -> int:
     # 1) Core vivo
     try:
         stats = _get("/stats")
-        integ = _get("/ledger/integridad")
         datos["core"] = "ok"
     except Exception as e:
         print(f"FALLO  el Core no responde en {CORE}: {e}")
         return 1
 
+    # 1b) integridad. OJO: recorre TODO el ledger (600.000+ asientos) y con el
+    # minero escribiendo puede pasar de 10 s. Antes iba con el mismo tiempo que
+    # /stats y su fallo se contaba como "el Core no responde", que es mentira:
+    # el Core estaba contestando.
+    try:
+        integ = _get("/ledger/integridad", timeout=240.0)
+    except Exception as e:
+        print(f"AVISO  el Core responde, pero la comprobacion de integridad no "
+              f"termino en 240 s: {e}")
+        integ = {}
+
     # 2) integridad
-    if not integ.get("cadena_ok"):
-        fallos.append(f"cadena de hashes rota: {integ.get('ids_alterados')}")
-    if not integ.get("sellos_ok"):
-        fallos.append(f"sellos no cuadran: {integ.get('problemas')}")
-    if integ.get("pagos_bloqueados"):
-        fallos.append("pagos BLOQUEADOS por integridad")
+    if integ:
+        if not integ.get("cadena_ok"):
+            fallos.append(f"cadena de hashes rota: {integ.get('ids_alterados')}")
+        if not integ.get("sellos_ok"):
+            fallos.append(f"sellos no cuadran: {integ.get('problemas')}")
+        if integ.get("pagos_bloqueados"):
+            fallos.append("pagos BLOQUEADOS por integridad")
     datos["sellos"] = integ.get("sellos")
     datos["ultimo_sello"] = integ.get("ultimo_sello")
 
-    # 3) el ledger se mueve (mtime del .db: se actualiza al commitear)
-    edad_db = time.time() - DB.stat().st_mtime if DB.exists() else 1e9
+    # 3) el ledger se mueve.
+    #    OJO (WAL, 25-10-2026): lo ultimo se escribe en `<db>-wal`, y el .db solo
+    #    cambia cuando SQLite vuelca (checkpoint). Mirando solo la fecha del .db
+    #    se diria "el minero esta parado" con el minero trabajando: se mira la
+    #    mas reciente de las dos.
+    marcas = [DB.stat().st_mtime] if DB.exists() else []
+    _wal = DB.with_name(DB.name + "-wal")
+    if _wal.exists():
+        marcas.append(_wal.stat().st_mtime)
+    edad_db = (time.time() - max(marcas)) if marcas else 1e9
     datos["segundos_sin_escribir"] = round(edad_db)
     if edad_db > 180:
         fallos.append(f"el ledger lleva {int(edad_db)} s sin escribir (minero parado?)")

@@ -17,9 +17,13 @@ QUE MIRA (cada pasada)
 
 CUANDO AVISA
   Solo al CAMBIAR de estado: cuando algo se cae y cuando vuelve. Nada de avisar
-  cada 5 minutos de lo mismo (eso se acaba ignorando). Para no dar la lata con
-  un fallo de un segundo, un servicio tiene que fallar DOS pasadas seguidas
-  para darse por caido; para darse por bueno basta una.
+  cada 5 minutos de lo mismo (eso se acaba ignorando).
+  Las TRES WEBS avisan en la misma pasada en que dejan de responder: si el
+  primer intento falla, se reintenta 3 veces en 10 segundos (un corte de red
+  de tres segundos no es una caida) y, si sigue mal, el aviso sale YA, sin
+  esperar a la pasada siguiente ni a que la web vuelva. El resto de servicios
+  (Core local, Core publico, copias) siguen con el criterio de dos pasadas
+  seguidas, que ahi si hay rebotes normales de los tuneles.
 
 USO
     python tools/vigilante_servicios.py            bucle sin fin (cada 5 min)
@@ -64,6 +68,15 @@ ZIP_LOCAL = RAIZ / "docs" / "kukia-node.zip"
 TAREA = "KUKIA_vigilante_webs"
 MINUTOS = 5
 FALLOS_PARA_CAIDO = 2
+
+# --- Aviso inmediato de las webs (25-10-2026) ------------------------------
+# Antes, una web que dejaba de responder a las 21:05 se avisaba a las 21:15
+# (hacia falta una segunda pasada mala). Con freebuff caido 12 horas y el
+# aviso saliendo tarde, no sirve: se reintenta dentro de la MISMA pasada y, si
+# sigue mal, el aviso sale en el momento. Los reintentos existen para no
+# despertar a nadie por un corte de red de tres segundos.
+INTENTOS_WEB = 3
+ESPERA_WEB = 5.0
 
 # --- Disponibilidad del dia (22-10-2026) -----------------------------------
 # Que avise cuando un servicio lleve el dia por debajo del 99 %. Dos frenos:
@@ -335,6 +348,55 @@ def estado_copia_claves(base: Path = COPIA_CLAVES) -> dict:
     return {"nombre": nombre, "ok": ok, "detalle": detalle}
 
 
+def hay_internet(tiempo: float = 8.0) -> bool:
+    """Si el PC sale a internet. Sirve para no culpar a las webs de un corte de casa.
+
+    El 25/10 a las 09:01 las tres webs "fallaron" a la vez: era la red del PC
+    (reinicio). Con el aviso inmediato, eso habria mandado tres avisos falsos.
+    """
+    for url in ("https://cloudflare.com/cdn-cgi/trace",
+                "https://www.google.com/generate_204"):
+        codigo, _, _ = pide(url, tiempo=tiempo)
+        if 200 <= codigo < 400:
+            return True
+    return False
+
+
+def mira_sitio(base: str, esperada: str = "") -> tuple[bool, str, str]:
+    """(ok, detalle, huella) de una web, con reintentos dentro de la pasada.
+
+    Un unico fallo puede ser un corte de red de tres segundos, no una caida.
+    Se prueba INTENTOS_WEB veces separadas ESPERA_WEB segundos: si una sale
+    bien, la web esta arriba; si fallan todas, esta caida de verdad y quien
+    llama debe avisar YA (no esperar a la pasada siguiente, que son 5 minutos
+    mas). Se reintenta tambien el caso de "sirve otro paquete": una CDN puede
+    tardar unos segundos en cambiar de version.
+    """
+    detalle, huella = "", ""
+    intentos = 0
+    for intento in range(INTENTOS_WEB):
+        intentos = intento + 1
+        codigo, cuerpo, _ = pide(base + "/")
+        huella = ""
+        if codigo == 200 and b"KUKIA" in cuerpo[:4000]:
+            huella = huella_zip(base)
+            if huella and esperada and huella != esperada:
+                detalle = (f"200 pero sirve otro paquete ({huella[:8]}...), "
+                           f"el bueno es {esperada[:8]}...")
+            else:
+                return (True,
+                        f"200, paquete {huella[:8]}..." if huella
+                        else "200, no se pudo leer la huella del zip",
+                        huella)
+        else:
+            detalle = f"HTTP {codigo}" if codigo else "sin respuesta"
+        if intentos < INTENTOS_WEB:
+            time.sleep(ESPERA_WEB)
+    if intentos > 1:
+        detalle += f" ({intentos} intentos en {int(ESPERA_WEB * (intentos - 1))} s)"
+    return False, detalle, huella
+
+
 def comprueba(core_local: str = CORE_LOCAL,
               copias: Path = COPIA_CLAVES) -> list[dict]:
     """Una pasada. Devuelve [{nombre, ok, detalle}]."""
@@ -343,21 +405,24 @@ def comprueba(core_local: str = CORE_LOCAL,
     esperada = huella_local()
 
     for nombre, base in SITIOS.items():
-        codigo, cuerpo, _ = pide(base + "/")
-        ok = codigo == 200 and b"KUKIA" in cuerpo[:4000]
-        detalle = f"HTTP {codigo}" if codigo else "sin respuesta"
-        if ok:
-            h = huella_zip(base)
+        ok, detalle, h = mira_sitio(base, esperada)
+        if h:
             huellas[nombre] = h
-            if h and esperada and h != esperada:
-                ok = False
-                detalle = (f"200 pero sirve otro paquete ({h[:8]}...), "
-                           f"el bueno es {esperada[:8]}...")
-            elif h:
-                detalle = f"200, paquete {h[:8]}..."
-            else:
-                detalle = "200, no se pudo leer la huella del zip"
-        salida.append({"nombre": nombre, "ok": ok, "detalle": detalle})
+        r = {"nombre": nombre, "ok": ok, "detalle": detalle}
+        # Web caida tras los reintentos: se avisa en esta misma pasada, no en
+        # la siguiente (ver INTENTOS_WEB arriba).
+        if not ok:
+            r["inmediato"] = True
+        salida.append(r)
+
+    # Las tres webs a la vez no se caen por separado: si ademas el PC no sale a
+    # internet, el problema es de casa y esos fallos NO se avisan al momento (ni
+    # se avisarian luego, porque al volver la red todo estaria bien otra vez).
+    webs_mal = [r for r in salida if r["nombre"] in SITIOS and not r["ok"]]
+    if len(webs_mal) == len(SITIOS) and not hay_internet():
+        for r in webs_mal:
+            r["inmediato"] = False
+            r["detalle"] += " (el PC no tiene internet: no es la web)"
 
     # Que las tres sirvan el mismo paquete (si se pudo leer en todas).
     vistas = {k: v for k, v in huellas.items() if v}
@@ -542,7 +607,14 @@ def una_vez(avisar: bool = True, core_local: str = CORE_LOCAL,
 
     for r in resultados:
         previo = antes.get(r["nombre"], {})
-        fallos = 0 if r["ok"] else int(previo.get("fallos", 0)) + 1
+        if r["ok"]:
+            fallos = 0
+        elif r.get("inmediato"):
+            # Ya se reintento dentro de la pasada (mira_sitio): no hace falta
+            # otra pasada mala para darlo por caido y avisar.
+            fallos = FALLOS_PARA_CAIDO
+        else:
+            fallos = int(previo.get("fallos", 0)) + 1
         caido = fallos >= FALLOS_PARA_CAIDO
         ahora[r["nombre"]] = {"ok": r["ok"], "detalle": r["detalle"], "fallos": fallos,
                               "visto": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}

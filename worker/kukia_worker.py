@@ -1610,6 +1610,73 @@ def _vigilar_direccion(seg: float = 300.0) -> None:
     threading.Thread(target=bucle, daemon=True, name="direccion-core").start()
 
 
+# --- Deteccion de GPU con reintento (26-10-2026) ---------------------------
+# FALLO REAL: al iniciar sesion el driver de NVIDIA tarda unos segundos en
+# estar listo (por eso la guardia del .vbs espera 40 s antes de arrancar nada).
+# Si el minero llegaba antes, `torch.cuda.device_count()` devolvia 0 y el
+# minero se quedaba TODA la sesion minando en CPU: GPU encendida, cero potencia
+# medida y tareas mucho mas lentas, sin ningun error en el log. Ahora se
+# reintenta un rato antes de darse por vencido; solo si al final no aparece
+# ninguna GPU se mina en CPU.
+CUDA_INTENTOS = max(1, int(os.environ.get("KUKIA_CUDA_INTENTOS", "6")))
+CUDA_ESPERA_SEG = max(1.0, float(os.environ.get("KUKIA_CUDA_ESPERA_SEG", "10")))
+
+
+def _gpus_nvidia() -> list:
+    """Nombres de las GPU NVIDIA del equipo segun el driver (nvidia-smi).
+
+    Sirve para distinguir "este PC no tiene GPU" de "tiene GPU pero CUDA no la
+    ve": en el log las dos cosas se veian exactamente igual.
+    """
+    extra = {}
+    if os.name == "nt":
+        extra["creationflags"] = 0x08000000   # CREATE_NO_WINDOW
+    try:
+        r = subprocess.run(["nvidia-smi", "--query-gpu=name",
+                            "--format=csv,noheader"],
+                           capture_output=True, text=True, timeout=8, **extra)
+        if r.returncode == 0:
+            return [l.strip() for l in (r.stdout or "").splitlines() if l.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _detectar_gpus() -> tuple:
+    """(numero de GPUs CUDA, motivo si son 0). Reintenta al arrancar.
+
+    No hay cache que valga: cada intento vuelve a preguntar a torch. Se sale en
+    cuanto hay una GPU. Tampoco bloquea el arranque para siempre: como mucho
+    espera KUKIA_CUDA_INTENTOS x KUKIA_CUDA_ESPERA_SEG (por defecto ~50 s) y
+    entonces mina en CPU, que es lo que hacia antes siempre.
+    """
+    motivo = "sin probar"
+    for intento in range(1, CUDA_INTENTOS + 1):
+        try:
+            import torch
+        except ImportError as e:
+            # Definitivo: reintentar no instala torch. Se dice claro y se sigue.
+            return 0, f"torch no esta instalado ({e})"
+        except Exception as e:
+            motivo = f"no se pudo importar torch ({type(e).__name__})"
+        else:
+            try:
+                n = int(torch.cuda.device_count() or 0)
+                motivo = "CUDA no ve ninguna GPU" if n == 0 else ""
+            except Exception as e:
+                n, motivo = 0, f"CUDA no inicializa ({type(e).__name__}: {e})"
+            if n > 0:
+                if intento > 1:
+                    print(f"[KUKIA] GPU disponible en el intento {intento}/{CUDA_INTENTOS}: "
+                          f"{n} - se mina en GPU", flush=True)
+                return n, ""
+        if intento < CUDA_INTENTOS:
+            print(f"[KUKIA] aun no hay GPU ({motivo}); intento {intento}/{CUDA_INTENTOS}, "
+                  f"reintento en {CUDA_ESPERA_SEG:.0f} s", flush=True)
+            time.sleep(CUDA_ESPERA_SEG)
+    return 0, motivo
+
+
 def main():
     # AUDITORIA 2026-10-19: la lista de palabras es la BIP39 en espanol y lleva
     # tildes. En Windows la consola es cp1252 y print() reventaba con
@@ -1628,11 +1695,7 @@ def main():
         print(f"[KUKIA] ERROR: {motivo_core}", flush=True)
         return 2
     nombre = sys.argv[1] if len(sys.argv) > 1 else "worker_" + socket.gethostname()
-    try:
-        import torch
-        n_gpus = torch.cuda.device_count()
-    except Exception:
-        n_gpus = 0
+    n_gpus, motivo_gpu = _detectar_gpus()
 
     def _esperar(hilos):
         """Espera a los hilos y, si llega un Ctrl+C, para ordenadamente."""
@@ -1650,7 +1713,15 @@ def main():
             print("[KUKIA] minero detenido", flush=True)
 
     if n_gpus == 0:
-        print("[KUKIA] Sin GPUs CUDA - usando CPU (mas lento)", flush=True)
+        print(f"[KUKIA] Sin GPUs CUDA ({motivo_gpu}) - usando CPU (mas lento)", flush=True)
+        nombres = _gpus_nvidia()
+        if nombres:
+            # La GPU esta, CUDA no la ve: es un problema de driver, no de
+            # hardware, y asi queda escrito para no confundirlo con "este PC no
+            # tiene GPU".
+            print(f"[KUKIA] OJO: el equipo SI tiene GPU NVIDIA ({', '.join(nombres)}) "
+                  f"pero CUDA no la ve: se mina en CPU. Comprueba 'nvidia-smi' y "
+                  f"reinicia el minero cuando responda.", flush=True)
         _benchmark_arranque()
         _anunciar_emision()
         # En un hilo y no en el principal: asi el Ctrl+C pasa por la misma
