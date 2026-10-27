@@ -791,6 +791,15 @@ def main() -> int:
         else:
             print(f"[generar_web] canonica {canonico} responde {detalle}")
     destino.mkdir(parents=True, exist_ok=True)
+    # La foto de git se toma ANTES de escribir nada (27-10-2026). Antes se tomaba
+    # al final y el vigilante se disparaba a si mismo el pie: el generador
+    # reescribe codigo.html, el zip, la huella y las paginas, y al preguntar
+    # despues `git status` esas escrituras ya salian como cambios, asi que la web
+    # decia «(sin confirmar)» AUNQUE EL ARBOL ESTUVIERA LIMPIO al empezar. Con la
+    # foto al principio, `sucio` dice la verdad: lo que estuviera sin confirmar
+    # cuando se lanzo la generacion, no lo que la propia generacion acaba de
+    # escribir (para eso estan los hashes de `ficheros`).
+    info = _info_commit()
     z = generar_zip(destino)
     huella = hashlib.sha256(z.read_bytes()).hexdigest()
     # newline="\n": en Windows write_text escribia CRLF y `sha256sum -c` no lo
@@ -802,7 +811,6 @@ def main() -> int:
     n_seo = inyectar_seo(destino, canonico)
     r, s = generar_seo(destino, canonico)
     k = generar_clave_indexnow(destino)
-    info = _info_commit()
     version = _version_de_html(destino)
     n_ver = fijar_version_visible(destino, version, info)
     # version.json va EL ULTIMO: asi sus hashes son los de los ficheros finales.
