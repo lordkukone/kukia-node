@@ -117,6 +117,31 @@ Los XML de las tareas antes de tocarlas están en
 `KUKIA_H01F02_20261027\arranque_auto_backup_20261027\` (`Watch_Core_ANTES.xml`,
 `KUKIA_Core_ANTES.xml`).
 
+### Ojo antes de cambiar de rama (medido, no supuesto)
+
+Estas piezas **solo existen en la rama `operativo-versionado-20261027`**. Al hacer
+`git switch web-nueva-20261025` git **las borra del disco** — comprobado en un clon el
+27/10/2026: desaparecieron las cuatro que se miraron, y al volver a la rama reaparecieron con
+el mismo hash. Si eso pasa en el disco de verdad, la tarea `Watch_Core` se queda sin script:
+el Core sigue corriendo, pero **nadie lo vigila** (y el registro de la tarea dirá «resultado
+0», como siempre, porque wscript arrancó y no encontró nada).
+
+Por eso hay copia aparte, fuera de git:
+`KUKIA_H01F02_20261027\operativo_20261027\` con las diez piezas y `HASHES.txt` (entra ahí y
+`sha256sum -c HASHES.txt` → 10 OK).
+
+Y por eso, para deshacer la rama, el orden es este:
+
+1. copia esas piezas fuera del repo (o usa la carpeta de arriba);
+2. `git switch web-nueva-20261025` (git borra las piezas del disco) o `git switch -c otra`;
+3. `git branch -D operativo-versionado-20261027`;
+4. restaura las piezas copiadas en `KUKIA\tools\` y comprueba con `-VerificarHashes`
+   (quedarán sin seguimiento, como estaban antes de B1).
+
+`git branch -D` a secas **no** funciona con esa rama delante: git no deja borrar la rama en
+la que estás, así que el paso 2 es obligatorio. Y si no quieres líos, **déjala**: tener la
+rama no molesta a nadie y es lo que hace que estas piezas ya no vivan solo en copias.
+
 ---
 
 ## 6. Estado el 27/10/2026 (lo comprobado, no lo supuesto)
