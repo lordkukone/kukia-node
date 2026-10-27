@@ -56,10 +56,12 @@ def main() -> int:
         print(f"[auditor] no existe el .db: {db}", file=sys.stderr)
         return 2
 
+    total_sellos = None
     if args.core:
         data = pedir(args.core, "/ledger/sellos?limite=200")
         lista = data.get("sellos") or []
         clave = data.get("clave_publica") or ""
+        total_sellos = data.get("total")
         if not lista:
             print("[auditor] el Core no devolvio sellos todavia", file=sys.stderr)
             return 2
@@ -122,8 +124,23 @@ def main() -> int:
             u = lista[-1]
             print(f"[auditor] ultimo sello      : hasta {u.get('hasta')} "
                   f"({u.get('asientos')} asientos, {u.get('suma')} KIA)")
+        # El Core devuelve como mucho los 200 ULTIMOS sellos: si hay mas, la
+        # lista empieza a mitad de cadena y el eslabon anterior al primero no
+        # se puede comprobar. Se dice, en vez de dar por bueno mas de lo que se
+        # ha mirado (y en vez de llamarlo ALTERADO, que era el falso positivo).
+        tramo = r.get("tramo") or {}
+        cabeza = bool(tramo.get("cabeza", True))
+        if not cabeza:
+            cuantos = f" ({len(lista)} de {total_sellos})" if total_sellos else ""
+            print(f"[auditor] tramo             : la lista empieza en el sello "
+                  f"hasta {tramo.get('desde')}{cuantos}; el eslabon anterior no "
+                  f"viaja y no se comprueba")
         if r["ok"]:
-            print("[auditor] OK: historial intacto y firmado.")
+            if cabeza:
+                print("[auditor] OK: historial intacto y firmado.")
+            else:
+                print("[auditor] OK: el tramo comprobado cuadra (firmas, encadenado "
+                      "y .db). No prueba nada anterior al primer sello de la lista.")
         else:
             print("[auditor] ALTERADO:")
             for p in r["problemas"][:20]:

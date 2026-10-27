@@ -14,7 +14,10 @@ import html
 import json
 import re
 import secrets
+import subprocess
 import time
+import urllib.error
+import urllib.request
 import zipfile
 from pathlib import Path
 
@@ -25,9 +28,25 @@ DESTINO = RAIZ / "docs"
 #
 # 21-10-2026: Surge sirve su propio robots.txt con "Disallow: /" en los
 # subdominios *.surge.sh e IGNORA el nuestro, asi que ahi Google no puede
-# indexar nunca. La copia indexable vive en el sitio de Freebuff y es la que
-# se declara canonica; --canonico permite cambiarla sin tocar el codigo.
-CANONICO = "https://kukia-network.freebuff.page"
+# indexar nunca.
+#
+# CANONICA (26-10-2026): pasa a ser la copia de Freebuff Sites. Motivo, medido
+# hoy: GitHub Pages se quedo con la version del 24-10 y en los navegadores de
+# Kuki su portada sale a medias; la copia de Freebuff Sites sirve la de hoy
+# (v1.3.17) entera y comprobada (portada 200, todas las paginas 200, moneda y
+# video con su tipo correcto). Sale de AQUI y se escribe en el <link
+# rel="canonical"> de cada pagina, en robots.txt y en sitemap.xml.
+# Para volver atras sin tocar codigo:  python publico/generar_web.py --canonico https://loquesea
+#
+# HISTORIAL (sin borrar): esto es lo que decia la nota anterior.
+# 24-10-2026 (corregido): la canonica apuntaba a kukia-network.freebuff.page,
+# y ese hosting devuelve 404 en la portada: se le decia a Google "la pagina
+# buena es esta" y contestaba "no existe", que es la peor forma de perder el
+# indice. Comprobado hoy: SURGE 200 pero con Disallow: /, FREEBUFF.PAGE 404,
+# GITHUB PAGES 200 y con robots que permite indexar. La copia viva e indexable
+# es GitHub Pages, asi que es la canonica. --canonico permite cambiarla sin
+# tocar el codigo el dia que haya dominio propio apuntando de verdad.
+CANONICO = "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page"
 
 FUENTES = [
     ("Coordinador (Core)", "coordinator/kukia_core.py"),
@@ -38,6 +57,7 @@ FUENTES = [
     ("Auditor de sellos", "publico/verificar_sellos.py"),
     ("Rescate de saldos antiguos", "tools/rescatar_saldos.py"),
     ("Salud de la moneda", "tools/salud.py"),
+    ("Calculadora de valor (supuestos a la vista)", "tools/calculadora_valor.py"),
     ("Copia de seguridad verificada", "tools/backup_ledger.py"),
     ("Restauracion probada", "tools/probar_restauracion.py"),
     ("Prueba del rele (sin red)", "publico/probar_relay.mjs"),
@@ -135,6 +155,9 @@ EN_ZIP = [
     # paquete nombra un fichero, el fichero va dentro.
     "tools/prueba_gasto_billetera.py",
     "tools/verificar_moneda.py",
+    # 24-10-2026: la pagina calculadora.html manda a esta herramienta ("la misma
+    # cuenta en tu maquina"), asi que el fichero va dentro del paquete.
+    "tools/calculadora_valor.py",
     "tools/pruebas_seguridad.py",
     "tools/pruebas_caos.py",
     "tools/prueba_failover_negativas.py",
@@ -158,6 +181,8 @@ CABECERA = """<!DOCTYPE html>
 <style>
 :root {{ --gold:#d4af37; --navy:#081a3a; --line:#27487c; --text:#c3d1ea; }}
 * {{ margin:0; padding:0; box-sizing:border-box; }}
+/* AUDITORIA 24-10-2026: foco visible para quien navega con el teclado. */
+a:focus-visible, summary:focus-visible, button:focus-visible {{ outline:3px solid #d4af37; outline-offset:2px; border-radius:4px; }}
 body {{ font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; line-height:1.6; }}
 .wrap {{ max-width:1000px; margin:0 auto; padding:3rem 1.5rem; }}
 h1 {{ color:var(--gold); font-size:2.2rem; margin-bottom:.4rem; }}
@@ -259,8 +284,15 @@ FECHA_ZIP = (2026, 1, 1, 0, 0, 0)
 
 
 def _meter(z: zipfile.ZipFile, rel: str, datos: bytes) -> None:
-    """Mete un fichero con fecha fija (zip reproducible)."""
-    zi = zipfile.ZipInfo(rel.replace("\\", "/"), date_time=FECHA_ZIP)
+    """Mete un fichero con fecha fija (zip reproducible).
+
+    Todo va dentro de una carpeta `kukia-node/`. Hasta el 24-10-2026 el zip
+    soltaba coordinator/, worker/, tools/... sueltos en la carpeta donde se
+    descomprimia, y las instrucciones de la web (`cd kukia-node`) fallaban en
+    el primer paso: no existia esa carpeta. Comprobado descomprimiendo el zip
+    publicado y mirando sus raices.
+    """
+    zi = zipfile.ZipInfo("kukia-node/" + rel.replace("\\", "/"), date_time=FECHA_ZIP)
     zi.compress_type = zipfile.ZIP_DEFLATED
     zi.external_attr = (0o644 & 0xFFFF) << 16
     z.writestr(zi, datos)
@@ -271,6 +303,12 @@ def generar_zip(destino: Path) -> Path:
     with zipfile.ZipFile(salida, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for rel in EN_ZIP:
             if rel == "core_minero.txt":
+                # No se copia el de este PC: lleva la direccion del tunel de
+                # casa. Va una plantilla fija ("auto <espejo>") para que nadie
+                # acabe minando contra el ordenador de Kuki y para que el
+                # paquete sea igual en todas las copias. Si se compara el zip
+                # contra el disco, este fichero SIEMPRE sale distinto: es a
+                # proposito.
                 _meter(z, rel, CORE_MINERO_PUBLICO.encode("utf-8"))
                 continue
             ruta = RAIZ / rel
@@ -280,15 +318,106 @@ def generar_zip(destino: Path) -> Path:
                 raise SystemExit(f"[generar_web] ABORTADO: {rel} no puede publicarse "
                                  f"(clave, base de datos o registro)")
             _meter(z, rel, ruta.read_bytes())
-        # Anclas en Bitcoin: se incluyen para que cualquiera pueda verificar el
-        # historial sin pedirnos nada (son 2 KB y no llevan ningun secreto).
-        for ruta in sorted((RAIZ / "anclas").glob("kukia_sello_*")):
-            if ruta.is_file():
-                _meter(z, str(ruta.relative_to(RAIZ)), ruta.read_bytes())
+        # BAJO NINGUN CONCEPTO entran las anclas (26-10-2026). Antes se
+        # colaban los `anclas/kukia_sello_<N>.txt` "para que cualquiera pudiera
+        # verificar el historial sin pedirnos nada", y luego se quitaron los
+        # `.ots`. No basta con eso: la carpeta entera cambia SOLA. Cada sello
+        # nuevo anade un `.txt` (la guardia sella cada ~10 minutos) y cada
+        # `ots upgrade` reescribe un `.ots`. Resultado medido: el SHA-256 del
+        # paquete cambiaba cada pocos minutos sin que cambiase una sola linea
+        # de codigo, asi que la huella publicada en version.json dejaba de
+        # cuadrar con nada. Con la carpeta fuera, el hash depende UNICAMENTE
+        # del codigo: si no se toca el codigo, la huella es la misma hoy y
+        # manana. Los anclajes no se pierden: siguen enteros en el repositorio
+        # (anclas/*.txt, los .ots y anclas/registro.jsonl) y ANCLAJE.md, que si
+        # va en el paquete, explica donde estan y como se verifican.
+        pass
     return salida
 
 
-def generar_version(destino: Path) -> Path:
+def _git(*args: str) -> str:
+    """Salida de `git -C <repo> ...`, o "" si no hay git o no hay repositorio."""
+    try:
+        r = subprocess.run(["git", "-C", str(RAIZ), *args],
+                           capture_output=True, text=True, timeout=20)
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def _info_commit() -> dict:
+    """Commit con el que se genera esta web (27-10-2026).
+
+    POR QUE: hasta hoy la web decia una version ("v1.3.20-...") que solo existe
+    en este proyecto; nadie de fuera podia comprobar que codigo la genero. Con
+    el commit exacto si: se abre en GitHub y se compara. Si al generar habia
+    cambios sin confirmar se dice tambien (`sucio`), porque entonces el commit
+    es el punto de partida, no cada linea; para eso estan los hashes de
+    `ficheros`, que son los de lo publicado.
+    """
+    commit = _git("rev-parse", "HEAD")
+    return {
+        "commit": commit,
+        "commit_corto": commit[:7],
+        "commit_url": (f"https://github.com/lordkukone/kukia-node/commit/{commit}"
+                       if commit else ""),
+        "rama": _git("rev-parse", "--abbrev-ref", "HEAD"),
+        "sucio": bool(_git("status", "--porcelain")),
+    }
+
+
+def _estado_url(url: str):
+    """(codigo, detalle) de una URL. codigo None = ni se pudo preguntar."""
+    try:
+        pet = urllib.request.Request(
+            url, method="GET", headers={"User-Agent": "KUKIA-generar-web/1"})
+        with urllib.request.urlopen(pet, timeout=20) as r:
+            return r.status, f"HTTP {r.status}"
+    except urllib.error.HTTPError as e:
+        return e.code, f"HTTP {e.code}"
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _version_de_html(destino: Path) -> str:
+    """La version que declara el index.html (`<meta name="kukia-build">`)."""
+    texto = (destino / "index.html").read_text(encoding="utf-8")
+    m = re.search(r'<meta\s+name="kukia-build"\s+content="([^"]+)"', texto)
+    if not m:
+        raise SystemExit("[generar_web] index.html no declara "
+                         '<meta name="kukia-build">')
+    return m.group(1)
+
+
+def fijar_version_visible(destino: Path, version: str, info: dict) -> int:
+    """Escribe la version y el commit EN EL HTML, no solo en version.json.
+
+    Antes el pie tenia `<span id="verWeb">-</span>` y lo rellenaba JavaScript:
+    mirando el codigo fuente (o un archivo guardado, o con el JS roto) no se
+    veia nada. Ahora el texto queda escrito al generar y el JS solo lo refresca.
+    """
+    corto = info.get("commit_corto") or ""
+    texto = f"commit {corto}" if corto else "commit no disponible"
+    if corto and info.get("sucio"):
+        texto += " (sin confirmar)"
+    href = info.get("commit_url") or "https://github.com/lordkukone/kukia-node/commits"
+    tocadas = 0
+    for ruta in sorted(destino.glob("*.html")):
+        t = ruta.read_text(encoding="utf-8")
+        antes = t
+        t = re.sub(r'(<span\s+id="verWeb">)([^<]*)(</span>)',
+                   lambda m: m.group(1) + html.escape(version) + m.group(3), t)
+        t = re.sub(r'(<a\s+id="verCommit"\s+href=")([^"]*)("[^>]*>)([^<]*)(</a>)',
+                   lambda m: (m.group(1) + html.escape(href) + m.group(3)
+                              + html.escape(texto) + m.group(5)), t)
+        if t != antes:
+            ruta.write_text(t, encoding="utf-8")
+            tocadas += 1
+    return tocadas
+
+
+def generar_version(destino: Path, canonico: str = CANONICO,
+                    info: dict = None) -> Path:
     """Escribe version.json con la MISMA version que lleva el index.html.
 
     La web compara su propio meta `kukia-build` con este fichero: si no
@@ -330,6 +459,31 @@ def generar_version(destino: Path) -> Path:
                           "dar el zip_sha256 de este fichero. La version del Core se ve en "
                           "http://127.0.0.1:8300/version, que ademas publica el hash de "
                           "cada fichero que esta ejecutando.")}
+    info = dict(info or {})
+    # Huella de CADA pagina publicada: es lo que se puede comprobar sin git.
+    # Se calcula AQUI porque este paso va el ULTIMO, cuando el HTML ya es el
+    # definitivo (canonica, SEO y version visibles ya escritos).
+    ficheros = {}
+    for ruta in sorted(destino.iterdir()):
+        if not ruta.is_file():
+            continue
+        if ruta.suffix == ".html" or ruta.name in ("sitemap.xml", "robots.txt"):
+            try:
+                ficheros[ruta.name] = hashlib.sha256(ruta.read_bytes()).hexdigest()
+            except Exception:
+                pass
+    dato.update({
+        "web": canonico,
+        "commit": info.get("commit", ""),
+        "commit_corto": info.get("commit_corto", ""),
+        "commit_url": info.get("commit_url", ""),
+        "rama": info.get("rama", ""),
+        "sucio": bool(info.get("sucio")),
+        "sucio_nota": ("cuando se genero esto habia cambios sin confirmar: el commit "
+                       "es el punto de partida, no cada linea. Lo que se publico "
+                       "cuadra con 'ficheros'." if info.get("sucio") else ""),
+        "ficheros": ficheros,
+    })
     salida = destino / "version.json"
     salida.write_text(json.dumps(dato, indent=2, ensure_ascii=False) + "\n",
                       encoding="utf-8")
@@ -417,8 +571,18 @@ def _tokens_google(destino: Path) -> list:
     return tokens
 
 
+# Paginas que NO son la web de KUKIA: la de rescate (se pinta sin JavaScript,
+# para saber si el problema es la pagina o el equipo) y la de diagnostico (dice
+# en que paso falla el navegador del visitante). No van en el sitemap y salen
+# con `noindex`: que Google ofrezca una pagina de averias como si fuera KUKIA
+# seria un desastre de cara al publico. La lista va escrita aqui porque
+# inyectar_seo escribe el `robots` de TODAS las paginas y machacaria la marca
+# que se pusiera en el HTML.
+PAGINAS_DE_SERVICIO = {"simple.html", "estado.html"}
+
+
 def _bloque_seo(url: str, base: str, titulo: str, desc: str,
-                verificacion=()) -> str:
+                verificacion=(), indexar: bool = True) -> str:
     """Etiquetas + JSON-LD de una pagina. Sin datos que no sean ciertos."""
     desc_js = json.dumps(desc, ensure_ascii=False)
     graf = {
@@ -459,7 +623,8 @@ def _bloque_seo(url: str, base: str, titulo: str, desc: str,
         graf["@graph"][2].pop("description", None)
     etiquetas = [
         MARCA_INI,
-        '<meta name="robots" content="index,follow,max-image-preview:large">',
+        ('<meta name="robots" content="index,follow,max-image-preview:large">' if indexar
+         else '<meta name="robots" content="noindex,follow">'),
         f'<meta property="og:type" content="{"website" if url.rstrip("/") == base else "article"}">',
         '<meta property="og:site_name" content="KUKIA Network">',
         '<meta property="og:locale" content="es_ES">',
@@ -505,7 +670,8 @@ def inyectar_seo(destino: Path, canonico: str = CANONICO) -> int:
                             "", cabeza, flags=re.S)
         cabeza = _REDUNDANTES.sub("", cabeza)
         cabeza = (cabeza.rstrip() + "\n"
-                  + _bloque_seo(url, base, titulo, desc, verificacion) + "\n")
+                  + _bloque_seo(url, base, titulo, desc, verificacion,
+                                indexar=ruta.name not in PAGINAS_DE_SERVICIO) + "\n")
         nuevo = cabeza + resto
         if nuevo != texto:
             ruta.write_text(nuevo, encoding="utf-8")
@@ -543,11 +709,19 @@ def generar_seo(destino: Path, canonico: str = CANONICO):
     # prioridad y frecuencia por pagina (la portada primero: es la que importa).
     plan = {"index.html": (1.0, "daily"), "minar.html": (0.9, "weekly"),
             "whitepaper.html": (0.8, "monthly"), "wallet.html": (0.7, "weekly"),
+            "transcripcion.html": (0.7, "weekly"),
             "codigo.html": (0.6, "monthly")}
     paginas = []
     for ruta in sorted(destino.glob("*.html")):
         # Los ficheros de verificacion NO son paginas: no van en el sitemap.
         if re.fullmatch(r"(google|yandex_)[0-9A-Za-z_\-]+\.html", ruta.name):
+            continue
+        # Las paginas que se marcan a si mismas `noindex` tampoco: son de
+        # rescate o de diagnostico (simple.html, estado.html) y no queremos que
+        # Google las ofrezca como si fueran la web de KUKIA. Se lee del fichero
+        # para que valga la pena escribirlo: se marca en el HTML y ya.
+        # Y las de servicio (rescate y diagnostico), tampoco.
+        if ruta.name in PAGINAS_DE_SERVICIO:
             continue
         rel = "" if ruta.name == "index.html" else ruta.name
         prio, frec = plan.get(ruta.name, (0.5, "monthly"))
@@ -560,8 +734,8 @@ def generar_seo(destino: Path, canonico: str = CANONICO):
     robots = ("User-agent: *\n"
               "Allow: /\n"
               "\n"
-              "# Indice unico y bueno: la copia de Surge sirve su propio\n"
-              "# robots.txt con Disallow: / y no se puede cambiar.\n"
+              "# La canonica (el Sitemap de abajo) es la copia de Freebuff Sites.\n"
+              "# Esta misma web se sirve tambien desde surge.\n"
               f"Sitemap: {canonico}/sitemap.xml\n")
     salida_robots = destino / "robots.txt"
     salida_robots.write_text(robots, encoding="utf-8")
@@ -584,9 +758,26 @@ def main() -> int:
     ap.add_argument("--fecha", default="20-10-2026")
     ap.add_argument("--canonico", default=CANONICO,
                     help="URL publica base (sitemap y canonical salen de aqui)")
+    ap.add_argument("--sin-comprobar", action="store_true",
+                    help="no comprobar que la canonica responde 200 (solo si es a proposito)")
     args = ap.parse_args()
     canonico = args.canonico.rstrip("/")
     destino = Path(args.destino)
+    # La canonica es lo que van a rastrear Google y Bing (sitemap, canonical y
+    # robots salen de aqui). Si no responde, el sitemap senala a una direccion
+    # rota: se aborta en vez de publicar una pista falsa.
+    if not args.sin_comprobar:
+        codigo, detalle = _estado_url(canonico + "/")
+        if codigo is None:
+            print(f"[generar_web] AVISO: no se pudo comprobar {canonico} ({detalle}). "
+                  "Se sigue, pero la canonica queda SIN verificar.")
+        elif codigo != 200:
+            raise SystemExit(
+                f"[generar_web] ABORTADO: la canonica {canonico} responde {detalle}. "
+                "El sitemap apuntaria a una direccion que no funciona. Usa "
+                "--canonico <la que responda 200> (o --sin-comprobar si es a proposito).")
+        else:
+            print(f"[generar_web] canonica {canonico} responde {detalle}")
     destino.mkdir(parents=True, exist_ok=True)
     z = generar_zip(destino)
     huella = hashlib.sha256(z.read_bytes()).hexdigest()
@@ -595,11 +786,15 @@ def main() -> int:
     (destino / "kukia-node.zip.sha256").write_text(
         f"{huella}  kukia-node.zip\n", encoding="ascii", newline="\n")
     h = generar_codigo(destino, args.fecha, huella, canonico)
-    v = generar_version(destino)
     n_html = fijar_canonico(destino, canonico)
     n_seo = inyectar_seo(destino, canonico)
     r, s = generar_seo(destino, canonico)
     k = generar_clave_indexnow(destino)
+    info = _info_commit()
+    version = _version_de_html(destino)
+    n_ver = fijar_version_visible(destino, version, info)
+    # version.json va EL ULTIMO: asi sus hashes son los de los ficheros finales.
+    v = generar_version(destino, canonico, info)
     print(f"codigo.html {h.stat().st_size} bytes")
     print(f"kukia-node.zip {z.stat().st_size} bytes | sha256 {huella}")
     print(f"version.json {json.loads(v.read_text(encoding='utf-8'))['v']}")
@@ -607,6 +802,11 @@ def main() -> int:
     print(f"canonica {canonico} en {n_html} pagina(s)")
     print(f"SEO tecnico (robots, Open Graph, JSON-LD) en {n_seo} pagina(s)")
     print(f"IndexNow: clave publicada en /{k.name} (para Bing, Yandex, Seznam, Naver)")
+    dato = json.loads(v.read_text(encoding="utf-8"))
+    print(f"commit {dato.get('commit_corto') or '(sin git)'} "
+          f"rama {dato.get('rama') or '-'}"
+          f"{ ' · CAMBIOS SIN CONFIRMAR' if dato.get('sucio') else ''}"
+          f" · version visible escrita en {n_ver} pagina(s)")
     return 0
 
 

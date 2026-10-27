@@ -1,8 +1,30 @@
 {
-  "v": "v1.2.3-pago",
-  "generado": "2026-10-24 14:55:31",
+  "v": "v1.3.20-video-siempre",
+  "generado": "2026-10-27 09:24:58",
   "core": "0.4.4",
   "zip": "kukia-node.zip",
-  "zip_sha256": "90508f58cac6c165adc32885b1667785cf584f368f867ab655cb880ea3f73219",
-  "verificar": "Descarga kukia-node.zip y ejecuta 'sha256sum kukia-node.zip' (Windows: 'certutil -hashfile kukia-node.zip SHA256'): tiene que dar el zip_sha256 de este fichero. La version del Core se ve en http://127.0.0.1:8300/version, que ademas publica el hash de cada fichero que esta ejecutando."
+  "zip_sha256": "bded3d4b1fb4483f321b0cdabb7ff71d10c50131e91f1d7afbf5f1f1691a17de",
+  "verificar": "Descarga kukia-node.zip y ejecuta 'sha256sum kukia-node.zip' (Windows: 'certutil -hashfile kukia-node.zip SHA256'): tiene que dar el zip_sha256 de este fichero. La version del Core se ve en http://127.0.0.1:8300/version, que ademas publica el hash de cada fichero que esta ejecutando.",
+  "web": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page",
+  "commit": "0aa9015df30b6d215b21a8f7e49dfb21742953dc",
+  "commit_corto": "0aa9015",
+  "commit_url": "https://github.com/lordkukone/kukia-node/commit/0aa9015df30b6d215b21a8f7e49dfb21742953dc",
+  "rama": "web-nueva-20261025",
+  "sucio": true,
+  "sucio_nota": "cuando se genero esto habia cambios sin confirmar: el commit es el punto de partida, no cada linea. Lo que se publico cuadra con 'ficheros'.",
+  "ficheros": {
+    "calculadora.html": "75e979956d9695904d3d71353634bd5bd72657426038724bcf35952bff023c43",
+    "codigo.html": "3ec212e839fd4b9e64fd15316eb630e4c811381076c1cdb8453d6947e5486f40",
+    "estado.html": "eeb438edd2dfab80540c9d6e315d177fbeb5ac5f827cc792a871f958532fa955",
+    "google9d6cb22812b81092.html": "c965bccc5962cafa2f861ffcd91e90ab5d1e11dd84f0940037a6ce52a2600f60",
+    "index.html": "585465501ac1c4779b1e3f455c1d1b4d9a1bc2cf008a801d417800635fb79e1e",
+    "minar.html": "401b86c645f4126d6e0af7b82b90bbc63c43a2aee805f317fdae82ee24ff17e4",
+    "robots.txt": "cafcda360e0c64bace4474213c8c23493478e083386a7c6187cf311589ba523b",
+    "seguro.html": "db2525f772d2094b2bec8d19294ec98544ffc2f2d1f576d3db9ea5b8a9f33d00",
+    "simple.html": "4cdbb43a3fc29c96705442f77ec01b7286b672c7addce4046555dc3b25e163ac",
+    "sitemap.xml": "ab8ac6abb7a4cfd0709c32703681aa2e652df5d4233a2a22c0d63b42818cda43",
+    "transcripcion.html": "dd5656b1b50e91b412a681cc6f89674d5704f600df348d46e81ccf9e19d8482b",
+    "wallet.html": "d055f77275485f7f2d6046e4d9a251027f60f8f218aa509ae0b79290276e0fde",
+    "whitepaper.html": "2aa39e28b443a3e50f513f1173fa3a39b0660b5cb1386b0dd447bae77746cc4f"
+  }
 }

@@ -304,6 +304,16 @@ export default {
           nodos: num(s.nodos),
           tareas_ok: num(s.tareas_ok),
           tareas_pend: num(s.tareas_pend),
+          // Precio del trabajo y tope del minuto (26-10-2026): la portada los
+          // pinta en la calculadora leyendolos de aqui, no llevandolos escritos.
+          // Se publican con todos los decimales que da /stats: el precio es
+          // 1,45e-06 KIA/GFLOP y redondearlo a 6 decimales daria cero.
+          precio: {
+            gflop_kia: num(s.pago_por_potencia && s.pago_por_potencia.precio_gflop),
+            gflop_divisor: num(s.bolsa_emision && s.bolsa_emision.gflop_divisor),
+            tope_min_kia: num(s.bolsa_emision && s.bolsa_emision.presupuesto_kia_min),
+            gpu_ref_gflops: num(s.bolsa_emision && s.bolsa_emision.gpu_ref_gflops),
+          },
         },
         serie: limpiaSerie(d.serie),
         // Serie por GPU medida: sin esto la web no tiene latencia ni mezcla.

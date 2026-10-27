@@ -6,7 +6,7 @@
      carga la pagina es de este origen; las conexiones solo van al rele (https)
      o al Core local. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; form-action 'self' https://formsubmit.co; object-src 'none'; base-uri 'self'">
-<link rel="canonical" href="https://lordkukone.github.io/kukia-node/minar">
+<link rel="canonical" href="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minar">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KUKIA | Ponte a minar - de cero a minero</title>
 <meta name="description" content="Como pasar de cero a un nodo KUKIA minando: descargar, instalar, arrancar el Core y el minero, y cobrar en tu billetera. Con el estado real de la red en vivo.">
@@ -15,6 +15,9 @@
 <style>
 :root { --gold:#d4af37; --navy:#081a3a; --blue:#12305e; --line:#27487c; --text:#c3d1ea; --ok:#5ee08a; --warn:#e0c05e; --bad:#ff7b7b; }
 * { margin:0; padding:0; box-sizing:border-box; }
+/* AUDITORIA 24-10-2026: foco visible para quien navega con el teclado. */
+a:focus-visible, button:focus-visible, summary:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:3px solid #d4af37; outline-offset:2px; border-radius:4px; }
+
 body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; line-height:1.65; }
 a { color:var(--gold); }
 .wrap { max-width:980px; margin:0 auto; padding:2.5rem 1.25rem 4rem; }
@@ -59,51 +62,51 @@ li { margin:.35rem 0; }
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="KUKIA Network">
 <meta property="og:locale" content="es_ES">
-<meta property="og:url" content="https://lordkukone.github.io/kukia-node/minar">
+<meta property="og:url" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minar">
 <meta property="og:title" content="KUKIA | Ponte a minar - de cero a minero">
 <meta property="og:description" content="Como pasar de cero a un nodo KUKIA minando: descargar, instalar, arrancar el Core y el minero, y cobrar en tu billetera. Con el estado real de la red en vivo.">
-<meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta property="og:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="KUKIA | Ponte a minar - de cero a minero">
 <meta name="twitter:description" content="Como pasar de cero a un nodo KUKIA minando: descargar, instalar, arrancar el Core y el minero, y cobrar en tu billetera. Con el estado real de la red en vivo.">
-<meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta name="twitter:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
 <script type="application/ld+json">
 {
  "@context": "https://schema.org",
  "@graph": [
   {
    "@type": "WebSite",
-   "@id": "https://lordkukone.github.io/kukia-node/#sitio",
-   "url": "https://lordkukone.github.io/kukia-node/",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
    "name": "KUKIA Network",
    "alternateName": "KUKIA",
    "inLanguage": "es",
    "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
    "publisher": {
-    "@id": "https://lordkukone.github.io/kukia-node/#organizacion"
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion"
    }
   },
   {
    "@type": "Organization",
-   "@id": "https://lordkukone.github.io/kukia-node/#organizacion",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion",
    "name": "KUKIA Network",
-   "url": "https://lordkukone.github.io/kukia-node/",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
    "logo": {
     "@type": "ImageObject",
-    "url": "https://lordkukone.github.io/kukia-node/moneda.jpg",
+    "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg",
     "width": 512,
     "height": 512
    }
   },
   {
    "@type": "WebPage",
-   "@id": "https://lordkukone.github.io/kukia-node/minar#pagina",
-   "url": "https://lordkukone.github.io/kukia-node/minar",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minar#pagina",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minar",
    "name": "KUKIA | Ponte a minar - de cero a minero",
    "description": "Como pasar de cero a un nodo KUKIA minando: descargar, instalar, arrancar el Core y el minero, y cobrar en tu billetera. Con el estado real de la red en vivo.",
    "inLanguage": "es",
    "isPartOf": {
-    "@id": "https://lordkukone.github.io/kukia-node/#sitio"
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio"
    }
   }
  ]
@@ -198,12 +201,47 @@ python -u kukia_worker.py mi_nombre</code><button class="copiar" data-copia>copi
 <h2>Cuánto se cobra: por trabajo, no por tarea</h2>
 <p>Desde el 23-10-2026 el pago va <strong>por los FLOPs verificados de cada tarea</strong> y no por tarea entregada. Un checksum (0 FLOPs) y una difusión de 20 GFLOP ya no cobran lo mismo, y el tier por VRAM <strong>ya no multiplica</strong>: se cobra por lo que se calcula.</p>
 <ul>
-  <li><strong>Precio único del minuto:</strong> el presupuesto del minuto (1,31 KIA hoy) se reparte entre los GFLOP que entregó la red en el minuto anterior. Ese precio vale para todas las tareas de ese minuto.</li>
+  <li><strong>Precio del calendario, no elegido a mano:</strong> el presupuesto del minuto (1,307629 KIA hoy) repartido entre una GPU de referencia a tope (15.000 GFLOP/s durante 60 s = 900.000 GFLOP), o sea <strong>1,452921e-6 KIA/GFLOP</strong>. Un minuto de GPU a tope vale <strong>1,3076 KIA</strong> y cada tarea cobra sus GFLOP &#215; ese precio (con un suelo de 0,0001 KIA por tarea). Si la red entrega m&#225;s de 1,3076 minutos de GPU por minuto, ese presupuesto se reparte entre todos y el minuto se corta.</li>
   <li><strong>Pago de una tarea = precio × GFLOP.</strong> A 8× trabajo, 8× pago; el reparto es por trabajo, no por orden de llegada.</li>
   <li><strong>La bolsa del minuto se congela al abrirlo</strong> y no se pasa ni un decimal: cuando se agota, el resto del minuto paga 0. Por eso en la ventana ves muchos <code>+0.0 KIA</code>: no está roto.</li>
-  <li>Un checksum cobra 0 salvo que el operador del Core ponga un mínimo por tarea (<code>KUKIA_GFLOP_MIN</code>).</li>
+  <li>Ninguna tarea cobra menos de <strong>0,0001 KIA</strong>: es el suelo de una tarea m&iacute;nima (<code>KUKIA_PAGO_MIN_KIA</code>), lo m&iacute;nimo que se puede transferir. Un checksum cobra ese suelo, no 0. Por encima de 90 GFLOP manda la definici&oacute;n.</li>
 </ul>
-<p>Ejemplo medido el 23-10 (precio del minuto, 0,0042 KIA/GFLOP): una matriz de 0,128 GFLOP paga 0,00054 KIA y una difusión de calor de 0,4 s paga 0,0208 KIA, cuarenta veces más. Por GPU, un minuto con pago por trabajo dio 0,17 KIA/min. Los números de ahora los da el Core en <code>/stats</code> (<code>bolsa_emision.precio_minuto</code>), que cambia cada minuto. La red emite ~1,31 KIA por minuto en total y la última KIA sale el 01-01-2150.</p>
+<p>Ejemplo con la definicion de hoy: una matriz de 0,128 GFLOP paga 0,000000142222 KIA y una difusion de calor de 20 GFLOP paga 0,000022222222 KIA, 156 veces mas porque entrega 156 veces mas trabajo. Un minuto de GPU de referencia a tope paga 1,000000 KIA. El precio bueno esta en <code>/stats</code> (<code>bolsa_emision.precio_minuto</code>) y el tope de emision en <code>bolsa_emision.capacidad_gpu_min</code>. La red emite como maximo ~1,3076 KIA por minuto y la ultima KIA sale el 13-04-2150.</p>
+
+<h2>Comprobar la descarga</h2>
+<p>El zip es un binario: si se corta la descarga, el minero falla de formas raras. Compara su huella con la publicada antes de descomprimir.</p>
+<pre><code># Windows (PowerShell)
+Get-FileHash .\kukia-node.zip -Algorithm SHA256
+
+# Linux / macOS / Git Bash
+sha256sum kukia-node.zip
+cat kukia-node.zip.sha256</code><button class="copiar" data-copia>copiar</button></pre>
+<p>La huella buena es la que sirve <a href="kukia-node.zip.sha256">kukia-node.zip.sha256</a> en esta misma web (un fichero con el hash y el nombre del zip). Si no coincide <strong>no lo ejecutes</strong>: vuelve a descargarlo.</p>
+
+<h2>Parar, actualizar y quitar</h2>
+<ul>
+  <li><strong>Parar el minero:</strong> Ctrl+C en su ventana. Termina la tarea en vuelo antes de salir y libera el candado <code>worker/minero.lock</code>.</li>
+  <li><strong>Parar el Core:</strong> Ctrl+C en su ventana. Si no responde, comprueba que el puerto queda libre con <code>netstat -ano | findstr :8300</code>.</li>
+  <li><strong>Actualizar:</strong> para los dos procesos, descarga el zip nuevo, comprueba la huella y sustituye los <code>.py</code>. No borres <code>ledger/</code> ni <code>worker/identidad_minero.json</code>: ahí viven tu saldo y la identidad de tus GPUs.</li>
+  <li><strong>Quitarlo del todo:</strong> no hay instalador ni servicio de Windows; se borra la carpeta. Antes, copia lo que dice la sección siguiente.</li>
+</ul>
+
+<h2>Qué guardar (esto es tu dinero)</h2>
+<ul>
+  <li><code>ledger/wallet/</code>: los ficheros de tus billeteras. La clave va cifrada con DPAPI de tu usuario de Windows.</li>
+  <li><code>RECUPERACION_&lt;nombre&gt;.txt</code> si lo generaste: contraseña + 20 palabras. <strong>En papel, en dos sitios.</strong> Con la contraseña y las 20 palabras recuperas la misma billetera en cualquier equipo; sin ellas no hay recuperación.</li>
+  <li><code>worker/identidad_minero.json</code>: la identidad de tus GPUs (reputación). Si lo pierdes, minas igual, pero empiezas de cero.</li>
+  <li>Si llevas tu propio Core: <code>coordinator/ledger/kukia.db</code> y <code>coordinator/sello_key.txt</code>. Sin la clave del sello no se puede demostrar que el historial es tuyo.</li>
+</ul>
+
+<h2>Si algo falla</h2>
+<ul>
+  <li><strong>«Address already in use» al arrancar el Core:</strong> ya hay un Core en el 8300. Ciérralo o arráncalo con <code>--port 8301</code> y apunta el minero ahí con la variable <code>KUKIA_CORE=http://127.0.0.1:8301</code>.</li>
+  <li><strong>No detecta la GPU:</strong> comprueba <code>python -c "import torch; print(torch.cuda.is_available())"</code>. Si sale <code>False</code>, instalaste el torch de CPU o faltan los drivers de NVIDIA. El minero funciona igual en CPU, cobrando mucho menos.</li>
+  <li><strong>«Sin tareas» durante minutos:</strong> la cola puede estar vacía o tu nodo es nuevo (los nuevos empiezan con una tarea cada vez). No es un fallo: mira la portada, en el panel <em>En vivo</em> se ve si hay cola.</li>
+  <li><strong>«Core ocupado» o 503:</strong> hay otra escritura en curso; el minero reintenta solo. Si se repite mucho, mira la ventana del Core.</li>
+  <li><strong>La web no ve tu saldo:</strong> abre la billetera desde este PC (<code>127.0.0.1</code>) o pega en el campo la dirección de tu Core.</li>
+</ul>
 
 <h2>Si quieres publicar tus métricas</h2>
 <p>El relé de esta web es de solo lectura y lo alimenta el operador desde su PC. Si montas tu propia red, el zip incluye <code>publico/relay.js</code> (Worker) y <code>publico/publicar_metricas.py</code>; necesitas tu propio almacenamiento y tu clave: no reutilices la de esta web.</p>
