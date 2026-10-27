@@ -89,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>a432cc8417fcfc2a9a27385c5e18dd960bbe362eed11f0ff94c8a32d40a30a1d</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>e08abc88727e1f60708f44a024bb72b78a9a1c5c9b641517c147ae72e18a6f06</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -611,6 +611,28 @@ def _base_ocupada(e) -&gt; bool:
     return (&quot;database is locked&quot; in t or &quot;database table is locked&quot; in t
             or &quot;database schema is locked&quot; in t or &quot;database is busy&quot; in t
             or &quot;sqlite_busy&quot; in t)
+
+
+# Columnas cuya UNIQUE significa de verdad &quot;ese nonce ya se uso&quot;. sqlite lo
+# dice en el propio mensaje: &quot;UNIQUE constraint failed: transferencias.de_nodo,
+# transferencias.nonce&quot;.
+_UNIQUE_TRANSFERENCIA = (&quot;de_nodo&quot;, &quot;nonce&quot;)
+
+
+def _nonce_repetido(e) -&gt; bool:
+    &quot;&quot;&quot;¿Este IntegrityError es la repeticion del nonce, o otra cosa?
+
+    sqlite3.IntegrityError es una familia entera: UNIQUE, NOT NULL, CHECK,
+    FOREIGN KEY y los RAISE() de un trigger. Solo la UNIQUE (de_nodo, nonce)
+    significa &quot;nonce ya usado&quot;; el resto son fallos de escritura y contarlos
+    como repeticion deja al que reintenta dando vueltas con otro nonce y con el
+    fallo real sin escribir en ningun sitio (27-10-2026).
+    &quot;&quot;&quot;
+    texto = str(e).lower()
+    if &quot;unique constraint failed&quot; not in texto:
+        return False
+    columnas = texto.split(&quot;unique constraint failed&quot;, 1)[1]
+    return all(c in columnas for c in _UNIQUE_TRANSFERENCIA)
 
 
 def _error_escritura(e, defecto=&quot;error interno escribiendo&quot;):
@@ -4956,9 +4978,19 @@ def transferir(t: TransferIn):
                 con.execute(&quot;INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts,&quot;
                             &quot;firma,clave_publica) VALUES(?,?,?,?,?,?,?)&quot;,
                             (de, a, monto, t.nonce, time.ctime(), t.firma, pub))
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as e:
                 _rollback_seguro()
-                raise HTTPException(409, &quot;nonce ya usado (repeticion bloqueada)&quot;)
+                if _nonce_repetido(e):
+                    raise HTTPException(409, &quot;nonce ya usado (repeticion bloqueada)&quot;)
+                # 27-10-2026: esto NO es una repeticion. Un NOT NULL, un CHECK,
+                # una clave ajena o el RAISE() de un trigger llegan por el mismo
+                # except, y hasta hoy salian como 409 &quot;nonce ya usado&quot;: el que
+                # reintentaba con otro nonce se comia el mismo 409 para siempre y
+                # del fallo real no quedaba ni una linea. Ahora va como fallo de
+                # escritura (500/503/507 segun el caso) y queda en el registro.
+                print(f&quot;[KUKIA] fallo de escritura guardando la transferencia &quot;
+                      f&quot;(no es repeticion): {type(e).__name__}: {e}&quot;, flush=True)
+                raise _error_escritura(e, &quot;error guardando la transferencia&quot;)
             except Exception as e:
                 # AUDITORIA 24-10-2026: antes CUALQUIER fallo de este INSERT se
                 # contaba como &quot;nonce ya usado&quot;. Con la base llena (SQLITE_FULL)
