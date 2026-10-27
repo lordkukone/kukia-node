@@ -1723,6 +1723,9 @@ LIMITES_POR_RUTA = {
     # mineros en el mismo Core sin abrir la puerta a un bucle desbocado.
     "/nodos/telemetria": 600,
     "/transferir": 60,
+    # Mismo cupo para el camino poscuantico: una transferencia cuesta lo mismo
+    # de verificar y no tiene sentido darle mas manga ancha que al v1.
+    "/transferir/v2": 60,
     # Un validador independiente manda una atestacion por vuelta (cada 30 s).
     # 240/min deja sitio a varios validadores en el mismo Core sin abrir la
     # puerta a un bucle desbocado.
@@ -4767,6 +4770,128 @@ class TransferIn(BaseModel):
     nonce: str = ""
     firma: str = ""
     clave_publica: str = ""   # solo si el origen es una billetera (no un nodo)
+
+# ============================================================
+#  FIRMAS HIBRIDAS POSCUANTICAS (rama pqc-hibrido, 27-10-2026)
+#
+#  Camino NUEVO y paralelo: /transferir (v1) queda intacto, byte a byte. Si
+#  esta integracion tiene un fallo, no puede llevarse por delante las
+#  transferencias que hoy funcionan, porque no las toca.
+#
+#  Apagado por defecto: sin KUKIA_PQC=1 el Core se comporta como siempre y
+#  /transferir/v2 solo contesta "desactivado". Una rama experimental no debe
+#  cambiar el comportamiento de un Core que ya esta atendiendo.
+#
+#  El puente (pqc/puente_core.py) solo VERIFICA. El dinero se mueve aqui, con
+#  el MISMO _pago_lock y el MISMO _asiento que el camino v1: una sola cadena
+#  de hashes, un solo suministro, ninguna contabilidad paralela.
+# ============================================================
+try:
+    from pqc import puente_core as PQC
+except Exception as _e_pqc:          # el Core arranca aunque falte el paquete
+    PQC = None
+    print(f"[KUKIA] AVISO: firmas poscuanticas no disponibles ({_e_pqc})", flush=True)
+
+
+class TransferInPQ(BaseModel):
+    sobre: dict | str = ""            # sobre hibrido (JSON ya parseado o texto)
+    clave_publica_ed25519: str = ""
+    clave_publica_mldsa65: str = ""
+
+
+@app.get("/pqc/estado")
+def pqc_estado():
+    """Si este Core verifica firmas poscuanticas y con que politica.
+
+    Publico y de solo lectura a proposito: un cliente tiene que poder saber si
+    mandar el sobre hibrido o quedarse en el camino v1, sin adivinar.
+    """
+    if PQC is None:
+        return {"activo": False, "motivo": "el paquete pqc no esta instalado"}
+    return PQC.estado()
+
+
+@app.post("/transferir/v2")
+def transferir_pq(t: TransferInPQ):
+    """Transfiere KIA con sobre hibrido Ed25519 + ML-DSA-65.
+
+    Que aporta frente a /transferir, y es la razon de que exista:
+      - La firma cubre un mensaje canonico con dominio, red, version y la
+        LISTA de algoritmos. Quitar la firma poscuantica cambia los bytes
+        firmados, asi que el downgrade no verifica (no es "vale la que pase").
+      - El origen es una direccion KQ1... que compromete las DOS claves
+        publicas: presentar una clave y cobrar en otra no cuadra.
+      - El importe va firmado como texto decimal y se comprueba que el float
+        que llega al ledger es exactamente ese decimal.
+      - El nonce se guarda en una tabla con UNIQUE: repetir un sobre es 409,
+        tambien despues de reiniciar el Core.
+    No crea moneda: debita y acredita lo mismo, asi que supply no cambia.
+    """
+    if PQC is None:
+        raise HTTPException(503, "firmas poscuanticas no instaladas en este Core")
+    if not PQC.ACTIVO:
+        raise HTTPException(503, PQC.estado().get("motivo") or
+                            "firmas poscuanticas desactivadas")
+    if LEDGER_ROTO:
+        raise HTTPException(503, "ledger alterado: transferencias bloqueadas (ver /ledger/integridad)")
+    try:
+        mov = PQC.transferencia(t.sobre, t.clave_publica_ed25519, t.clave_publica_mldsa65)
+    except PQC.Rechazo as e:
+        raise HTTPException(401, f"sobre rechazado: {e}")
+    de, a, monto, nonce = mov["de"], mov["a"], mov["monto"], mov["nonce"]
+    with _pago_lock:
+        try:
+            con.execute("BEGIN IMMEDIATE")
+        except Exception:
+            raise HTTPException(503, "Core ocupado, reintentar")
+        try:
+            # Tabla PROPIA del camino v2: no se toca la de v1 ni su UNIQUE.
+            con.execute("CREATE TABLE IF NOT EXISTS transferencias_pq("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT, de_nodo TEXT, "
+                        "a_direccion TEXT, monto REAL, nonce TEXT, ts TEXT, "
+                        "modo TEXT, sobre_hash TEXT, UNIQUE(de_nodo, nonce))")
+            # El destino solo puede ser una direccion (v1 o v2) o un nodo que
+            # exista. Igual que v1: un destino inventado quemaria el saldo.
+            if (not direccion_valida(a) and not PQC.es_direccion_v2(a)
+                    and not con.execute("SELECT 1 FROM nodos WHERE id=?", (a,)).fetchone()):
+                con.execute("ROLLBACK")
+                raise HTTPException(400, "destino invalido: usa una direccion "
+                                         "KUK.../KQ1... o un nodo registrado")
+            saldo = float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger "
+                                      "WHERE nodo_id=?", (de,)).fetchone()["s"] or 0.0)
+            if saldo < monto:
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "saldo insuficiente")
+            try:
+                con.execute("INSERT INTO transferencias_pq(de_nodo,a_direccion,monto,"
+                            "nonce,ts,modo,sobre_hash) VALUES(?,?,?,?,?,?,?)",
+                            (de, a, monto, nonce, time.ctime(), mov["modo"],
+                             mov["sobre_hash"]))
+            except Exception:
+                con.execute("ROLLBACK")
+                raise HTTPException(409, "nonce ya usado (repeticion bloqueada)")
+            # ID propio ('tx-pq-') para que un asiento v2 no pueda confundirse
+            # con uno v1 aunque el nonce se llame igual.
+            _asiento(f"tx-pq-{nonce}", de, -monto, "transferencia pq salida")
+            _asiento(f"tx-pq-{nonce}", a, monto, "transferencia pq entrada")
+            con.commit()
+            return {"ok": True, "de": de, "a": a, "monto": monto,
+                    "monto_firmado": mov["monto_texto"], "modo": mov["modo"],
+                    "nonce": nonce, "sobre_hash": mov["sobre_hash"],
+                    "supply": round(supply_emitido(), 6)}
+        except HTTPException:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        except Exception as e:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise _error_escritura(e, "error interno en transferencia pq")
+
 
 @app.post("/transferir")
 def transferir(t: TransferIn):
