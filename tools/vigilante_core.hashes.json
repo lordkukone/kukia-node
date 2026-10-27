@@ -1,0 +1,11 @@
+﻿{
+    "sellado":  "2026-10-27T18:07:56+01:00",
+    "nota":  "Hashes de las piezas del vigilante. Comprobar: -VerificarHashes",
+    "ficheros":  {
+                     "tools\\vigilante_core.ps1":  "fef77c0852b0711f6f54925cc2a22773854b236fd1253e943d95e4ff96863b86",
+                     "tools\\vigilante_core.config.json":  "fcaf992185c03a6d77fbaa0d3dcf06d321d2fe6d6e6b0a1de8ceec8243dc401f",
+                     "tools\\vigilante_core_oculto.vbs":  "f9f3cc819ee661ca5d0d8e8a372a5dae4a9e38f726364bc7cfd2171bace73bb7",
+                     "tools\\lanzar_core.cmd":  "c6880359e573c0882df7e3f56126d76b118f9c6ba6580c53b30c1cf09846c915",
+                     "tools\\lanzar_core_oculto.vbs":  "f1cf0f6ecd332481c0a77f95f6047b226e2257a85590b6b6e6f90fe5dcf8c764"
+                 }
+}

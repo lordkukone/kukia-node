@@ -1,0 +1,41 @@
+{
+  "puerto": 8300,
+  "tarea_core": "KUKIA_Core",
+
+  "espera_stats_seg": 10,
+  "intentos": 3,
+  "espera_entre_intentos_seg": 6,
+  "cpu_trabajando_seg": 0.2,
+
+  "relanzar": true,
+  "verificar_arranque_seg": 90,
+  "vigilar_si_puerto_libre": true,
+
+  "proceso_esperado": {
+    "nombre_regex": "^python",
+    "ejecutable": "C:\\Users\\kuki\\AppData\\Local\\Programs\\Python312\\python.exe",
+    "linea_comandos_contiene": "kukia_core",
+    "exigir_linea_comandos": true
+  },
+
+  "parada_ordenada": {
+    "url_apagado": "",
+    "espera_seg": 10
+  },
+
+  "freno": {
+    "activo": true,
+    "max_reinicios": 3,
+    "ventana_min": 60,
+    "espera_base_seg": 60,
+    "espera_max_seg": 900,
+    "jitter": 0.25
+  },
+
+  "registro": "logs\\vigilante_core.log",
+  "registro_max_mb": 2,
+  "estado": "logs\\vigilante_core.estado.json",
+  "alerta": "logs\\vigilante_core.ALERTA.txt",
+
+  "no_tocar_si_identidad_dudosa": true
+}
