@@ -38,6 +38,18 @@ El `.txt` no se puede tocar después: `--verificar` recalcula su sha256 y, si no
 coincide con el anclado, lo dice (`el .txt NO coincide con el anclado`). **Eso es
 justo lo que se quiere**: el ancla deja de valer si alguien edita el contenido.
 
+### Dónde están: en el repositorio, no en el paquete descargable
+
+La carpeta `anclas/` vive en el repositorio (`anclas/` en
+`github.com/lordkukone/kukia-node`), no dentro de `kukia-node.zip`. No es un
+descuido: sus ficheros cambian **solos**, sin que nadie toque el código (cada
+sello nuevo añade un `.txt` y cada `ots upgrade` reescribe un `.ots`). Si
+viajaran en el paquete, su huella SHA-256 cambiaría cada pocos minutos y la
+huella publicada en `version.json` dejaría de servir para comprobar nada. Fuera
+de él, la huella del paquete depende solo del código. Los anclajes siguen
+enteros, públicos y verificables con los comandos de arriba apuntando a esa
+carpeta del repositorio.
+
 ## Cómo se verifica (sin confiar en este PC)
 
 1. `--actualizar` pregunta a los calendarios hasta que uno devuelve la ruta a un

@@ -4,6 +4,18 @@ Estado: **ACTIVO desde el 22-10-2026 (22:42)**. El pago sigue a los FLOPs
 verificados. Para volver a la tarifa plana: `set KUKIA_PAGO_POR_FLOP=0` y
 reiniciar el Core; entonces la moneda paga exactamente lo mismo que antes.
 
+> **Ojo, 25-10-2026:** el pago sigue a los FLOPs, pero el **precio** ya no es una
+> cifra fija. Desde las 16:26 el defecto es el **ancla GPU-minuto**: presupuesto
+> del minuto (1,310592 KIA) / 900.000 GFLOP = **0,000001456213 KIA/GFLOP**, que es
+> lo mismo que pagar 1,31 KIA por minuto de GPU de referencia (15.000 GFLOP/s).
+> La definición **1 KIA = 1 minuto de GPU** (precio fijo 0,000001111111) sigue
+> dentro y se enciende con `KUKIA_PRECIO_DEFINIDO=1`; entonces el presupuesto
+> queda solo de tope (`capacidad_gpu_min`). Lo que se lee en `/stats`
+> (`bolsa_emision.modo_precio`) es lo que manda. Lo de abajo es la regla del
+> 23-10, que vuelve tal cual con `KUKIA_ANCLA_GPU_MIN=0` (reparto por el trabajo
+> del minuto anterior).
+> Ver `PLAN_DEMANDA.md`, `AVISO_MINEROS_2026-10-25.md` y `tools/prueba_kia_minuto.py`.
+
 ## Que cambia cuando se enciende
 
 | | Antes (tarifa plana) | Con `KUKIA_PAGO_POR_FLOP=1` |
@@ -144,18 +156,24 @@ numero de tareas (1.673 contra 1.640). El KIA/GFLOP de los dos queda a un 0,13 %
 (el precio cambia cada minuto): `0,001073161` contra `0,001074537`. Eso es lo que
 se buscaba: el presupuesto sigue al trabajo, no al orden de llegada.
 
-## Sin suelo: el que no tiene potencia cobra menos
+## Suelo transferible por tarea (25-10-2026)
 
-Desde el 22-10-2026 (22:58) **no hay minimo por tarea**: el pago es
-estrictamente proporcional al trabajo. Una matriz de 0,43 GFLOP cobra 0,43;
-una inferencia de 0,0004 cobra 0,0004; un checksum (0 FLOPs) cobra **0**.
-Se puede volver a poner un minimo con `KUKIA_GFLOP_MIN=1` si algun dia se
-quiere que los nodos pequenos no se queden a cero, pero hoy no esta.
+El pago es proporcional al trabajo desde el 22-10-2026, y desde el **25-10-2026**
+tiene un **suelo de 0,0001 KIA por tarea**: es el minimo que acepta
+`POST /transferir` (redondea el monto a 4 decimales). Sin el, una tarea de
+milisegundos paga 1e-9 KIA y ese saldo no se puede mover nunca.
 
-Consecuencia: los `checksum` han salido de la mezcla automatica de tareas
-(`MEZCLA_AUTO`). El tipo sigue soportado, pero una tarea de 0 FLOPs no se
-paga, asi que no tiene sentido que la red las genere. Esto vale igual para
-GPU que para CPU: manda la potencia medida, no el tipo de hierro.
+El suelo se aplica **en KIA** (`KUKIA_PAGO_MIN_KIA`, 0,0001 por defecto), no en
+GFLOP: `KUKIA_GFLOP_MIN` sigue en 0, asi que los GFLOP medidos de la red no se
+inflan y la garantia no se rompe si un dia cambia el precio.
+
+Consecuencia: un checksum (0 FLOPs) ya no cobra 0, cobra el suelo; por eso los
+checksums siguen fuera de la mezcla automatica (`MEZCLA_AUTO`). Por encima de
+90 GFLOP (6 ms de GPU de referencia) manda la definicion y el suelo no toca nada:
+una matriz de 93,3 GFLOP pagaba 0,00010368 KIA y sigue igual.
+
+Se apaga con `KUKIA_PAGO_MIN_KIA=0`. Prueba: `tools/prueba_suelo_transferible.py`
+(19 comprobaciones, incluido el tope del minuto con tareas de suelo).
 
 ## Tope por tarea (sigue)
 

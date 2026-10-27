@@ -9,6 +9,138 @@ Arranque manual, sin launcher (nada de Pinokio).
 | Panel de operaciones | 8301 | `ARRANCAR_PANEL.cmd` (o `uvicorn kukia_dash:app --port 8301` en `dashboard/`) |
 | Minero (2 GPUs) | — | `python -u kukia_worker.py kuki_minero` |
 
+## El precio: ancla GPU-minuto por presupuesto (25-10-2026, 16:26)
+
+**Desde el 25-10 a las 16:26 el precio sale del calendario, no de una
+definicion fija.** El precio por GFLOP es el presupuesto del minuto repartido
+entre el trabajo medido, con un SUELO de una GPU de referencia a tope:
+
+```
+divisor = max(trabajo medido el minuto anterior, 60 * GPU_REF)
+precio  = presupuesto_del_minuto / divisor
+
+hoy: 1,310592 KIA/min / 900.000 GFLOP = 1,456213e-6 KIA/GFLOP
+```
+
+Traducido: **un minuto de GPU de referencia vale lo que paga la emision de ese
+minuto (1,31 KIA hoy)**, y 1 KIA compra **1/1,31 = 0,76 minutos de GPU** (unos
+46 s). El precio se mueve solo: cuando la red esta floja manda el suelo y el
+GFLOP vale 1,4562e-6; cuando la red entrega mas de 1,31 minutos de GPU por
+minuto, manda el trabajo medido y el mismo presupuesto se reparte entre todos
+en proporcion a sus GFLOP (una GPU el doble de rapida cobra el doble).
+
+El cliente paga lo mismo que cobra el minero (0,000135882 KIA por una matriz de
+93,312 GFLOP, medido en caliente), sin comision.
+
+- **El presupuesto del minuto es el TOPE.** La emision del calendario (1,3106
+  KIA/min hoy) paga **1,31 minutos de GPU por minuto de red**
+  (`kia_por_minuto_gpu`). Por debajo de esa capacidad no se recorta nada; por
+  encima, el fusible reparte el tope y corta **exactamente el exceso**.
+- **El fusible esta en 1x** desde el 25-10 (antes 2x: una rafaga podia emitir
+  el doble de lo que tocaba). Se cambia con `KUKIA_FUSIBLE_MINUTO_X`.
+- **El suelo se apaga con `KUKIA_ANCLA_GPU_MIN=0`**: entonces se divide por el
+  trabajo medido a pelo y, con la red casi parada, el mismo trabajo se cobraba
+  **1.125 veces mas caro** (medido en `tools/prueba_ancla.py`).
+
+### La variante de la manana: 1 KIA = 1 minuto de GPU (definicion)
+
+Con `KUKIA_PRECIO_DEFINIDO=1` el precio no sale del presupuesto sino de una
+regla de tres: un KIA es un minuto de la GPU de referencia (900.000 GFLOP), asi
+que `precio = 1 / 900.000 = 0,000001111111 KIA/GFLOP` y una GPU a tope cobra
+1 KIA por minuto (60/hora, 1.440/dia). Estuvo encendida del 25-10 14:36 a las
+16:26; **ahora esta apagada por defecto**. Con la definicion el presupuesto del
+minuto es solo el tope, y el factor se cambia con `KUKIA_KIA_POR_MINUTO_GPU`
+(por ejemplo 2 para que un minuto de GPU valga 2 KIA).
+
+Pruebas, sobre una copia del ledger (produccion no se toca):
+
+- `tools/prueba_kia_minuto.py` (definicion encendida): 1 minuto de GPU cobra
+  **1,000000 KIA** (desvio 1,1e-16); lo que paga el cliente es exactamente lo
+  que cobra el minero; el escrow vuelve a cero; un mes de GPU (43.834 min)
+  cobra 43.834,000000 KIA **sin un solo recorte**; en una rafaga de 2 minutos
+  de GPU en un minuto paga 1,311950 y corta **solo el exceso** (0,688050).
+- `tools/prueba_minero_mes.py` (definicion apagada, ancla): un minero a tope un
+  mes cobra 57.488,50 KIA contra 57.507,95 de emision (0,034 %, la del
+  calendario) y el fusible no recorta nada en 43.834 minutos.
+- En caliente, el 25-10: a las 14:40 los pagos pasaron de 1,4562e-6 a
+  **1,1111e-6 KIA/GFLOP** (definicion encendida) y a las 16:26 volvieron a
+  **1,456213e-6** (ancla por defecto), comprobado con una tarea real por la
+  puerta de cliente: coste 0,000135882 KIA por 93,312 GFLOP.
+
+Se ve en `/stats` → `bolsa_emision`: con el ancla, `fuente_precio` dice
+`ancla GPU-minuto (suelo)`, `modo_precio` dice `ancla`, `ancla_gpu_min` es
+`true` y `kia_por_minuto_gpu` publica **1,310592** (el presupuesto: lo que vale
+un minuto de GPU). Con la definicion encendida, `fuente_precio` dice
+`definicion: 1 KIA = 1 minuto de GPU` y `modo_precio` dice `definido`. En los
+dos casos `pago_por_potencia.precio_gflop` publica **el mismo precio con el que
+se paga** (25-10: se quitaron dos precios distintos en la misma respuesta).
+
+
+Ajustes relacionados:
+
+- `KUKIA_FUSIBLE_MINUTO_X` (defecto 1): cuanto puede pagar un minuto como maximo,
+  en multiplos de su presupuesto. **1 = nunca se pasa.**
+
+**Volver a la definicion 1 KIA = 1 minuto de GPU** (sin tocar el codigo, solo
+el arranque):
+
+```bat
+set KUKIA_PRECIO_DEFINIDO=1
+REM y despues arranca el Core como siempre
+```
+
+Y para repartir por trabajo medido sin suelo de capacidad: `KUKIA_ANCLA_GPU_MIN=0`.
+
+Ajustes finos, por si algun dia hacen falta:
+
+- `KUKIA_GPU_REF_GFLOPS` (defecto 15000): GFLOP/s de la GPU de referencia. Si
+toda la red es de 5090, subirlo abarata el trabajo por GFLOP (y el KIA compra
+  mas minutos de esa GPU).
+- `KUKIA_PAGO_MIN_KIA` (defecto 0,0001): suelo por tarea en KIA, el minimo que
+  acepta `/transferir`. Sin el, una tarea de milisegundos paga 1e-9 KIA y ese
+  saldo no se puede mover nunca. Solo muerde por debajo de 90 GFLOP; a 0 vuelve
+  el pago estrictamente proporcional. `KUKIA_GFLOP_MIN` sigue en 0 a proposito.
+
+**Pruebas**:
+
+- `python tools/prueba_ancla.py` — 16 comprobaciones: identidad del precio,
+  identidad mensual, pago al minero, prepago del cliente con escrow y sobrante,
+  el interruptor y el suelo facturable.
+- `python tools/prueba_minero_mes.py` — simula un minero a tope **un mes entero**
+  (43.834 minutos, uno por uno, con su asiento en el ledger). Resultado del
+  25-10: cobra **57.488,49 KIA** contra una emisión de 57.507,94 (0,034 % de
+  diferencia, la del calendario), el fusible **no recorta nada** en los 43.834
+  minutos, y en una ráfaga de 5 minutos de GPU en un solo minuto paga dos y
+  corta las tres restantes. Tarda ~3 minutos; con `--minutos 600` son 3 s.
+
+## Diario de la base en WAL (cambio del 25-10-2026)
+
+El ledger arranca en **WAL** (antes, DELETE). El motivo esta medido en
+`tools/estudio_wal.py`: con DELETE, cualquier programa leyendo el ledger (una
+auditoria, una copia, `verificar_sellos`) **frenaba los pagos** (una
+transferencia contestaba 503 a los 5,5 s). En WAL el lector no bloquea al
+escritor: el mismo pago, 200 en 0,0 s. La ventana para cambiarlo fue un
+reinicio del Core (unos 10 s).
+
+Lo que cambia en el dia a dia:
+
+- `coordinator/ledger/kukia.db-wal` **es parte de la base**. Copiar solo el
+  `.db` (Ctrl+C, arrastrar el fichero, `shutil.copy2`) pierde los ultimos
+  asientos y el `quick_check` sigue diciendo "ok": se pierde **en silencio**.
+  Para copiar: `COPIAR_LEDGER.cmd` (usa la API `backup()`), `python
+  tools/backup_ledger.py --destino ...` o `tools/copia_seguridad.py`
+  (`VACUUM INTO`). Los tres se llevan el contenido del `-wal`: probado.
+- Las copias **antiguas** (hechas en DELETE) no se rompen: el modo va en la
+  cabecera de cada fichero. Probado abriendo una de `backups/` y arrancando un
+  Core con ella.
+- `tools/salud.py` ya mira la fecha del `-wal` (el `.db` solo cambia al volcar)
+  y da 240 s a la comprobacion de integridad, que con 600.000+ asientos tarda
+  mas que un `/stats`.
+- El `-wal` se vuelca solo cada ~4 MB (`wal_autocheckpoint=1000`), asi que no
+  crece sin freno.
+- Si alguna vez hay que volver atras: parar el Core y `PRAGMA
+  journal_mode=DELETE` sobre la base (con el Core parado).
+
 Logs del arranque del 19-10 (procesos lanzados en segundo plano):
 
 - Core: `coordinator/core_final.out.log` y `.err.log`
@@ -280,6 +412,11 @@ Ajustes por variable de entorno (antes de arrancar el Core):
 | `KUKIA_HOSTS` | vacio | hosts extra permitidos, separados por comas |
 | `KUKIA_HOSTS_SUFIJOS` | `trycloudflare.com,cfargotunnel.com` | dominios de tunel aceptados por sufijo (vaciar = solo `KUKIA_HOSTS`) |
 | `KUKIA_CORE` | `http://127.0.0.1:8300` | a que Core apunta el minero |
+| `KUKIA_PRECIO_DEFINIDO` | `0` | `0` (defecto desde el 25-10 16:26): ancla por presupuesto, hoy 1,456213e-6 KIA/GFLOP. `1`: **1 KIA = 1 minuto de GPU** (precio fijo 0,000001111111) |
+| `KUKIA_KIA_POR_MINUTO_GPU` | `1` | KIA que vale un minuto de la GPU de referencia (con la definición encendida) |
+| `KUKIA_ANCLA_GPU_MIN` | `1` | suelo de capacidad cuando la definición está apagada |
+| `KUKIA_FUSIBLE_MINUTO_X` | `1` | tope por minuto como múltiplo del presupuesto (1 = no se pasa nunca) |
+| `KUKIA_PAGO_MIN_KIA` | `0,0001` | suelo por tarea: ninguna paga menos de lo transferible (solo muerde por debajo de 90 GFLOP). `0` = estrictamente proporcional |
 
 Y en caliente, con el token de admin (`coordinator\admin_token.txt`):
 
@@ -301,11 +438,12 @@ curl "http://127.0.0.1:8300/stats"
 ## Por que el premio por tarea baja
 
 El pago no es fijo: el Core calcula `objetivo = restante / tareas_restantes`
-para agotar los 100M justo en la fecha final, el **01-01-2150** (124 años desde
-el inicio, 6 eras de 20,67). El 22-10-2026 se habia movido al 01-01-2152 y el
-23-10-2026 Kuki lo devolvio a 2150; el calendario manda la fecha del dueno, no
-el numero de años. Cuando la red mina mas tareas por segundo, el pago por tarea
-baja y el total sigue acotado: el presupuesto es **~1,31 KIA/minuto** (unos
+para agotar los 100M justo en la fecha final, el **13-04-2150** (124,28 años
+desde el inicio, 6 eras de 20,71). El 22-10-2026 se habia movido al 01-01-2152 y
+el 23-10-2026 Kuki lo devolvio a 2150; el 25-10-2026 fijo el dia exacto, el 13 de
+abril de 2150. El calendario manda la fecha del dueno, no el numero de años.
+Cuando la red mina mas tareas por segundo, el pago por tarea
+baja y el total sigue acotado: el presupuesto es **~1,3076 KIA/minuto** (unos
 690.000 KIA/año), o sea centesimas de KIA por tarea a cientos de miles de
 tareas/dia.
 Los numeros exactos de hoy: `python tools\calculo_moneda.py`.
@@ -560,6 +698,34 @@ Ajustes: `KUKIA_SELLO_SEG` (600 s), `KUKIA_SELLO_ASIENTOS` (2000) y
 `KUKIA_SELLO_BLOQUEA=0` para detectar sin bloquear (solo depurar).
 Modelo de seguridad completo y limites: [SEGURIDAD.md](SEGURIDAD.md).
 
+## Limpiar clientes de prueba (25-10-2026)
+
+Las pruebas dan de alta clientes que luego se quedan ahí. Se dan de baja **sin
+borrar nada**: la baja es `activo=0` en la tabla `clientes`, y el ledger, las
+tareas, los saldos y los sellos se quedan como estaban. Con `activo=0` el token
+del cliente deja de valer al instante (responde 401) y no puede pedir ni gastar.
+Es reversible: se vuelve a dar de alta con la misma billetera.
+
+```bat
+python tools/bajas_clientes.py                      && REM vista previa, no escribe nada
+python tools/bajas_clientes.py --nombre prueba --aplicar
+python tools/bajas_clientes.py --todos --aplicar    && REM TODOS los activos
+python tools/bajas_clientes.py --ver                && REM listado, activos e inactivos
+```
+
+Reglas de la herramienta:
+
+- Sin `--aplicar` no escribe: enseña a quién bajaría y con cuánta actividad.
+- Hay que decir a quién (`--ids`, `--nombre` o `--todos`); sin selector avisa.
+- Un cliente **con tareas en curso se salta** (su prepago seguiría retenido en
+  escrow y no podría recoger el resultado). Con `--forzar` sí se da de baja.
+- Antes y después cuenta los asientos del ledger y el suministro: si algo
+  cambiara, avisa y sale con error. Al final pasa `/ledger/verificar`.
+
+Ejecución del 25-10-2026 16:13: 10 clientes activos → **0**, asientos 701.449
+antes y 701.449 después, supply idéntico, `cadena_ok: true`. Los 10 siguen en la
+tabla (activo=0) con su historial y su token hasheado.
+
 ## Lo que NO esta hecho
 
 - **Los 10 nodos viejos sin clave publica** no pueden cobrar: hay que
@@ -670,13 +836,27 @@ schtasks /Delete /TN "KUKIA Copia Seguridad" /F :: quitar la copia semanal
 | copia de claves | la ultima de `N:\CLAVES_KUKIA` tiene **7 dias o menos** |
 | copia integra | esa copia **revalidada**: sha256 de cada fichero + la clave del sello (una vez al dia) |
 
-Avisa **solo al cambiar**: cuando algo se cae (a la segunda pasada mala
-seguida, para no dar la lata por un fallo de un segundo) y cuando vuelve.
+Avisa **solo al cambiar**: cuando algo se cae y cuando vuelve.
+
+Las **tres webs** avisan en la misma pasada en que dejan de responder
+(25-10-2026): si el primer intento falla, se reintenta 3 veces en 10 segundos
+—un corte de tres segundos no es una caida— y si sigue mal el aviso sale en el
+momento, sin esperar a la pasada siguiente (5 minutos) ni a que vuelva. El
+resto (Core local, Core publico, copias) sigue a la **segunda pasada mala
+seguida**, porque los tuneles rebotan a menudo. Y si las tres webs fallan a la
+vez y el PC tampoco sale a internet, no se avisa de nada: el corte es de casa,
+no de las webs.
 
 ### Aviso al movil por Telegram (22-10-2026)
 
 Dos canales independientes: la notificacion de Windows y **Telegram**. Si el PC
 esta apagado o sin sesion, el toast no se ve, pero el movil suena igual.
+
+> **PENDIENTE (25-10-2026):** el bot todavia NO esta dado de alta (no existe
+> `coordinator/telegram_aviso.json`), asi que hoy los avisos solo salen en el
+> escritorio. Kuki dijo "el bot de Telegram luego me lo recuerdas": hay que
+> recordarselo y hacer los tres pasos del alta. El codigo ya manda a Telegram;
+> en cuanto haya token, funciona sin tocar nada.
 
 ```cmd
 python tools\avisos.py --configurar   :: alta: token del bot + tu chat + prueba

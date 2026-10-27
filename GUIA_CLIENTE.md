@@ -65,6 +65,18 @@ curl http://127.0.0.1:8300/cliente/saldo -H "X-Cliente-Token: kia_..."
 real crece con los GFLOP de la tarea. `retenido` es lo que tienes en tareas que
 todavía no han terminado.
 
+Si mandas los `params`, el Core da el **coste exacto** de esa tarea (25/10):
+
+```bash
+curl "http://127.0.0.1:8300/cliente/precio?tipo=matriz&params=%7B%22n%22%3A512%2C%22seed%22%3A9%7D" \
+  -H "X-Cliente-Token: kia_..."
+# {"tipo":"matriz","coste_minimo":0.0001,"params":{"n":512,"seed":9},
+#  "coste":0.0001,"moneda":"KIA", ...}
+```
+
+Los `params` de la respuesta ya vienen normalizados: firma **esos**, no los que
+mandaste, o la firma no valdrá.
+
 **Pedir precio no gasta nada**: el cálculo va en modo simulación y no toca la
 bolsa del minuto (esto era un fallo y se arregló el 24/10).
 
@@ -78,17 +90,28 @@ El mensaje que se firma es **exactamente**:
 cliente:<nonce>:<tipo>:<sha256_hex de los params normalizados>:<tope>
 ```
 
+y, si depositas de más, con el importe retenido al final:
+
+```
+cliente:<nonce>:<tipo>:<sha256_hex de los params>:<tope>:<deposito>
+```
+
 - `nonce`: tuyo, único, 1–64 caracteres alfanuméricos (`-` y `_` valen). Es el
   anti-replay: el mismo nonce no se puede usar dos veces.
 - `params`: JSON con los tipos ya normalizados (`n`, `pasos` y `seed` como
   enteros). Se firma su `sha256` con `json.dumps(..., sort_keys=True)`.
 - `tope`: **máximo en KIA que autorizas**. Va dentro de la firma, así que no se
   puede subir después (intentarlo devuelve `401`).
+- `deposito` (opcional, 25/10): KIA que se dejan **retenidos**. Si no lo mandas
+  se retiene el coste justo. Si lo mandas, tiene que **cubrir el coste** (si no,
+  `402`: el minero cobraría de menos) y el sobrante vuelve a tu saldo al cerrar
+  la tarea. Va dentro de la firma: sin firmarlo, `401`.
 
 ```bash
 curl -X POST http://127.0.0.1:8300/cliente/tareas \
   -H "X-Cliente-Token: kia_..." -H "Content-Type: application/json" \
   -d '{"tipo":"matriz","params":{"n":256,"seed":7},"tope":2.0,
+       "deposito":0.5,
        "nonce":"c-2026-10-24-001","clave_publica":"<hex>",
        "firma":"<hex>"}'
 ```
@@ -97,7 +120,8 @@ Respuesta:
 
 ```json
 {"tarea_id":"b2ebb51161bf","estado":"queued","tipo":"matriz",
- "coste":1.311919,"params":{"n":256,"seed":7},
+ "coste":0.0001,"deposito":0.5,"sobrante_previsto":0.4999,
+ "params":{"n":256,"seed":7},
  "recoger_en":"/cliente/tareas/b2ebb51161bf"}
 ```
 
@@ -107,10 +131,14 @@ En este mismo acto, y en una sola transacción:
 2. se calcula el coste con la tarifa de la red,
 3. se comprueba la firma,
 4. se comprueban nonce, cupo de cola y saldo,
-5. **se retiene `coste` KIA** de tu saldo y se encola.
+5. **se retiene `deposito` KIA** (o `coste` si no mandas depósito) y se encola.
 
 Ese dinero va a la cuenta `KUKIA_ESCROW`. **No se emite nada nuevo**: un
 cliente que paga no infla el suministro (los dos asientos se compensan).
+
+Al cerrar: el minero cobra su tarifa **entera** del escrow y lo que sobre vuelve
+a ti con dos asientos `devolucion sobrante` (escrow → tu billetera). El sobrante
+sale del depósito, nunca del pago del minero.
 
 Qué se rechaza y con qué código:
 
@@ -120,6 +148,8 @@ Qué se rechaza y con qué código:
 | Falta firma, firma de otra clave, tope cambiado tras firmar | `401` |
 | Clave pública que no es la de la billetera del cliente | `401` |
 | Tope por debajo del coste | `402` (dice cuánto cuesta) |
+| Depósito por debajo del coste | `402` (el minero cobraría de menos) |
+| Depósito sin firmar (firma de la cadena vieja) | `401` |
 | Saldo insuficiente | `402` |
 | Mismo nonce otra vez | `409` |
 | Ya tienes 8 tareas en curso | `429` |
@@ -146,7 +176,8 @@ curl http://127.0.0.1:8300/cliente/tareas/b2ebb51161bf -H "X-Cliente-Token: kia_
   selló. `verificado: true` significa que el Core **recalculó** la tarea en vez
   de fiarse del minero.
 - `pagado`: lo que cobró el minero. Si es menor que `coste`, la diferencia ya
-  volvió a tu saldo.
+  volvió a tu saldo. Si depositaste de más, lo que sobra (`deposito - pagado`)
+  también volvió, asentado como `devolucion sobrante`.
 
 Tarea de otro cliente → `404` (no se distingue de "no existe": no se filtra
 información).
@@ -200,8 +231,15 @@ Opciones: `--core URL`, `--token`, `--billetera NOMBRE`, `--tope KIA`, `--json`,
   firmar encargos tuyos: la firma demuestra posesión de la clave, no identidad.
 - **No hay reembolso automático si tú te arrepientes**: una tarea ya entregada a
   un nodo se paga. El encargo es un compromiso, no una reserva.
-- **El precio depende de la red.** Si la red produce mucho, el KIA por tarea
-  baja; si está vacía, sube (está acotado por el techo por tarea).
+- **El precio está definido desde el 25-10-2026: 1 KIA = 1 minuto de GPU de
+  referencia** (15.000 GFLOP/s), o sea **1,456213e-6 KIA/GFLOP** hoy (900.000
+  GFLOP = 1 KIA a tope de capacidad). No se dispara con la red vacía ni lo elige
+  nadie a mano: una matriz de 250 GFLOP cuesta 0,000364053 KIA, exactamente lo
+  que cobra el minero. Con `KUKIA_PRECIO_DEFINIDO=1` el precio se fija en
+  0,000001111111 y esos mismos 250 GFLOP cuestan 0,000277778 KIA. La emisión del minuto (1,31 KIA hoy) es el **tope**: paga hasta 1,31
+  minutos de GPU por minuto de red y el fusible solo corta lo que pase de ahí.
+  Si se apaga la definición (`KUKIA_PRECIO_DEFINIDO=0`) vuelve el ancla por
+  presupuesto, o sea 1,311 KIA el minuto de GPU el 25-10.
 
 ---
 
@@ -213,3 +251,45 @@ Opciones: `--core URL`, `--token`, `--billetera NOMBRE`, `--tope KIA`, `--json`,
 4. El minero cobra **de ese depósito**, no de la emisión.
 5. Recoges el resultado en `/cliente/tareas/<id>`; el sobrante o la devolución
    vuelven solos a tu saldo.
+
+---
+
+## 10. Comprobarlo tú mismo, de punta a punta
+
+`tools/demo_cliente_punta_a_punta.py` hace el camino entero contra el Core real
+en menos de un minuto: crea billetera, da de alta al cliente, le ingresa saldo
+desde la billetera del fundador, pide el precio exacto, **deposita más que el
+coste**, firma el encargo de inferencia, espera al minero y verifica las
+cuentas, incluida la **devolución del sobrante**.
+
+```bat
+python tools/demo_cliente_punta_a_punta.py
+python tools/demo_cliente_punta_a_punta.py --params "{\"n\": 512, \"seed\": 9}" --extra 0.002
+python tools/demo_cliente_punta_a_punta.py --extra 0   (deposita el coste justo: no hay sobrante)
+```
+
+`--extra` son los KIA de más que se depositan sobre el coste (0,001 por
+defecto). El sobrante no sale del bolsillo del minero: se paga su tarifa entera
+y la diferencia vuelve del escrow.
+
+Lo que imprime (ejecución del 25-10-2026, tarea `806fae27ba4f`):
+
+```
+prepago cliente          KUK545D9183B65C658839CF39FC3F1  -0.002100000 KIA
+prepago cliente          KUKIA_ESCROW                    +0.002100000 KIA
+pago a minero (cliente)  KUKIA_ESCROW                    -0.000100000 KIA
+trabajo verificado       KUKE1A0EB09FD9BF49FF41B884EDBD  +0.000100000 KIA
+devolucion sobrante      KUKIA_ESCROW                    -0.002000000 KIA
+devolucion sobrante      KUK545D9183B65C658839CF39FC3F1  +0.002000000 KIA
+suma de la tarea: +0.000000000000 KIA
+```
+
+Seis asientos, suma cero: el minero cobra los 0,0001 completos, al cliente le
+vuelven los 0,002 que depositó de más y ni se crea ni se pierde un KIA. El
+recibo se verifica de dos formas: `/ledger/verificar` comprueba la cadena de
+hashes de todo el historial (`cadena_ok`) y la tarea trae su `hash` con
+`verificado: true`, que significa que una réplica independiente dio el mismo
+resultado.
+
+Si el depósito no cubre el coste, el Core lo rechaza con `402`: el minero nunca
+cobra de menos por un depósito corto.
