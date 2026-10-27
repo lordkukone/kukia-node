@@ -515,6 +515,28 @@ def _base_ocupada(e) -> bool:
             or "sqlite_busy" in t)
 
 
+# Columnas cuya UNIQUE significa de verdad "ese nonce ya se uso". sqlite lo
+# dice en el propio mensaje: "UNIQUE constraint failed: transferencias.de_nodo,
+# transferencias.nonce".
+_UNIQUE_TRANSFERENCIA = ("de_nodo", "nonce")
+
+
+def _nonce_repetido(e) -> bool:
+    """¿Este IntegrityError es la repeticion del nonce, o otra cosa?
+
+    sqlite3.IntegrityError es una familia entera: UNIQUE, NOT NULL, CHECK,
+    FOREIGN KEY y los RAISE() de un trigger. Solo la UNIQUE (de_nodo, nonce)
+    significa "nonce ya usado"; el resto son fallos de escritura y contarlos
+    como repeticion deja al que reintenta dando vueltas con otro nonce y con el
+    fallo real sin escribir en ningun sitio (27-10-2026).
+    """
+    texto = str(e).lower()
+    if "unique constraint failed" not in texto:
+        return False
+    columnas = texto.split("unique constraint failed", 1)[1]
+    return all(c in columnas for c in _UNIQUE_TRANSFERENCIA)
+
+
 def _error_escritura(e, defecto="error interno escribiendo"):
     if _disco_lleno(e):
         return HTTPException(507, "sin espacio en disco: no se ha escrito nada, "
@@ -4858,9 +4880,19 @@ def transferir(t: TransferIn):
                 con.execute("INSERT INTO transferencias(de_nodo,a_direccion,monto,nonce,ts,"
                             "firma,clave_publica) VALUES(?,?,?,?,?,?,?)",
                             (de, a, monto, t.nonce, time.ctime(), t.firma, pub))
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as e:
                 _rollback_seguro()
-                raise HTTPException(409, "nonce ya usado (repeticion bloqueada)")
+                if _nonce_repetido(e):
+                    raise HTTPException(409, "nonce ya usado (repeticion bloqueada)")
+                # 27-10-2026: esto NO es una repeticion. Un NOT NULL, un CHECK,
+                # una clave ajena o el RAISE() de un trigger llegan por el mismo
+                # except, y hasta hoy salian como 409 "nonce ya usado": el que
+                # reintentaba con otro nonce se comia el mismo 409 para siempre y
+                # del fallo real no quedaba ni una linea. Ahora va como fallo de
+                # escritura (500/503/507 segun el caso) y queda en el registro.
+                print(f"[KUKIA] fallo de escritura guardando la transferencia "
+                      f"(no es repeticion): {type(e).__name__}: {e}", flush=True)
+                raise _error_escritura(e, "error guardando la transferencia")
             except Exception as e:
                 # AUDITORIA 24-10-2026: antes CUALQUIER fallo de este INSERT se
                 # contaba como "nonce ya usado". Con la base llena (SQLITE_FULL)
