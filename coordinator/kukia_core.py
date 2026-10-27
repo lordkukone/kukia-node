@@ -4807,8 +4807,19 @@ def transferir(t: TransferIn):
         except Exception:
             raise HTTPException(503, "Core ocupado, reintentar")
         try:
+            # P-1 (27-10-2026): el CREATE declaraba 6 columnas y el INSERT de
+            # abajo escribe 7 valores con `firma` y `clave_publica`. En una base
+            # NUEVA la tabla se creaba sin esas dos y el INSERT reventaba; el
+            # except generico de mas abajo lo contaba como "nonce ya usado"
+            # (409), asi que la PRIMERA transferencia de una instalacion nueva no
+            # se guardaba nunca y el mensaje encima mentia. En un ledger ya
+            # migrado el CREATE no se ejecuta (la tabla existe con sus 8
+            # columnas), por eso en produccion no saltaba. Se declaran las 8 con
+            # el MISMO DEFAULT que la migracion de arriba, para que una base
+            # nueva quede igual que una migrada.
             con.execute("CREATE TABLE IF NOT EXISTS transferencias(id INTEGER PRIMARY KEY AUTOINCREMENT, "
                         "de_nodo TEXT, a_direccion TEXT, monto REAL, nonce TEXT, ts TEXT, "
+                        "firma TEXT DEFAULT '', clave_publica TEXT DEFAULT '', "
                         "UNIQUE(de_nodo, nonce))")
             # El destino solo puede ser una direccion KUK... o un nodo que
             # exista: antes se aceptaba cualquier cadena y el saldo se quemaba.
