@@ -493,6 +493,17 @@ if ($duenos.Count -eq 0) {
     if ($estado -and $estado.reinicios) { $reiniciosLibre = @($estado.reinicios) }
     if ($estado -and $estado.siguiente_permitido) { $siguienteLibre = "$($estado.siguiente_permitido)" }
 
+    # 27-10-2026, al activar el arranque automatico: hay que distinguir "no habia
+    # nada que hacer" de "lo he pedido y no ha servido". Antes TODO este bloque
+    # terminaba en el mismo QuitarAlerta y en exit 0, asi que (a) si la tarea no
+    # existia o estaba deshabilitada, la ALERTA se escribia y se borraba tres
+    # lineas despues, y (b) si la tarea se pedia y el Core no llegaba a
+    # levantarse, el vigilante se callaba con resultado 0. Las dos cosas las
+    # destapo prueba_arranque_auto_aislada.py (casos a1 y a4).
+    $noLevantoLibre = $false
+    $pidGuardar     = 0
+    $creadoGuardar  = ""
+
     if (-not $Cfg.vigilar_si_puerto_libre) {
         # Comportamiento por defecto: el Core se arranca a mano. El arranque
         # automatico se quito el 26-10-2026 y esto no lo revierte.
@@ -500,25 +511,63 @@ if ($duenos.Count -eq 0) {
     } elseif ($infoT -like "NO EXISTE*") {
         Decir "ALERTA: no puedo pedir la tarea ${TareaCore} porque no existe: el Core se queda apagado. $infoT"
         PonerAlerta "vigilante: la tarea $TareaCore no existe y el puerto $Puerto esta apagado"
+        $noLevantoLibre = $true
     } elseif ($infoT -like "Disabled*") {
         Decir ("ALERTA: la tarea ${TareaCore} esta DESHABILITADA y el puerto esta apagado. " +
                "Para que el Core se levante: Enable-ScheduledTask -TaskName '$TareaCore'")
         PonerAlerta "vigilante: la tarea $TareaCore esta deshabilitada y el puerto $Puerto esta apagado"
+        $noLevantoLibre = $true
     } elseif ($estado -and $siguienteLibre -and ((Get-Date) -lt [datetime]::Parse($siguienteLibre))) {
         Decir "el puerto esta libre pero en enfriamiento hasta ${siguienteLibre}: no se pide la tarea"
+    } elseif (@($reiniciosLibre | Where-Object { (HaceCuantoMin $_) -lt [int]$Cfg.freno.ventana_min }).Count -ge [int]$Cfg.freno.max_reinicios) {
+        Decir ("ALERTA: a la tarea $TareaCore ya se le pidio $($Cfg.freno.max_reinicios) veces en " +
+               "$($Cfg.freno.ventana_min) min y el Core no arranca: dejo de pedirla (mira logs\core.log)")
+        PonerAlerta "vigilante: la tarea $TareaCore no levanta el Core tras $($Cfg.freno.max_reinicios) intentos"
+        $noLevantoLibre = $true
     } elseif ($Simular) {
         Decir "SIMULACION: pediria la tarea $TareaCore (puerto libre y vigilar_si_puerto_libre=true)"
     } else {
         Decir "pidiendo la tarea $TareaCore (puerto libre y vigilar_si_puerto_libre=true). Estado: $infoT"
-        try { Start-ScheduledTask -TaskName $TareaCore -ErrorAction Stop } catch {
+        try {
+            Start-ScheduledTask -TaskName $TareaCore -ErrorAction Stop
+
+            # --- ventana de gracia: no se da la peticion por buena sin mirar.
+            #     "Resultado 0" de la tarea SOLO significa "el lanzador arranco".
+            $hastaLibre = (Get-Date).AddSeconds([int]$Cfg.verificar_arranque_seg)
+            $listoLibre = $false
+            while ((Get-Date) -lt $hastaLibre) {
+                if ((Sonda $Puerto) -eq "200") { $listoLibre = $true; break }
+                Start-Sleep -Seconds 2
+            }
+            if ($listoLibre) {
+                $pidLibre = @(DuenoDelPuerto $Puerto)
+                Decir "la tarea $TareaCore levanto el Core y /stats responde (PID $(($pidLibre -join ', ')))"
+                $pidGuardar = [int](@($pidLibre)[0])
+                $idNuevo = Identidad $pidGuardar
+                if ($idNuevo) { $creadoGuardar = "$($idNuevo.creado)" }
+            } else {
+                Decir ("ALERTA: se pidio la tarea $TareaCore pero el puerto $Puerto sigue sin responder tras " +
+                       "$($Cfg.verificar_arranque_seg) s. Lo que paso esta en logs\core.log.")
+                PonerAlerta "vigilante: se pidio la tarea $TareaCore y el Core no arranco (el puerto $Puerto esta libre)"
+                $noLevantoLibre = $true
+                # el freno: no se repite la peticion en cada tick sin control
+                $reiniciosLibre = @($reiniciosLibre) + , $isoAhora
+                $siguienteLibre = (Get-Date).AddSeconds([int]$Cfg.freno.espera_base_seg).ToString("yyyy-MM-ddTHH:mm:sszzz")
+            }
+        } catch {
             Decir "ALERTA: al pedir la tarea ${TareaCore} dio error: $($_.Exception.Message)"
             PonerAlerta "vigilante: no se pudo pedir la tarea $TareaCore ($($_.Exception.Message))"
+            $noLevantoLibre = $true
         }
     }
 
     GuardarEstado @{
-        puerto = $Puerto; ultimo_tick = $isoAhora; puerto_pid = 0; pid_creado = ""
+        puerto = $Puerto; ultimo_tick = $isoAhora; puerto_pid = $pidGuardar; pid_creado = $creadoGuardar
         reinicios = $reiniciosLibre; siguiente_permitido = $siguienteLibre
+    }
+    if ($noLevantoLibre) {
+        Decir "hay ALERTA pendiente en $AlertaAbs (el Core no esta corriendo y esta tarea deberia levantarlo)"
+        exit 3
     }
     QuitarAlerta "el puerto esta libre, no hay Core colgado"
     exit 0
