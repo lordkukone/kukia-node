@@ -99,6 +99,14 @@ powershell -File tools\instalar_tareas_core.ps1 -Simular           # qué cambia
 5. **Con `vigilar_si_puerto_libre: true`**, en cuanto el 8300 se quede libre el Core real
    arranca solo en ≤5 minutos: las pruebas que necesiten ese puerto deben ocuparlo o
    deshabilitar la tarea durante la prueba.
+6. **No edites `lanzar_core.cmd` (ni ningún `.cmd`) con el Core en marcha.** cmd.exe lee los
+   `.cmd` por desplazamiento de bytes mientras los ejecuta: si el fichero cambia debajo, al
+   morir el hijo sigue leyendo por donde iba y puede reejecutar líneas. Medido el 27/10/2026:
+   edité el lanzador a las 18:05 con el Core de las 17:54 en marcha; al matar el Core, el
+   **mismo** `cmd` volvió a escribir «ARRANCANDO CORE» 4 s después y levantó otro Core (por eso
+   no hay ni un «CORE TERMINADO» entre las 17:54 y las 18:43). El lanzador, siempre con el Core
+   parado; si hay que tocarlo en caliente, primero se para el Core o se comprueba después que
+   no ha quedado un `cmd` suelto con `Get-CimInstance Win32_Process -Filter "Name='cmd.exe'"`.
 
 ---
 
