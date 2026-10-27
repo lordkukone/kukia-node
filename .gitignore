@@ -7,6 +7,10 @@ validator/identidad*.json
 coordinator/sello_key.txt
 coordinator/admin_token.txt
 coordinator/telegram_aviso.json
+# token pegado a mano en la terminal (read -s) para dar de alta el bot: se borra
+# al leerlo, pero si algo falla no puede acabar en git
+.telegram_token
+.telegram_token*
 searchconsole_cuenta.json
 searchconsole_cuenta*.json
 
@@ -52,6 +56,10 @@ medidas/ensayos/
 # Copias de seguridad que se quedan en el disco, no en el repositorio
 # (el 24-10-2026 se limpio ademas lo que ya estaba commiteado).
 backup_docs_*.zip
+# Copia de docs/ hecha antes de regenerar la web (25-10-2026: una de estas se
+# colo en el repositorio publico porque el publicador sube los ficheros nuevos
+# que no estan ignorados).
+docs_backup_*/
 _backup_*.py
 
 # Estado de los vigilantes: se reescribe solo cada pocos minutos. Tenerlo
@@ -110,3 +118,62 @@ docs/core_actual.json
 
 # Temporales de los ensayos (valores esperados de las pruebas).
 esperados_tmp.json
+
+# Capturas locales de la revision (24-10-2026): no se publican.
+capturas_local/
+
+# Copia migrada a enteros (25-10-2026): 400 MB de base con el dinero de todos.
+# Se regenera con `python tools/migrar_entero.py`; el informe SI se versiona.
+migracion_entera/*.db
+migracion_entera/sha256.txt
+
+# Evidencia local del trabajo (25-10-2026): capturas comparativas de la web y
+# carpetas de auditoria. Son para revisar en el disco, no producto del repo.
+capturas/
+_auditoria_*/
+
+# CNAME local de docs/ (24-10-2026): apunta a un dominio de Surge, y si viaja al
+# repo GitHub Pages lo toma como dominio propio, no puede verificarlo y tumba el
+# sitio. GitHub Pages se sirve en lordkukone.github.io/kukia-node y Surge aparte.
+docs/CNAME
+
+# Servicio de transcripcion (25-10-2026). El codigo y el lanzador SI se publican;
+# lo que se queda en el disco son los modelos descargados, los audios de prueba,
+# las entregas de clientes (audio de terceros, no puede estar en un repo publico)
+# y los documentos con precios, margenes y objetivos de facturacion.
+servicio/modelos/
+servicio/entregas/
+servicio/pruebas/
+PLAN_DEMANDA.md
+HOJA_DE_PRECIOS.md
+SERVICIO_TRANSCRIPCION.md
+
+# ---------------------------------------------------------------------------
+# Limpieza del 27-10-2026: lo que se queda en el disco y NO se versiona.
+# Motivo: el arbol salia sucio por copias locales y carpetas de trabajo, y con
+# el arbol sucio la web se genera con "(sin confirmar)" y el publicador avisa.
+# ---------------------------------------------------------------------------
+
+# Registros y copias de las tareas (286 MB el 27-10-2026). Se regeneran solos.
+logs/
+
+# Copias de un fichero antes de tocarlo (docs/*.bak_20261026_*, etc.).
+*.bak_*
+# Carpetas de respaldo con fecha (arranque automatico desactivado, copias de
+# integracion, etc.): son del disco, no producto del repositorio.
+*_desactivado_*/
+*_QUITADO_*/
+*_backup_*/
+
+# Respaldos del registro de asociaciones de Windows (llevan rutas de este PC).
+tools/asociaciones_backup_*.reg
+
+# Pagina de diagnostico local: dice en su primera linea que vive en el disco y
+# no usa internet. No es producto del repositorio.
+PRUEBA_LOCAL.html
+
+# Sellos del Core: los escribe el propio Core cada pocos minutos (~10). Con el
+# fichero versionado el arbol estaba siempre sucio sin que nadie tocara nada.
+# Decision del 27-10-2026: sigue en el disco y se verifica en el nodo; la web
+# publica el resumen (moneda.json) y los anclajes siguen en anclas/.
+coordinator/sellos.jsonl
