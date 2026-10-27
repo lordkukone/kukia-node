@@ -123,9 +123,11 @@ esperados_tmp.json
 capturas_local/
 
 # Copia migrada a enteros (25-10-2026): 400 MB de base con el dinero de todos.
-# Se regenera con `python tools/migrar_entero.py`; el informe SI se versiona.
-migracion_entera/*.db
-migracion_entera/sha256.txt
+# Se regenera con `python tools/migrar_entero.py`; el informe SI se versiona
+# (MIGRACION_ENTERA.md, en la raiz). La carpeta entera es la copia de trabajo:
+# ademas de la base lleva rutas absolutas de este PC y su hash, que no pintan
+# nada en un repositorio publico.
+migracion_entera/
 
 # Evidencia local del trabajo (25-10-2026): capturas comparativas de la web y
 # carpetas de auditoria. Son para revisar en el disco, no producto del repo.
