@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Stop'
 
 $nombre = 'KUKIA Guardia'
 $raiz = Split-Path -Parent $PSScriptRoot
-$wrapper = Join-Path $raiz 'KUKIA_GUARDIA_OCULTA.vbs'
+$wrapper = Join-Path $raiz 'GUARDIA_OCULTA.vbs'
 $script = Join-Path $raiz 'tools\guardia.py'
 
 function Mostrar-Estado {
