@@ -12,7 +12,9 @@ Que hace, en orden, y sin saltarse ningun paso:
   5. Se niega si la replica dice saber mas que el original pero NO contiene su
      ultimo sello firmado: no es su continuacion, son dos historias.
   6. Levanta el Core apuntando a la replica (mismo puerto 8300, para que el
-     panel, el minero y el tunel no cambien ni una linea).
+     panel, el minero y el tunel no cambien ni una linea). La clave del sello
+     se toma del original (`coordinator/sello_key.txt`): desde el 28-10-2026 la
+     replica no lleva una copia propia de la clave privada.
 
 Codigos de salida: 0 ok, 2 no hay replica, 3 manifiesto no verificado, 4 Core
 vivo, 5 cadena/sellos rotos, 6 falta la clave, 7 hay un estado mas nuevo en
@@ -121,6 +123,31 @@ def ultimo_sello(ruta: Path) -> str | None:
         return None
 
 
+def publica_del_original() -> str:
+    """La publica del sello del Core de esta maquina, si su clave sigue aqui."""
+    clave = COORD / "sello_key.txt"
+    if not clave.exists():
+        return ""
+    try:
+        return S.publica_de(S.leer_clave(clave))
+    except Exception:
+        return ""
+
+
+def publica_de_la_replica(carpeta: Path) -> str:
+    """La publica que trae la propia replica: sello_pub.txt o, si es antigua, su privada."""
+    f_pub = carpeta / "sello_pub.txt"
+    if f_pub.exists():
+        return f_pub.read_text(encoding="utf-8").strip()
+    clave = carpeta / "sello_key.txt"
+    if clave.exists():
+        try:
+            return S.publica_de(S.leer_clave(clave))
+        except Exception:
+            return ""
+    return ""
+
+
 def edad_horas(fecha: str) -> float | None:
     try:
         return (time.time() - time.mktime(time.strptime(fecha, "%Y-%m-%d %H:%M:%S"))) / 3600.0
@@ -165,7 +192,7 @@ def main() -> int:
         return 4
 
     print("[replica] comprobando cadena y sellos de la replica (no toca el original) ...")
-    r = BK.verificar(carpeta, sin_clave=False)
+    r = BK.verificar(carpeta, publica=publica_del_original())
     if not r.get("ok"):
         print(f"[replica] ERROR: la replica no cuadra: {r.get('problemas')}")
         return 5
@@ -220,37 +247,46 @@ def main() -> int:
     # misma y arrancaba tan tranquila, sirviendo otra moneda en el mismo 8300.
     # Si la clave del original sigue ahi, se comparan las publicas. Cuando el
     # disco original ha muerto de verdad no hay con que comparar: se avisa.
+    # 28-10-2026: la replica ya no lleva la clave privada (era otra copia en
+    # claro de la clave que firma, fuera del disco del Core). Se compara la
+    # PUBLICA que trae (sello_pub.txt), que sirve igual para detectar otra red.
     clave_rep = carpeta / "sello_key.txt"
     clave_orig = COORD / "sello_key.txt"
-    if clave_orig.exists() and clave_rep.exists():
-        try:
-            pub_rep = S.publica_de(S.leer_clave(clave_rep))
-            pub_orig = S.publica_de(S.leer_clave(clave_orig))
-        except Exception as e:
-            print(f"[replica] AVISO: no puedo comparar las claves ({type(e).__name__}).")
-        else:
-            if pub_rep != pub_orig:
-                print("[replica] ERROR: la replica esta firmada con OTRA clave.")
-                print(f"           replica : {pub_rep[:24]}...")
-                print(f"           original: {pub_orig[:24]}...")
-                print("[replica] Eso no es tu red, es otra moneda con tu nombre. NO arranco.")
-                return 9
-    else:
+    pub_orig = publica_del_original()
+    pub_rep = publica_de_la_replica(carpeta)
+    if pub_orig and pub_rep:
+        if pub_rep != pub_orig:
+            print("[replica] ERROR: la replica esta firmada con OTRA clave.")
+            print(f"           replica : {pub_rep[:24]}...")
+            print(f"           original: {pub_orig[:24]}...")
+            print("[replica] Eso no es tu red, es otra moneda con tu nombre. NO arranco.")
+            return 9
+        print("[replica] clave publica: coincide con la del original (es esta red)")
+    elif not pub_orig:
         print("[replica] AVISO: no encuentro la clave del original; no puedo comprobar "
               "que la replica sea de esta red.")
+    else:
+        print("[replica] AVISO: la replica no trae ni sello_pub.txt ni clave privada; "
+              "no puedo comprobar que sea de esta red.")
+
+    # La clave con la que firma: la del original si sigue en su sitio; si no,
+    # la que haya traido la replica (recuperacion en otra maquina).
+    clave = clave_orig if clave_orig.exists() else clave_rep
 
     entorno = dict(os.environ)
     entorno.update({
         "KUKIA_DB": str(db),
         "KUKIA_SELLOS_FILE": str(carpeta / "sellos.jsonl"),
-        "KUKIA_SELLO_KEY": str(carpeta / "sello_key.txt"),
+        "KUKIA_SELLO_KEY": str(clave),
         "KUKIA_ADMIN_TOKEN": str(carpeta / "admin_token.txt"),
         "PYTHONUNBUFFERED": "1",
         "PYTHONIOENCODING": "utf-8",
     })
-    if not (carpeta / "sello_key.txt").exists():
-        print("[replica] ERROR: falta sello_key.txt en la replica; sin ella no se "
-              "pueden firmar sellos nuevos.")
+    if not clave.exists():
+        print("[replica] ERROR: no hay clave del sello: ni coordinator/sello_key.txt "
+              "ni una dentro de la replica. Sin ella no se pueden firmar sellos.")
+        print("[replica] Restaurala desde tu paquete cifrado de claves "
+              "(python tools\\cifrar_claves.py --verificar ...).")
         return 6
 
     print("=" * 62)

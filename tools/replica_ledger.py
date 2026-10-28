@@ -15,7 +15,7 @@ No toca el ledger real ni el Core en marcha: solo lee.
     python tools/replica_ledger.py --destino E:/KUKIA_REPLICA
 
 Estructura:
-    <destino>/actual/{kukia.db, sellos.jsonl, sello_key.txt, admin_token.txt, replica.json}
+    <destino>/actual/{kukia.db, sellos.jsonl, sello_pub.txt, admin_token.txt, replica.json}
     <destino>/anterior/   (la copia buena anterior, por si la nueva sale rara)
 
 Salida: 0 si la replica queda verificada y coincide; 2 disco/ruta, 3 copia,
@@ -176,14 +176,19 @@ def actualizar(base: Path) -> int:
     print(f"[replica] copiando el estado a {nueva} ...")
     t0 = time.time()
     try:
-        n_sellos = BK.copiar_estado(nueva, con_claves=True, sin_clave=False)
+        # Sin clave privada ni token: la replica se verifica con sello_pub.txt.
+        # Hasta el 28-10-2026 se copiaban los dos, y eso dejaba en D: una copia
+        # en claro de la clave que firma el ledger, fuera del disco del Core.
+        n_sellos = BK.copiar_estado(nueva, con_clave=False, con_token=False)
     except Exception as e:
         print(f"[replica] ERROR copiando: {type(e).__name__}: {e}")
         return 3
     print(f"[replica] copiados {n_sellos} sellos en {time.time() - t0:.1f} s")
+    print("[replica] la clave del sello no se copia: se usa la del original "
+          "(sello_pub.txt va para poder verificar sin secreto)")
 
     print("[replica] verificando cadena y firmas de la copia ...")
-    r = BK.verificar(nueva, sin_clave=False)
+    r = BK.verificar(nueva)
     if not r.get("ok"):
         print(f"[replica] ERROR: la copia NO cuadra: {r.get('problemas')}")
         print(f"[replica] la replica anterior sigue intacta en {actual}")
@@ -214,7 +219,8 @@ def actualizar(base: Path) -> int:
         **mio,
         "comparacion": cmp_,
         "claves": {"sello_key": (nueva / "sello_key.txt").exists(),
-                   "admin_token": (nueva / "admin_token.txt").exists()},
+                   "admin_token": (nueva / "admin_token.txt").exists(),
+                   "sello_pub": (nueva / "sello_pub.txt").exists()},
     }
     (nueva / "replica.json").write_text(
         json.dumps(manifiesto, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

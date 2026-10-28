@@ -9,6 +9,11 @@ Uso:
     python tools/probar_restauracion.py                  # ultima copia de backups/
     python tools/probar_restauracion.py --copia backups/kukia_20261020_133054
     python tools/probar_restauracion.py --dejar          # conserva la temporal
+    python tools/probar_restauracion.py --clave RUTA     # privada para el arranque
+
+Desde el 28-10-2026 las copias NO llevan la clave privada (se verifica con
+`sello_pub.txt`, que es publico). Para probar el ARRANQUE hace falta una clave:
+se usa la de la copia si la trae, si no la del Core, y si no `--clave`.
 
 Salida: 0 si la restauracion funciona; 1/2/3 si falla.
 """
@@ -69,10 +74,22 @@ def verificar_offline(carpeta: Path) -> dict:
         raise RuntimeError("el sha256 de kukia.db NO coincide con el manifiesto")
     if d.get("sellos", {}).get("sha256") and sha256(sellos) != d["sellos"]["sha256"]:
         raise RuntimeError("el sha256 de sellos.jsonl NO coincide con el manifiesto")
-    clave = carpeta / "sello_key.txt"
-    if not clave.exists():
-        raise RuntimeError("la copia no incluye sello_key.txt: no se puede verificar sola")
-    pub = S.publica_de(S.leer_clave(clave))
+    # Verificar necesita la PUBLICA, no la privada: las copias nuevas traen
+    # sello_pub.txt y las antiguas la privada. Cualquiera de las dos vale.
+    f_pub = carpeta / "sello_pub.txt"
+    f_priv = carpeta / "sello_key.txt"
+    if f_pub.exists() and f_pub.read_text(encoding="utf-8").strip():
+        pub = f_pub.read_text(encoding="utf-8").strip()
+        de_donde = "sello_pub.txt"
+    elif f_priv.exists():
+        pub = S.publica_de(S.leer_clave(f_priv))
+        de_donde = "sello_key.txt"
+    elif (COORD / "sello_key.txt").exists():
+        pub = S.publica_de(S.leer_clave(COORD / "sello_key.txt"))
+        de_donde = "la clave del Core"
+    else:
+        raise RuntimeError("la copia no trae sello_pub.txt ni sello_key.txt: no se "
+                           "puede verificar sola")
     con = sqlite3.connect(str(db))
     con.row_factory = sqlite3.Row
     try:
@@ -83,13 +100,17 @@ def verificar_offline(carpeta: Path) -> dict:
         con.close()
     return {"ok": bool(r.get("ok")), "problemas": r.get("problemas") or [],
             "sellos": len(S.leer_sellos(sellos)), "asientos": int(asientos),
-            "supply": supply, "clave_publica": pub, "manifest": d}
+            "supply": supply, "clave_publica": pub, "clave_de": de_donde,
+            "manifest": d}
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Prueba de restauracion de una copia KUKIA")
     ap.add_argument("--copia", default="", help="carpeta de la copia (por defecto, la ultima)")
     ap.add_argument("--dejar", action="store_true", help="conservar la carpeta temporal")
+    ap.add_argument("--clave", default="",
+                    help="clave privada para el arranque (por defecto: la de la copia "
+                         "o, si no hay, coordinator/sello_key.txt)")
     args = ap.parse_args()
 
     copia = Path(args.copia) if args.copia else (
@@ -105,15 +126,32 @@ def main() -> int:
         print(f"[restauracion] ERROR verificando la copia: {type(e).__name__}: {e}")
         return 2
     print(f"[restauracion] offline: {off['sellos']} sellos, {off['asientos']} asientos, "
-          f"{off['supply']:.6f} KIA, firma={'OK' if off['ok'] else 'MAL'}")
+          f"{off['supply']:.6f} KIA, firma={'OK' if off['ok'] else 'MAL'}, "
+          f"verificada con {off['clave_de']}")
     if not off["ok"]:
         print(f"[restauracion] ERROR: la cadena/sellos no cuadran: {off['problemas'][:3]}")
         return 2
 
+    # Para ARRANCAR hace falta la privada. Las copias ya no la traen, asi que se
+    # toma de --clave, de la copia (si es antigua) o del Core de esta maquina.
+    if args.clave:
+        clave_arranque = Path(args.clave)
+    elif (copia / "sello_key.txt").exists():
+        clave_arranque = copia / "sello_key.txt"
+    else:
+        clave_arranque = COORD / "sello_key.txt"
+    if not clave_arranque.exists():
+        print("[restauracion] ERROR: la copia se verifica, pero no hay clave privada "
+              "para arrancar el Core restaurado.")
+        print("[restauracion] Es lo normal desde el 28-10-2026: la clave va en el paquete "
+              "cifrado. Pasala con --clave RUTA.")
+        return 3
+
     tmp = Path(tempfile.mkdtemp(prefix="kukia_restauracion_"))
     try:
-        for nombre in ("kukia.db", "sellos.jsonl", "sello_key.txt"):
+        for nombre in ("kukia.db", "sellos.jsonl"):
             shutil.copyfile(copia / nombre, tmp / nombre)
+        shutil.copyfile(clave_arranque, tmp / "sello_key.txt")
         token = tmp / "admin_token.txt"
         token.write_text("restauracion-" + os.urandom(16).hex(), encoding="utf-8")
         puerto = puerto_libre()

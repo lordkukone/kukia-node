@@ -537,7 +537,8 @@ en `core_minero.txt` y pregunta ahi cual es la URL buena en cada arranque.
 python tools/salud.py --backups D:/KUKIA_backups --json
 
 # copia consistente aunque el Core este escribiendo + verificacion contra sellos
-python tools/backup_ledger.py --destino D:/KUKIA_backups --con-claves --mantener 14
+# (sin --con-claves: la copia lleva sello_pub.txt y no la clave privada)
+python tools/backup_ledger.py --destino D:/KUKIA_backups --mantener 14
 ```
 
 ### Claves fuera del disco del Core (22-10-2026)
