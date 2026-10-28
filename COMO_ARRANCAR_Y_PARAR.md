@@ -808,6 +808,7 @@ ventana aunque el padre no tenga consola. Quedaron tres focos, ya tapados:
 | Publicador de metricas | `cmd /c surge` visible cada 20 min | `CREATE_NO_WINDOW` |
 | Copia diaria de las 03:00 | ventana de CMD | `TAREA_BACKUP_OCULTA.vbs` (oculta) |
 | Copia semanal de seguridad | no existia | `TAREA_COPIA_SEGURIDAD_OCULTA.vbs` (oculta) |
+| Replica diaria a D: (28-10-2026) | solo a mano | `TAREA_REPLICA_OCULTA.vbs` (oculta) |
 | Vigilante de la web | no existia | `pythonw` + tarea cada 10 min |
 
 Las tareas programadas y como se quitan:
@@ -817,12 +818,39 @@ schtasks /Query /TN "KUKIA Vigilante Web"       :: vigila la web y avisa/empuja
 schtasks /Query /TN "KUKIA_vigilante_webs"      :: vigila las 3 webs y el Core (cada 5 min)
 schtasks /Query /TN "KUKIA Backup Ledger"       :: copia diaria a las 03:00
 schtasks /Query /TN "KUKIA Copia Seguridad"     :: copia semanal a N: (domingos)
+schtasks /Query /TN "KUKIA Replica Ledger"      :: replica diaria verificada en D: (03:40)
 
 python tools\vigilante_web.py --quitar          :: quitar el vigilante
 python tools\vigilante_servicios.py --quitar    :: quitar el vigilante de webs/Core
 schtasks /Delete /TN "KUKIA Backup Ledger" /F   :: quitar la copia diaria
 schtasks /Delete /TN "KUKIA Copia Seguridad" /F :: quitar la copia semanal
+schtasks /Delete /TN "KUKIA Replica Ledger" /F  :: quitar la replica diaria
 ```
+
+### Replica diaria de D: (28-10-2026)
+
+`TAREA_REPLICA.cmd` (lanzado oculto por `TAREA_REPLICA_OCULTA.vbs`, tarea
+`KUKIA Replica Ledger`, cada dia a las 03:40) hace dos cosas y avisa si alguna
+sale mal:
+
+| paso | que comprueba | avisa cuando |
+|---|---|---|
+| `replica_ledger.py --avisar` | copia coherente + cadena y firmas + que sea esta red | el disco D: no responde, la copia falla, no verifica o su sello no es del Core |
+| `replica_ledger.py --comparar --avisar` | que no se haya quedado atras | mas de 10 KIA por detras del Core |
+
+Lo que se queda atras no es lo mismo que lo que no verifica: una replica que
+deja de actualizarse sigue verificando y pareciendo perfecta, y eso solo se ve
+comparando con el Core vivo. Si el paso de copia falla, no se compara nada: la
+`actual` que ya habia sigue siendo la buena y no se avisa dos veces de lo mismo.
+
+El resultado de cada pasada va a `backups\replica.log` y el aviso sale por el
+escritorio (toast) y, si esta dado de alta, por Telegram (`ALTA_TELEGRAM.cmd`).
+La tarea sale con codigo 1 cuando algo falla, asi que el Programador de tareas
+tambien lo refleja en su ultimo resultado.
+
+Ojo al restaurar: la replica diaria rota `actual` -> `anterior`, y solo se
+guarda una anterior. Una copia que lleve dos dias en `anterior` desaparece en la
+tercera pasada.
 
 ## Vigilante de las webs y del Core (22-10-2026)
 
