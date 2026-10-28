@@ -80,4 +80,3 @@ rem IP del cliente con el X-Forwarded-For que llega, y detras del tunel eso
 rem permite falsificar la IP y saltarse los cupos por IP.
 "%PY%" -u "%RAIZ%\tools\registrar_salida.py" "%LOG%" -- "%PY%" -u -m uvicorn kukia_core:app --host 127.0.0.1 --port %PUERTO% --no-proxy-headers
 echo [%date% %time%] CORE TERMINADO con codigo %errorlevel% >> "%LOG%"
-echo [%date% %time%] CORE TERMINADO con codigo %errorlevel% >> "%LOG%"
