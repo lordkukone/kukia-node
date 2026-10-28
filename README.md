@@ -528,8 +528,8 @@ Guía completa, contrato de firma y tabla de errores: [GUIA_CLIENTE.md](GUIA_CLI
 
 ```bash
 python tools/prueba_cliente.py          # 40 pruebas del ciclo cliente: escrow, cobro, devolución
-python tools/pruebas_seguridad.py       # 101 pruebas sobre una COPIA del ledger
-python tools/pruebas_caos.py            # 57 de caos: doble gasto, kill -9, disco lleno, basura
+python tools/pruebas_seguridad.py       # 109 pruebas sobre una COPIA del ledger
+python tools/pruebas_caos.py            # 61 de caos: doble gasto, kill -9, disco lleno, basura
 python tools/backup_ledger.py           # copia verificada en backups/
 python tools/probar_restauracion.py     # arranca un Core sobre la ultima copia
 python tools/prueba_failover_negativas.py  # la replica se NIEGA: ausente, vieja, rota, otra clave, bifurcada

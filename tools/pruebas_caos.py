@@ -593,7 +593,17 @@ def _paginas(db: Path) -> int:
         con.close()
 
 
-def _llenar_bd(db: Path, hasta_paginas: int) -> int:
+def _cuenta(db: Path) -> tuple:
+    """(paginas, paginas_libres) de la base."""
+    con = sqlite3.connect(str(db), timeout=30)
+    try:
+        return (int(con.execute("PRAGMA page_count").fetchone()[0]),
+                int(con.execute("PRAGMA freelist_count").fetchone()[0]))
+    finally:
+        con.close()
+
+
+def _llenar_bd(db: Path, hasta_paginas: int) -> tuple:
     """Llena la base hasta el tope, desde FUERA del Core.
 
     El Core corre con `KUKIA_DB_MAX_PAGINAS` (tope de paginas), asi que en
@@ -605,17 +615,37 @@ def _llenar_bd(db: Path, hasta_paginas: int) -> int:
     vuelo), asi que durante el relleno la unica conexion que escribe es esta:
     el escenario no depende de quien gane el bloqueo entre conexiones, ni de
     cuanto tarde el Core en soltar la suya.
+
+    OJO (28-10-2026): no basta con mirar `page_count`. La base guarda una
+    lista de paginas libres (freelist, hoy ~7.000 paginas, 28 MB): SQLite las
+    reaprovecha ANTES de crecer, asi que con inserciones pequenas el fichero
+    puede quedarse clavado en el mismo numero de paginas mientras se llena.
+    Aqui se comen las libres y despues se crece hasta el tope; el escenario
+    solo esta montado cuando la base tiene 0 paginas libres y ha llegado al
+    tope. Se devuelve (paginas, libres) para que la prueba lo pueda afirmar.
     """
     con = sqlite3.connect(str(db), timeout=30)
     try:
         con.execute("CREATE TABLE IF NOT EXISTS relleno(id INTEGER PRIMARY KEY AUTOINCREMENT, x BLOB)")
         blob = b"k" * 3900
         vueltas = 0
-        while int(con.execute("PRAGMA page_count").fetchone()[0]) < hasta_paginas and vueltas < 5000:
-            con.execute("INSERT INTO relleno(x) VALUES(?)", (blob,))
+        while vueltas < 200:
+            paginas, libres = (int(con.execute("PRAGMA page_count").fetchone()[0]),
+                               int(con.execute("PRAGMA freelist_count").fetchone()[0]))
+            if libres == 0 and paginas >= hasta_paginas:
+                break
+            # Paginas que hay que comer: primero las libres, luego crecer.
+            falta = libres + max(0, hasta_paginas - paginas)
+            filas = max(1, min(2000, falta))
+            con.executemany("INSERT INTO relleno(x) VALUES(?)", [(blob,)] * filas)
             con.commit()
             vueltas += 1
-        return int(con.execute("PRAGMA page_count").fetchone()[0])
+        paginas, libres = (int(con.execute("PRAGMA page_count").fetchone()[0]),
+                           int(con.execute("PRAGMA freelist_count").fetchone()[0]))
+        if libres or paginas < hasta_paginas:
+            raise RuntimeError(f"no se pudo llenar la base: {paginas} paginas "
+                               f"(tope {hasta_paginas}), {libres} libres")
+        return (paginas, libres)
     finally:
         con.close()
 
@@ -823,9 +853,9 @@ def prueba_disco_lleno(token: str, dejar: bool = False) -> None:
         for _ in range(3):
             _transferir_una()
 
-        # Disco lleno de verdad (para el Core).
-        paginas = _llenar_bd(tmp / "kukia.db", cap)
-        print(f"   base llenada hasta {paginas} paginas (tope {cap})")
+        # Disco lleno de verdad (para el Core): al tope y sin paginas libres.
+        paginas, libres = _llenar_bd(tmp / "kukia.db", cap)
+        print(f"   base llenada hasta {paginas} paginas (tope {cap}), {libres} libres")
         r = requests.get(f"{base}/stats", timeout=30)
         check("con el disco lleno el Core sigue sirviendo lecturas (/stats 200)",
               r.status_code == 200, f"{r.status_code}")

@@ -278,7 +278,7 @@ python tools/pruebas_caos.py     # concurrencia, corte de luz y basura
 ```
 
 Copia la base real con la API de backup de SQLite a una carpeta temporal,
-arranca un Core aislado y comprueba 101 casos: envío desde billetera, saldo,
+arranca un Core aislado y comprueba 109 casos: envío desde billetera, saldo,
 suministro invariante, cadena y sellos, replay, firma falsa, clave ajena,
 destino basura, origen=destino, saldo insuficiente, camino antiguo de nodo,
 mina una tarea checksum de principio a fin, verifica el recorte de coste de
@@ -299,10 +299,10 @@ verificador cobra su 30 %. Además arranca un
 firma falsa se rechaza y que una discrepancia firmada queda contada como
 aviso. La base real no se toca en ningún momento.
 
-### Pruebas de caos (22-10-2026)
+### Pruebas de caos (22-10-2026, ampliadas el 28-10-2026)
 
 La bateria secuencial no puede ver lo que solo rompe cuando pasa a la vez o
-cuando se corta la luz. `tools/pruebas_caos.py` (33 casos, tambien sobre una
+cuando se corta la luz. `tools/pruebas_caos.py` (61 casos, tambien sobre una
 copia y un Core aislado) comprueba lo que de verdad separa esto de una hoja de
 calculo:
 
@@ -317,6 +317,12 @@ calculo:
   pueden reintentar.
 - **Basura**: cuerpos malformados, tipos cambiados, NaN, `../`, token de admin
   por `/modelos` y un cuerpo gigante. Ni un solo 500.
+- **Disco lleno**: la base llega al tope de paginas de verdad (0 paginas
+  libres). Las lecturas siguen a 200, las escrituras contestan **507** con un
+  mensaje claro (nunca 500), no queda ni un medio asiento, el suministro cuadra
+  y lo rechazado se puede reintentar cuando vuelve el espacio.
+- **Ledger cogido por otro programa**: en WAL, una auditoria o una copia
+  leyendo el `.db` no bloquea un pago; contesta al momento y sin medios asientos.
 
 ## Validadores: qué aportan y qué no
 
@@ -433,8 +439,8 @@ Ficheros: `coordinator/sello_key.txt` (privada, no publicar), `coordinator/sello
    seria teatro, no seguridad. Necesita 3 dispositivos y una ceremonia de
    claves; el diseno y la migracion estan en `MULTISIG.md`.
 4. **Réplica del ledger** en otra maquina/disco, con la misma cadena.
-5. **Auditoría externa** del código (cortes de luz, disco lleno y reloj ya
-   cubiertos por `tools/pruebas_caos.py`; sigue faltando el disco lleno).
+5. **Auditoría externa** del código (cortes de luz, disco lleno, ledger cogido
+   por otro programa y reloj ya cubiertos por `tools/pruebas_caos.py`).
 
 Nada de eso es imposible; ninguna se hace en una tarde. Lo de hoy es el paso que
 convierte "confía en el Core" en "comprueba el Core".
