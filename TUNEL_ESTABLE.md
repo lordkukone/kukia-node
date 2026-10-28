@@ -33,6 +33,102 @@ escriben el mismo `core_actual.json`:
 | Rápido (`trycloudflare`) | cambia al arrancar | por defecto, sin cuenta ni dominio |
 | Con nombre (dominio propio) | fija, tuya | el día que tengas dominio; ver más abajo |
 
+## Decisión del 28-10-2026: seguir con el túnel rápido (y por qué no ngrok)
+
+Esto está aquí para no volver a proponer lo mismo cada mes: qué se decidió, con
+qué números y qué habría que hacer el día que se retome.
+
+### La decisión
+
+Se mantiene el **túnel rápido + el espejo**. No se compra dominio, no se monta
+Tailscale y no se usa ngrok. El motivo es que el espejo ya resuelve el problema
+que de verdad rompía cosas (que el paquete y la billetera no caduquen cuando el
+túnel se renueva), y una URL fija no mueve nada de lo que hoy frena el proyecto
+(demanda, mineros de fuera, réplica al día).
+
+Lo único que se pierde: **la URL del Core cambia al reiniciar**. De ahí la regla
+práctica: comparte siempre el enlace del espejo
+(`https://kukia-network.surge.sh/core_actual.json`), nunca un
+`algo.trycloudflare.com` pegado a mano, porque ese muere en el siguiente
+arranque.
+
+### Por qué ngrok queda descartado (medido, no opinado)
+
+ngrok daba un subdominio fijo gratis y por eso existía `tools/tunel_ngrok.py`.
+Se cae por las cuotas del plan gratuito, consultadas en su documentación el
+28-10-2026 (`https://ngrok.com/docs/pricing-limits/free-plan-limits`):
+
+| Límite del plan gratis | Valor | Qué significa en KUKIA |
+|---|---|---|
+| Peticiones HTTP | **20.000 / mes** | el minero hace ~240 entregas/min con 2 GPUs: se agota en **~83 minutos** |
+| Transferencia | 1 GB / mes | se agota antes que las peticiones en cuanto hay imágenes o vídeo |
+| Dominios | 1 dominio de desarrollo asignado | el nombre lo elige ngrok, no tú |
+| Intersticial | página de aviso en tráfico de navegador | la billetera tendría que mandar `ngrok-skip-browser-warning` en cada `fetch` |
+
+Para una demo de una tarde vale; para una red que mina, no.
+
+### Las opciones que se evaluaron
+
+| Opción | Coste | Límites | Veredicto |
+|---|---|---|---|
+| **A. Dominio + túnel con nombre de Cloudflare** | dominio ~10–15 €/año; túnel 0 € | sin cuota de peticiones; HTTPS propio | la buena cuando se retome |
+| B. Tailscale Funnel | 0 € | URL fija `maquina.tailnet.ts.net`; beta; ancho de banda no garantizado; requiere cuenta e instalar Tailscale | alternativa gratis razonable |
+| C. ngrok de pago | ~8 $/mes (~96 $/año) | sin cuota, pero sigue siendo un tercero | peor que A |
+| D. Worker como fachada del túnel rápido | 0 € | tope diario del plan gratis (~100.000) frente a ~345.000/día del minero | solo valdría para web y billetera |
+
+### La prueba que decide el diseño: HostGuard
+
+Lanzado contra el Core vivo (solo lectura, 28-10-2026):
+
+| `Host` enviado | Respuesta |
+|---|---|
+| `kukia.tudominio.com` (dominio propio) | **403** |
+| `algo.ngrok-free.app` | **403** |
+| `x.trycloudflare.com` | 200 |
+| `127.0.0.1` | 200 |
+
+Es decir: **con un dominio propio o con ngrok, el túnel abriría y el Core
+contestaría 403**. El túnel con nombre lo resuelve sin tocar la lista blanca
+(`coordinator/kukia_core.py`, `host_permitido`), porque su config reescribe el
+`Host` a `127.0.0.1` (`originRequest.httpHostHeader`), igual que el túnel rápido
+con `--http-host-header`.
+
+### Si se retoma (plan corto)
+
+El detalle fino está en la sección «El día que tengas dominio» de este mismo
+documento. El resumen:
+
+1. Comprar el dominio y dar de alta la zona en Cloudflare (cambiar los NS).
+2. `tools\bin\cloudflared.exe tunnel login` (una vez; elige la zona).
+3. `python tools\tunel_dominio.py --preparar --dominio kukia.tudominio.com`
+   (crea túnel, DNS y config).
+4. Parar **solo** el supervisor del túnel actual —nunca el Core— y arrancar
+   `python tools\tunel_dominio.py --arrancar`; o reiniciar la guardia, que
+   adopta el Core sin reiniciarlo.
+5. Comprobar: `/version` desde fuera = 200, `Host` ajeno = 403,
+   `netstat` solo con `127.0.0.1:8300`, `/admin` sin token = 403, y **reiniciar
+   el PC** para ver que la URL no cambia.
+6. Actualizar este documento y la nota de viabilidad.
+
+### Cómo se deshace
+
+```bash
+rm dominio_core.txt                                  # la guardia vuelve al túnel rápido
+tools\bin\cloudflared.exe tunnel delete kukia-core   # borra túnel y DNS
+```
+
+Sin `dominio_core.txt` (o sin `config.yml`) el guardia elige el túnel rápido en
+el siguiente arranque y `core_actual.json` se reescribe solo. No hay nada que
+restaurar en la base ni en las claves.
+
+### Lo que no se toca en ningún caso
+
+La lista de `Host` permitidos (`host_permitido`), `ORIGENES_PERMITIDOS`, el
+token de admin, la tokenomics, los saldos, las claves privadas ni
+`core_minero.txt` (sigue en `auto`). Si algún día se añade el dominio a la lista
+blanca en vez de reescribir el `Host`, hay que hacerlo con la misma precaución
+que un cambio de regla de cortafuegos: sabiendo qué se abre y pudiendo volver.
+
 ## Cómo arrancarlo
 
 ```cmd
