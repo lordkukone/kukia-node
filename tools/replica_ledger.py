@@ -13,6 +13,9 @@ No toca el ledger real ni el Core en marcha: solo lee.
     python tools/replica_ledger.py --comparar     # ¿la replica sigue siendo la misma red?
     python tools/replica_ledger.py --estado       # foto de la replica actual
     python tools/replica_ledger.py --destino E:/KUKIA_REPLICA
+    python tools/replica_ledger.py --avisar       # ademas, avisa al escritorio/movil si falla
+                                                  # o si la replica se ha quedado atras
+                                                  # (lo usa TAREA_REPLICA.cmd)
 
 Estructura:
     <destino>/actual/{kukia.db, sellos.jsonl, sello_pub.txt, admin_token.txt, replica.json}
@@ -46,6 +49,40 @@ DESTINO_DEFECTO = Path(os.environ.get("KUKIA_REPLICA") or "D:/KUKIA_REPLICA")
 # emitir unas decimas. 10 KIA es holgado y sigue cazando una replica de otro dia.
 TOLERANCIA_SUPPLY = 10.0
 
+# Lo pone --avisar. Sin el flag el programa solo escribe, como siempre: asi una
+# ejecucion a mano desde la consola no manda nada al movil sin querer.
+AVISAR = False
+
+
+def avisar(titulo: str, texto: str = "") -> None:
+    """Aviso al escritorio y al movil. Nunca lanza: si no hay canal, queda el log.
+
+    Se reutiliza el aviso de los vigilantes (toast de Windows + Telegram) para
+    que no haya dos maneras distintas de avisar de lo mismo. Sin Telegram
+    configurado queda el toast y la linea de log; la tarea sale igual con error,
+    asi que el Programador de tareas tambien lo refleja.
+    """
+    if not AVISAR:
+        return
+    hecho = False
+    try:
+        import vigilante_servicios as V
+        hecho = V.avisa(titulo, texto)
+    except Exception:
+        try:
+            import avisos as _av
+            hecho = _av.enviar(titulo, texto)
+        except Exception:
+            hecho = False
+    print("[replica] aviso " + ("enviado (escritorio/movil)" if hecho
+                                else f"NO enviado (sin Telegram): {titulo}"))
+
+
+def _fallo(rc: int, motivo: str, extra: str = "") -> int:
+    """Deja el codigo de salida y, si se pidio --avisar, lo manda fuera."""
+    avisar("KUKIA replica: " + motivo, extra)
+    return rc
+
 
 def medir(carpeta: Path) -> dict:
     """Datos de la replica leidos de sus propios ficheros (sin Core)."""
@@ -64,6 +101,9 @@ def medir(carpeta: Path) -> dict:
     return {"supply": round(supply, 6), "asientos": asientos,
             "asientos_encadenados": int(n_hash),
             "sellos": len(sellos),
+            # Cuando se copio el .db: sirve para saber si la foto del Core es
+            # mas nueva o mas vieja que esta copia (ver comparar()).
+            "copiada": db.stat().st_mtime,
             "ultimo_sello": (sellos[-1].get("hash") if sellos else None)}
 
 
@@ -81,9 +121,17 @@ def estado_core() -> dict:
         v = requests.get(f"{CORE}/ledger/verificar", timeout=180).json()
         datos["asientos"] = int(v.get("asientos") or 0)
         datos["cadena_ok"] = bool(v.get("cadena_ok"))
+        # AUDITORIA 2026-10-28 (A1): /ledger/verificar se cachea AUDITORIA_TTL
+        # segundos. Una foto de hace 4 minutos puede tener MENOS asientos que
+        # una copia hecha hace uno, y comparar los dos numeros a pelo declaraba
+        # "otra red" a una copia buena. El Core publica cuando midio: se guarda.
+        edad = v.get("edad_s")
+        datos["medido_ts"] = (time.time() - float(edad)) if edad is not None else None
+        datos["cacheado"] = bool(v.get("cacheado"))
     except Exception:
         datos["asientos"] = None
         datos["cadena_ok"] = None
+        datos["medido_ts"] = None
     # CAOS 2026-10-22 (negativas): antes pedia solo los 30 ultimos sellos, asi que
     # una replica de hace dos dias (su sello era el nº 18 de 148) salia como
     # "replica de OTRA historia" cuando era la misma red, solo atrasada. El Core
@@ -111,7 +159,8 @@ def comparar(mio: dict, core: dict) -> dict:
     desastre real es un diagnostico falso: la copia buena de hace dos dias es tuya.
     """
     res = {"ok": True, "avisos": [], "dif_supply": None, "sello_conocido": None,
-           "misma_red": None, "atraso": None, "ventana_sellos": 0}
+           "misma_red": None, "atraso": None, "ventana_sellos": 0,
+           "comparo_asientos": None}
     if core is None:
         res["avisos"].append("el Core no contesta: replica verificada sin comparar")
         res["comparado"] = False
@@ -120,13 +169,25 @@ def comparar(mio: dict, core: dict) -> dict:
     dif = mio["supply"] - core["supply"]
     res["dif_supply"] = round(dif, 6)
     atraso_asientos = int((core.get("asientos") or 0) - mio["asientos"])
-    res["atraso"] = {"asientos": atraso_asientos,
+    res["atraso"] = {"asientos": max(0, atraso_asientos),
                      "supply": round(max(-dif, 0.0), 6)}
     if dif > 1e-6:
         res["ok"] = False
         res["avisos"].append(f"la replica tiene MAS suministro que el Core (+{dif:.6f} KIA): "
                              "no es una copia de esta red")
-    if core.get("asientos") is not None and mio["asientos"] > core["asientos"]:
+    # El numero de asientos solo se compara si la foto del Core es MAS NUEVA que
+    # nuestra copia. Si el Core contesta desde su cache, la copia puede tener
+    # asientos legitimos que el Core aun no ha contado en esa foto.
+    medido, copiada = core.get("medido_ts"), mio.get("copiada")
+    fresco = medido is None or copiada is None or medido >= copiada
+    res["comparo_asientos"] = bool(fresco)
+    if not fresco:
+        res["avisos"].append(
+            "el Core respondio con una medicion de hace "
+            f"{time.time() - medido:.0f} s (cache de /ledger/verificar): no comparo el "
+            "numero de asientos, solo el suministro y los sellos")
+    if (fresco and core.get("asientos") is not None
+            and mio["asientos"] > core["asientos"]):
         res["ok"] = False
         res["avisos"].append(f"la replica tiene {mio['asientos']} asientos y el Core "
                              f"{core['asientos']}: no es esta red")
@@ -171,7 +232,7 @@ def actualizar(base: Path) -> int:
         # esto era un traceback de Python. Ahora se dice lo que pasa.
         print(f"[replica] ERROR: no puedo escribir en {base} ({e.strerror or e}).")
         print("[replica] El disco de la replica no responde. No se ha tocado nada.")
-        return 2
+        return _fallo(2, "el disco de la replica no responde", f"{base}: {e.strerror or e}")
 
     print(f"[replica] copiando el estado a {nueva} ...")
     t0 = time.time()
@@ -182,7 +243,7 @@ def actualizar(base: Path) -> int:
         n_sellos = BK.copiar_estado(nueva, con_clave=False, con_token=False)
     except Exception as e:
         print(f"[replica] ERROR copiando: {type(e).__name__}: {e}")
-        return 3
+        return _fallo(3, "la copia fallo", f"{type(e).__name__}: {e}")
     print(f"[replica] copiados {n_sellos} sellos en {time.time() - t0:.1f} s")
     print("[replica] la clave del sello no se copia: se usa la del original "
           "(sello_pub.txt va para poder verificar sin secreto)")
@@ -192,7 +253,8 @@ def actualizar(base: Path) -> int:
     if not r.get("ok"):
         print(f"[replica] ERROR: la copia NO cuadra: {r.get('problemas')}")
         print(f"[replica] la replica anterior sigue intacta en {actual}")
-        return 4
+        return _fallo(4, "la copia nueva NO verifica",
+                      f"problemas: {r.get('problemas')}")
 
     mio = medir(nueva)
     core = estado_core()
@@ -207,7 +269,8 @@ def actualizar(base: Path) -> int:
     if not cmp_["ok"]:
         print("[replica] ERROR: la copia no es esta red. NO se promociona.")
         print(f"[replica] la replica anterior sigue intacta en {actual}")
-        return 5
+        return _fallo(5, "la copia no es esta red",
+                      "; ".join(cmp_.get("avisos") or []))
 
     manifiesto = {
         "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -265,7 +328,8 @@ def cmd_comparar(base: Path) -> int:
         print(f"aviso   : {a}")
     if not cmp_["ok"]:
         print("RESULTADO: NO coinciden — NO se promociona")
-        return 1
+        return _fallo(1, "la replica no coincide con el Core",
+                      "; ".join(cmp_.get("avisos") or []))
     if not cmp_.get("comparado"):
         print("RESULTADO: replica verificada, sin Core con el que comparar")
         return 0
@@ -277,7 +341,9 @@ def cmd_comparar(base: Path) -> int:
         # exit 0) de "esta copia es de hace dias" (exit 6, no te fies).
         if atraso.get("supply", 0.0) > TOLERANCIA_SUPPLY:
             print("RESULTADO: NO esta al dia. No la uses como si fuera de hoy.")
-            return 6
+            return _fallo(6, "la replica se ha quedado atras",
+                          f"le faltan {atraso['asientos']} asientos y "
+                          f"{atraso.get('supply', 0.0):.2f} KIA respecto al Core")
     else:
         print("RESULTADO: la replica es la misma red (puede ir un poco atras)")
     return 0
@@ -310,7 +376,11 @@ def main() -> int:
                     help=f"carpeta de la replica (defecto {DESTINO_DEFECTO})")
     ap.add_argument("--comparar", action="store_true", help="solo comparar con el Core vivo")
     ap.add_argument("--estado", action="store_true", help="foto de la replica")
+    ap.add_argument("--avisar", action="store_true",
+                    help="avisa al escritorio y al movil si falla o se queda atras")
     args = ap.parse_args()
+    global AVISAR
+    AVISAR = args.avisar
     base = Path(args.destino)
     if args.estado:
         return cmd_estado(base)

@@ -38,3 +38,5 @@ tools/cifrar_claves_n.cmd -text
 tools/borrar_claves_n.cmd -text
 tools/cifrar_claves_d.cmd -text
 tools/borrar_claves_d.cmd -text
+TAREA_REPLICA.cmd -text
+TAREA_REPLICA_OCULTA.vbs -text
