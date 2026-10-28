@@ -97,6 +97,14 @@ POST_REDDIT_URL.txt
 SEO_BUSCADORES.md
 ESTADO_BUSCADORES.txt
 
+# Traspasos y mensaje de lanzamiento (28-10-2026). Mismo criterio que los de
+# arriba: se quedan en el disco. Los traspasos enumeran DONDE estan las copias
+# de sello_key.txt y admin_token.txt, y que queda abierto (A3, A4). No llevan
+# las claves, pero en un repositorio PUBLICO son un mapa de donde buscarlas.
+# Para versionar uno a proposito: git add -f <fichero>.
+TRASPASO_*.md
+MENSAJE_A_UN_MINERO.md
+
 # Despliegue: el codigo y las guias SI van al repositorio (sirven a cualquiera
 # que monte un Core). Lo que NO sale de aqui: la copia del ledger, las claves y
 # el .env con el dominio y los origenes reales.
