@@ -125,7 +125,12 @@ def puerto_libre() -> int:
 
 
 def probar_en_copia(pruebas: list[dict], monto: float = 0.01) -> list[str]:
-    """Envia de verdad 0,01 KIA desde cada billetera, pero en una COPIA.
+    """Envia de verdad una transferencia firmada desde cada billetera, en una COPIA.
+
+    El importe es la mitad del saldo de cada billetera, con el tope de `monto`
+    (0,01 KIA por defecto) y redondeado a 4 decimales, que es la precision
+    maxima que acepta el Core. Asi una cuenta con poco saldo no sale rechazada
+    y no parece que su clave falle: se manda lo que de verdad tiene.
 
     Es la unica forma de demostrar que el Core aceptaria el gasto (derivacion +
     firma + saldo + nonce) sin tocar un solo KIA de produccion: se copia el
@@ -245,8 +250,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--probar", action="store_true",
-                    help="ademas, envia 0,01 KIA de cada billetera valida a un Core "
-                         "aislado con una COPIA del ledger (no toca produccion)")
+                    help="ademas, envia a un Core aislado la mitad del saldo de cada "
+                         "billetera valida, con tope de 0,01 KIA y redondeado a 4 "
+                         "decimales, sobre una COPIA del ledger: no toca produccion")
     args = ap.parse_args()
 
     if not DB.exists():
@@ -335,7 +341,7 @@ def main() -> int:
 
     if args.probar:
         pruebas = [f for f in filas if f["estado"] == "OK" and f.get("priv")]
-        print("\n== PRUEBA REAL EN UNA COPIA (0,01 KIA por billetera) ==")
+        print("\n== PRUEBA REAL EN UNA COPIA (media del saldo, tope 0,01 KIA) ==")
         for linea in probar_en_copia(pruebas):
             print("  " + linea)
 
