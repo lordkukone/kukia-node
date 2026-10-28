@@ -34,3 +34,7 @@ tools/lanzar_core.cmd -text
 tools/lanzar_core_oculto.vbs -text
 tools/instalar_tareas_core.ps1 -text
 tools/pruebas_seguridad.py -text
+tools/cifrar_claves_n.cmd -text
+tools/borrar_claves_n.cmd -text
+tools/cifrar_claves_d.cmd -text
+tools/borrar_claves_d.cmd -text
