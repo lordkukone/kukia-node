@@ -60,6 +60,15 @@ def direccion_de_pubkey(pub_hex: str) -> str:
     return "KUK" + hashlib.sha256(raw).hexdigest()[:38].upper()
 
 
+def sha256(ruta: Path) -> str:
+    """SHA-256 de un fichero, para demostrar que la prueba no lo toco."""
+    h = hashlib.sha256()
+    with ruta.open("rb") as f:
+        for bloque in iter(lambda: f.read(1 << 20), b""):
+            h.update(bloque)
+    return h.hexdigest()
+
+
 def claves_locales() -> list[dict]:
     """Todas las claves privadas de este PC. Devuelve dicts SIN imprimirlos.
 
@@ -126,17 +135,26 @@ def probar_en_copia(pruebas: list[dict], monto: float = 0.01) -> list[str]:
     """
     if not pruebas:
         return []
+    sellos_real = RAIZ / "coordinator" / "sellos.jsonl"
     antes = (DB.stat().st_size, DB.stat().st_mtime)
+    sellos_antes = sha256(sellos_real) if sellos_real.exists() else ""
     tmp = Path(tempfile.mkdtemp(prefix="kukia_billeteras_"))
     db = tmp / "kukia.db"
     # VACUUM INTO: copia coherente con el Core escribiendo. Con shutil.copy2
     # salia mal formada una de cada tres veces (medido el 25-10-2026) y el
     # Core aislado se moria al arrancar sin decir por que.
     copiar_ledger(DB, db)
+    # El Core firma un sello al arrancar si la copia tiene asientos sin sellar.
+    # Sin esta linea ese sello se anadiria al coordinator/sellos.jsonl REAL y
+    # la prueba dejaria de ser de solo lectura sobre la produccion.
+    sellos_copia = tmp / "sellos.jsonl"
+    if sellos_real.exists():
+        shutil.copy2(sellos_real, sellos_copia)
     puerto = puerto_libre()
     base = f"http://127.0.0.1:{puerto}"
     entorno = dict(os.environ)
-    entorno.update({"KUKIA_DB": str(db), "KUKIA_AUTO_TAREAS": "0", "KUKIA_ARCHIVAR": "0",
+    entorno.update({"KUKIA_DB": str(db), "KUKIA_SELLOS_FILE": str(sellos_copia),
+                    "KUKIA_AUTO_TAREAS": "0", "KUKIA_ARCHIVAR": "0",
                     "KUKIA_SELLO_SEG": "3600", "PYTHONUNBUFFERED": "1",
                     "PYTHONIOENCODING": "utf-8"})
     log = open(tmp / "core.log", "w", encoding="utf-8")
@@ -162,11 +180,21 @@ def probar_en_copia(pruebas: list[dict], monto: float = 0.01) -> list[str]:
 
         destino = "KUK" + "0" * 38          # direccion de usar y tirar, en la copia
         for p in pruebas:
+            # El importe se adapta al saldo: mandar 0,01 fijos a una billetera que
+            # tiene 0,0098 la rechaza por saldo y parece que su clave falla,
+            # cuando lo que falla es la cuenta de la prueba. Nunca se manda mas
+            # de la mitad de lo que hay, para no vaciarla.
+            # El Core no acepta mas de 4 decimales (400): se redondea a esa
+            # precision y se descarta lo que quedaria por debajo del minimo.
+            monto_p = round(min(monto, float(p.get("saldo") or 0.0) * 0.5), 4)
+            if monto_p < 0.0001:
+                resultados.append(f"{p['cuenta']} {p['fichero']}: sin saldo para probar")
+                continue
             nonce = uuid.uuid4().hex
-            msg = f"transferir:{p['cuenta']}:{destino}:{monto}:{nonce}"
+            msg = f"transferir:{p['cuenta']}:{destino}:{monto_p}:{nonce}"
             firma = W.firmar(msg, p["priv"])
             datos = json.dumps({"de_nodo": p["cuenta"], "a_direccion": destino,
-                                "monto": monto, "nonce": nonce, "firma": firma,
+                                "monto": monto_p, "nonce": nonce, "firma": firma,
                                 "clave_publica": p["pub"]}).encode()
             pet = urllib.request.Request(f"{base}/transferir", data=datos,
                                          headers={"Content-Type": "application/json"})
@@ -179,7 +207,7 @@ def probar_en_copia(pruebas: list[dict], monto: float = 0.01) -> list[str]:
                 codigo, cuerpo = 0, {"error": str(e)}
             ok = codigo == 200 and cuerpo.get("ok")
             resultados.append(f"{p['cuenta']} {p['fichero']}: "
-                              + ("MUEVE OK (0,01 KIA en la copia)" if ok
+                              + (f"MUEVE OK ({monto_p} KIA en la copia)" if ok
                                  else f"RECHAZADO {codigo} {cuerpo}"))
 
         con = sqlite3.connect(db)
@@ -205,6 +233,11 @@ def probar_en_copia(pruebas: list[dict], monto: float = 0.01) -> list[str]:
     resultados.append("ledger real sin tocar por la prueba" if antes == despues
                       else "el ledger real crecio mientras se probaba (es el Core "
                            "vivo escribiendo, no esta prueba)")
+    sellos_despues = sha256(sellos_real) if sellos_real.exists() else ""
+    resultados.append("sellos reales sin tocar por la prueba"
+                      if sellos_despues == sellos_antes
+                      else "el fichero de sellos real cambio durante la prueba "
+                           "(miralo: el Core aislado sella sobre la copia)")
     return resultados
 
 
