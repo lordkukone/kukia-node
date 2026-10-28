@@ -89,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>37f6cc6edaf2e4f5167579d47a36cdfb62b28f55add6160dff8a413e80f3b5ac</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>38ac9edf67812ee641154cae50fb0de02427dcc0fc6cbfe7349e327a3cb5c57e</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -13823,8 +13823,13 @@ def rotar_logs_hijos(hijos: dict) -&gt; None:
             log(f&quot;[logs] no se pudo rotar {getattr(h, &#x27;logfile&#x27;, &#x27;?&#x27;)}: &quot;
                 f&quot;{type(e).__name__}: {e}&quot;)
             continue
-        if n:
+        if n &gt; 0:
             log(f&quot;[logs] {h.logfile.name} rotado: se sueltan {rotar_logs.mb(n)}&quot;)
+        elif n &lt; 0:
+            # -1: el fichero lo tiene abierto alguien que no deja escribirlo.
+            # Le pasa al Core lanzado con `&gt;&gt;` en cmd (ver registrar_salida.py).
+            log(f&quot;[logs] no se pudo rotar {h.logfile.name}: lo tiene abierto otro &quot;
+                f&quot;proceso sin permiso de escritura&quot;)
 
 
 def _peticion(ruta: str, timeout: float = 6.0):
