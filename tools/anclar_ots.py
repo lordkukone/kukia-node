@@ -108,7 +108,7 @@ def compromiso(sello: dict) -> str:
         f"hasta      : {sello.get('hasta')}\n"
         f"asientos   : {sello.get('asientos')}\n"
         f"suma_kia   : {sello.get('suma')}\n"
-        f"hash_ultimo: {sello.get('hash_ultimo')}\n"
+        f"hash_ultimo: {sello.get('hash')}\n"
         f"firma      : {sello.get('firma')}\n"
         f"canonico   : {S.canonico(cuerpo)}\n"
     )
@@ -182,7 +182,7 @@ def anclar() -> int:
         "hasta": sello.get("hasta"),
         "asientos": sello.get("asientos"),
         "suma": sello.get("suma"),
-        "hash_ultimo": sello.get("hash_ultimo"),
+        "hash_ultimo": sello.get("hash"),
         "digest_sha256": digest.hex(),
         "calendarios": buenos,
         "fichero": txt.name,
