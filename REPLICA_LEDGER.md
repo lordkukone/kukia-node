@@ -50,6 +50,63 @@ túnel siguen igual, sin cambiar ni una línea. Antes de levantar nada:
    gasto). Solo se salta con `--forzar`, y solo si sabes que es un zombi.
 3. Recalcula la cadena y los sellos de la réplica. Si no cuadran, no arranca.
 
+## Arrancar en un puerto libre (sin pisar el túnel)
+
+El 8300 es el puerto bueno **para una recuperación de verdad**: el panel, el
+minero y el túnel lo dan por hecho y no hay que cambiar nada. Pero mientras el
+Core principal siga vivo no se puede usar (dos Cores a la vez son dos
+historias), y para **probar** que la réplica arranca no se debe ocupar: se usa
+un puerto libre y se deja el 8300 en paz.
+
+### Qué ocupa cada puerto
+
+| Puerto | Quién | Qué es |
+|---|---|---|
+| **8300** | Core (`uvicorn`) | el que hablan el panel, el minero y el túnel |
+| **8399** | `tools/tunel_estable.py` | cerrojo de instancia única: un socket que el supervisor del túnel abre y deja abierto para que no puedan correr dos. **No sirve tráfico.** Se cambia con `KUKIA_TUNEL_PUERTO` |
+| otro cualquiera | túnel `cloudflared` | **ninguno**: `cloudflared tunnel --url http://127.0.0.1:8300` sale hacia trycloudflare, no abre puerto local. Lo que aparece escuchando en 8399 es el cerrojo de arriba, no el túnel |
+
+Consecuencia práctica: si el 8399 está ocupado, ya hay un supervisor del túnel
+vivo (es lo normal). Y si te hace falta arrancar la réplica con el túnel
+levantado, el cerrojo no estorba: solo molesta el 8300.
+
+### Cómo pedir un puerto libre y arrancar
+
+```bash
+# 1) Que el sistema te dé uno libre (y lo cierra al instante)
+python -c "import socket;s=socket.socket();s.bind(('127.0.0.1',0));print(s.getsockname()[1]);s.close()"
+
+# 2) Arrancar la réplica ahí, aceptando el atraso a propósito
+python tools\arrancar_replica.py --destino D:\KUKIA_REPLICA --puerto 61405 --aceptar-atraso
+```
+
+- `--puerto` es solo para esto: **una prueba**. El panel, el minero y el túnel
+  siguen apuntando al 8300, así que no verán nada nuevo. En un failover real se
+  deja el valor por defecto (`8300`).
+- `--aceptar-atraso` hace falta porque la guardia 1 se niega a arrancar si en
+  disco hay un estado **más nuevo** que la copia, y con el Core vivo eso siempre
+  pasa. Aceptarlo en una prueba es correcto; en una recuperación significa que
+  pierdes lo posterior a la copia, así que se acepta sabiendo qué se pierde.
+- El Core escucha en `127.0.0.1`, no en `0.0.0.0`: el puerto no queda expuesto a
+  la red local por el simple hecho de arrancarlo.
+- Si el puerto está cogido, uvicorn sale con `[winerror 10048]`. Otra pista de
+  quién lo tiene: `netstat -ano | findstr :8300`.
+
+### La prueba automática (recomendada)
+
+```bash
+python tools\prueba_arranque_replica.py            # réplica de D: por defecto
+python tools\prueba_arranque_replica.py --origen D:\KUKIA_REPLICA --conservar
+```
+
+Hace todo lo anterior sin que tengas que acordarte: copia la réplica a `%TEMP%`,
+coge un puerto libre, arranca, comprueba 16 cosas (suministro y asientos de la
+copia, `cadena_ok`, clave pública y sello del **original**, `/admin/clientes`
+200 con tu token y 403 con uno falso, que no se invente un `admin_token.txt`,
+que `/ledger/verificar` siga siendo público), mata el árbol del proceso, borra la
+copia y verifica que `D:` sigue byte a byte igual. Si el 8300 estaba vivo al
+empezar, exige que siga vivo al terminar. Sale con 0 si todo pasa.
+
 ## Qué comprueba la comparación (y por qué así)
 
 | Comprobación | Qué caza |
