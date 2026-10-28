@@ -115,8 +115,24 @@ def minar_aqui(nombre: str) -> int:
     LOGS = RAIZ / "logs"
     LOGS.mkdir(parents=True, exist_ok=True)
     destino = LOGS / "minero_visible.log"
+    # ROTACION (27-10-2026): este fichero solo se anadia y llego a 68 MB. Se
+    # rota antes de abrirlo: la cola queda en `.1` y el vivo empieza vacio.
+    # Como se abre en modo "a" (O_APPEND), truncar por debajo es seguro.
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import rotar_logs
+        suelto = rotar_logs.rota_ahora(destino)
+        if suelto:
+            print(f"[ventana] log rotado: se sueltan {rotar_logs.mb(suelto)}", flush=True)
+    except Exception as e:
+        print(f"[ventana] aviso: no se pudo rotar el log "
+              f"({type(e).__name__}: {e})", flush=True)
     print(f"[ventana] minando en esta ventana (nodo {nombre}). Ctrl+C para parar.\n",
           flush=True)
+    # Tope del log (el mismo que los demas: tools/rotar_logs.py). Esta ventana
+    # es la UNICA que escribe este fichero, asi que puede rotarlo en caliente.
+    tope = 5 * 1024 * 1024
+    escritos = 0
     with open(destino, "a", encoding="utf-8", errors="replace") as f:
         f.write(f"\n--- ventana abierta {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
         f.flush()
@@ -130,6 +146,22 @@ def minar_aqui(nombre: str) -> int:
                 sys.stdout.flush()
                 f.write(linea)
                 f.flush()
+                escritos += len(linea)
+                if escritos >= 1048576:
+                    # Se mira de MB en MB, no en cada linea.
+                    escritos = 0
+                    try:
+                        if f.tell() > tope:
+                            f.close()
+                            import rotar_logs
+                            suelto = rotar_logs.rota_ahora(destino, forzar=True)
+                            f = open(destino, "a", encoding="utf-8", errors="replace")
+                            print(f"\n[ventana] log rotado: se sueltan "
+                                  f"{rotar_logs.mb(suelto)}; sigue en {destino.name}",
+                                  flush=True)
+                    except Exception as e:
+                        print(f"\n[ventana] aviso: no se pudo rotar el log "
+                              f"({type(e).__name__}: {e})", flush=True)
         except KeyboardInterrupt:
             pass   # el Ctrl+C tambien le llega al worker, que para ordenado
         codigo = p.wait()

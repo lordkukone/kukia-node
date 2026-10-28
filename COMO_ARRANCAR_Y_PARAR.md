@@ -141,10 +141,13 @@ Lo que cambia en el dia a dia:
 - Si alguna vez hay que volver atras: parar el Core y `PRAGMA
   journal_mode=DELETE` sobre la base (con el Core parado).
 
-Logs del arranque del 19-10 (procesos lanzados en segundo plano):
+Logs (los viejos del 18/20-10 se borraron el 27-10-2026; hay copia en
+`backups/logs_borrados_20261027_2227.tar.gz`):
 
-- Core: `coordinator/core_final.out.log` y `.err.log`
-- Minero: `worker/minero_ok.out.log` y `.err.log`
+- Core: `logs/core.log` (su consola; rota solo, con `core.log.1` y `.2`)
+- Minero: `worker/minero.log` (de donde saca el publicador la potencia medida)
+- Minero en ventana: `logs/minero_visible.log`
+- Guardia: `logs/guardia.log` · Enganche de rotación: `tools/rotar_logs.py`
 
 Para verlo en vivo sin tocar el minero: abre `worker\ver_minero.cmd`
 (ventana que sigue el log; cerrarla NO detiene el minero).

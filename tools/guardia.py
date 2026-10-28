@@ -78,6 +78,14 @@ except Exception as _e:  # pragma: no cover
     core_destino = None
     print(f"[guardia] AVISO: sin core_destino ({_e}); se usa la linea tal cual", flush=True)
 
+try:
+    import rotar_logs
+    # La rotacion de logs tampoco puede tumbar al guardia: si falta el modulo,
+    # se sigue como antes (logs sin cortar) y se avisa una vez.
+except Exception as _e:  # pragma: no cover
+    rotar_logs = None
+    print(f"[guardia] AVISO: sin rotar_logs ({_e}); los logs no se rotaran", flush=True)
+
 
 _LOCAL = "http://127.0.0.1:8300"
 
@@ -125,12 +133,48 @@ def log(msg: str) -> None:
     print(linea, flush=True)
     try:
         LOGS.mkdir(parents=True, exist_ok=True)
-        if LOG.exists() and LOG.stat().st_size > MAX_LOG_BYTES:
+        # 27-10-2026: antes se renombraba a `.log.1` (una sola generacion, y sin
+        # copiar la cola). Ahora la rotacion es la misma para todos los logs
+        # (tools/rotar_logs.py): guarda la cola y conserva varias generaciones.
+        if rotar_logs is not None:
+            rotar_logs.rota_ahora(LOG, max_bytes=MAX_LOG_BYTES)
+        elif LOG.exists() and LOG.stat().st_size > MAX_LOG_BYTES:
             LOG.replace(LOG.with_suffix(".log.1"))
         with LOG.open("a", encoding="utf-8") as f:
             f.write(linea + "\n")
     except Exception:
         pass
+
+
+def rotar_logs_hijos(hijos: dict) -> None:
+    """Corta la salida de los hijos si ha pasado del tope (cada vuelta).
+
+    POR QUE AQUI Y NO EN CADA HIJO: los hijos son uvicorn, el minero o el
+    tunel, y su salida la abre ESTE proceso (`Hijo.arrancar`, modo "ab") para
+    pasarsela como descriptor. Desde fuera no se puede renombrar un fichero
+    abierto en Windows, pero si truncarlo: con O_APPEND el hijo sigue
+    escribiendo al final del fichero ya vacio. Ver tools/rotar_logs.py.
+
+    FALLO REAL (27-10-2026): logs/core.log llego a 209 MB (1,35 millones de
+    lineas, casi todas de peticiones 200 OK) y logs/minero_visible.log a 68 MB
+    porque nadie cortaba la salida de los hijos.
+    """
+    if rotar_logs is None:
+        return
+    for h in hijos.values():
+        try:
+            n = rotar_logs.rota_ahora(h.logfile)
+        except Exception as e:
+            log(f"[logs] no se pudo rotar {getattr(h, 'logfile', '?')}: "
+                f"{type(e).__name__}: {e}")
+            continue
+        if n > 0:
+            log(f"[logs] {h.logfile.name} rotado: se sueltan {rotar_logs.mb(n)}")
+        elif n < 0:
+            # -1: el fichero lo tiene abierto alguien que no deja escribirlo.
+            # Le pasa al Core lanzado con `>>` en cmd (ver registrar_salida.py).
+            log(f"[logs] no se pudo rotar {h.logfile.name}: lo tiene abierto otro "
+                f"proceso sin permiso de escritura")
 
 
 def _peticion(ruta: str, timeout: float = 6.0):
@@ -775,6 +819,11 @@ class Estado:
 
 def ciclo(hijos: dict, estado: Estado, verbose: bool) -> int:
     problemas = 0
+
+    # -1. LOGS. La salida de los hijos se corta aqui: si un log pasa del tope,
+    #     se guarda su cola y se vacia el fichero vivo. Va lo primero porque es
+    #     barato (un stat por hijo) y no depende de nada mas.
+    rotar_logs_hijos(hijos)
 
     # 0. MUERTE CONOCIDA (el camino rapido). Si un hijo que arranco el guardia
     #    ya no existe, se sabe por el propio proceso: se relanza en el acto.

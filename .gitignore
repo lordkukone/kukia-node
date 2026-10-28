@@ -34,6 +34,11 @@ tools/bin/
 
 # Logs y artefactos locales
 *.log
+# Generaciones de la rotacion (tools/rotar_logs.py): core.log.1, minero.log.2...
+# `*.log` NO las cubre (terminan en .1, no en .log) y el publicador sube a
+# GitHub lo que no este ignorado: sin esta linea, worker/minero.log.1 (8 MB de
+# log del minero) acabaria publicado.
+*.log.[0-9]*
 logs/vigilante_servicios.json
 logs/copia_integra.json
 ESTADO_WEBS.txt

@@ -15,7 +15,7 @@
 
 Option Explicit
 
-Dim shell, fso, pyw, raiz, q, cmd
+Dim shell, fso, pyw, py, raiz, q, cmd, rot
 
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -33,6 +33,21 @@ End If
 
 q = Chr(34)
 shell.CurrentDirectory = raiz & "\worker"
+
+' ROTACION DEL LOG (27-10-2026).
+' Con `>>` el fichero queda abierto de forma que nadie mas puede truncarlo
+' mientras el minero corre (medido con el log del Core: PermissionError). Asi
+' que se rota AQUI, antes de arrancar: lo del arranque anterior queda en
+' minero.log.1 (y .2) y el fichero vivo empieza vacio. Sin esto, minero.log
+' solo crecia. Ver tools/rotar_logs.py.
+py = Replace(pyw, "pythonw.exe", "python.exe")
+If Not fso.FileExists(py) Then
+    py = "python.exe"
+End If
+rot = q & py & q & " " & q & raiz & "\tools\rotar_logs.py" & q & " --ruta " & q & raiz & "\worker\minero.log" & q & " --forzar --silencioso"
+On Error Resume Next
+shell.Run rot, 0, True
+On Error GoTo 0
 
 ' cmd /c ""pythonw.exe" -u kukia_worker.py minero_pc >> minero.log 2>&1"
 ' El cmd solo hace falta para poder anadir al final del log (> >); pythonw

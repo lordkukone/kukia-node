@@ -59,8 +59,25 @@ if /i "%OCUPADO%"=="si" (
     exit /b 0
 )
 
+rem ---- ROTACION DEL LOG (27-10-2026) --------------------------------------
+rem core.log acumulaba TODO lo de cada arranque y llego a 209 MB (1,35 millones
+rem de lineas, casi todas peticiones 200 OK). Aqui se rota en cada arranque, con
+rem el Core parado (si estuviera vivo, arriba se habria salido): lo del arranque
+rem anterior queda en core.log.1 y el fichero vivo empieza vacio. La guardia
+rem hace lo mismo cada 30 s con la salida de sus hijos.
+"%PY%" "%RAIZ%\tools\rotar_logs.py" --ruta "%LOG%" --forzar --silencioso
+
 echo [%date% %time%] ARRANCANDO CORE (puerto %PUERTO%) con %PY% >> "%LOG%"
-rem --no-proxy-headers (28-10-2026, A2): sin el, uvicorn acepta el X-Forwarded-For
-rem del visitante como IP del cliente y los cupos por IP se pueden falsificar.
-"%PY%" -u -m uvicorn kukia_core:app --host 127.0.0.1 --port %PUERTO% --no-proxy-headers >> "%LOG%" 2>&1
+rem ---- SALIDA CON ROTACION (27-10-2026) -----------------------------------
+rem Antes: uvicorn ... >> core.log. Con `>>` el fichero queda abierto de forma
+rem que NADIE mas puede escribirlo (PermissionError al truncar, medido con el
+rem log de 209 MB), asi que no habia manera de cortarlo mientras corria.
+rem Ahora lo escribe tools\registrar_salida.py: guarda la salida en el log, la
+rem ensena igual en esta consola y, cuando pasa de 5 MB, guarda la cola en
+rem core.log.1 y empieza de cero. Devuelve el MISMO codigo que el Core.
+rem --no-proxy-headers (auditoria 28-10-2026, A2): sin el, uvicorn reescribe la
+rem IP del cliente con el X-Forwarded-For que llega, y detras del tunel eso
+rem permite falsificar la IP y saltarse los cupos por IP.
+"%PY%" -u "%RAIZ%\tools\registrar_salida.py" "%LOG%" -- "%PY%" -u -m uvicorn kukia_core:app --host 127.0.0.1 --port %PUERTO% --no-proxy-headers
+echo [%date% %time%] CORE TERMINADO con codigo %errorlevel% >> "%LOG%"
 echo [%date% %time%] CORE TERMINADO con codigo %errorlevel% >> "%LOG%"
