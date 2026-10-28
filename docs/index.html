@@ -2,13 +2,13 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<link rel="canonical" href="https://lordkukone.github.io/kukia-node/">
+<link rel="canonical" href="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; font-src 'self' data:; connect-src 'self' https: http://127.0.0.1:* http://localhost:*; form-action 'self' https://formsubmit.co; object-src 'none'; base-uri 'self'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KUKIA · Convierte potencia de cálculo en trabajo útil para la IA</title>
 <meta name="description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
 <meta name="keywords" content="computación distribuida GPU, cómputo para IA, tareas verificables, minado útil, nodos de computación domésticos, KUKIA, KIA">
-<meta name="kukia-build" content="v1.3.10-ficheros-vivos">
+<meta name="kukia-build" content="v1.3.20-video-siempre">
 <link rel="icon" href="moneda.jpg">
 <script>
 /* AUTOLIMPIEZA (26-10-2026). El visitante no tiene que saber nada: si la web
@@ -207,7 +207,7 @@ header.barra{position:sticky;top:0;z-index:100;background:rgba(5,13,10,.94);
   transition:opacity .8s ease;
   /* Sin `filter`: filtrar a pantalla completa un video que se mueve obliga a
      reprocesar todos los fotogramas. El color ya viene ajustado en el propio
-     archivo (ver promo_web_lite.mp4). */
+     archivo (ver promo_web_sonido.mp4). */
   }
 .video-fondo[data-modo="poster"]{opacity:.26}
   -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 16%,#000 84%,transparent 100%);
@@ -223,6 +223,9 @@ header.barra{position:sticky;top:0;z-index:100;background:rgba(5,13,10,.94);
 .portada h1 em{font-style:normal;color:var(--mint)}
 .entradilla{font-size:clamp(1rem,2vw,1.16rem);max-width:62ch;color:var(--texto2)}
 .acciones{display:flex;flex-wrap:wrap;gap:.8rem;margin-top:2rem}
+/* El boton de ver el video solo sale cuando el navegador no lo pone solo.
+   `.btn` lleva display propio: [hidden] a secas no lo oculta. */
+#verVideo[hidden]{display:none}
 .mini{display:flex;flex-wrap:wrap;gap:.5rem 1.4rem;margin-top:1.6rem;font-size:.84rem;color:var(--texto2)}
 .mini span{display:inline-flex;align-items:center;gap:.4rem}
 .mini b{color:var(--texto)}
@@ -399,51 +402,51 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="KUKIA Network">
 <meta property="og:locale" content="es_ES">
-<meta property="og:url" content="https://lordkukone.github.io/kukia-node/">
+<meta property="og:url" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/">
 <meta property="og:title" content="KUKIA · Convierte potencia de cálculo en trabajo útil para la IA">
 <meta property="og:description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
-<meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta property="og:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="KUKIA · Convierte potencia de cálculo en trabajo útil para la IA">
 <meta name="twitter:description" content="KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.">
-<meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta name="twitter:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
 <script type="application/ld+json">
 {
  "@context": "https://schema.org",
  "@graph": [
   {
    "@type": "WebSite",
-   "@id": "https://lordkukone.github.io/kukia-node/#sitio",
-   "url": "https://lordkukone.github.io/kukia-node/",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
    "name": "KUKIA Network",
    "alternateName": "KUKIA",
    "inLanguage": "es",
    "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
    "publisher": {
-    "@id": "https://lordkukone.github.io/kukia-node/#organizacion"
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion"
    }
   },
   {
    "@type": "Organization",
-   "@id": "https://lordkukone.github.io/kukia-node/#organizacion",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion",
    "name": "KUKIA Network",
-   "url": "https://lordkukone.github.io/kukia-node/",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
    "logo": {
     "@type": "ImageObject",
-    "url": "https://lordkukone.github.io/kukia-node/moneda.jpg",
+    "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg",
     "width": 512,
     "height": 512
    }
   },
   {
    "@type": "WebPage",
-   "@id": "https://lordkukone.github.io/kukia-node/#pagina",
-   "url": "https://lordkukone.github.io/kukia-node/",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#pagina",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
    "name": "KUKIA · Convierte potencia de cálculo en trabajo útil para la IA",
    "description": "KUKIA conecta ordenadores con CPU y GPU para ejecutar tareas de computación verificables. Los participantes reciben KIA por trabajo aceptado. Proyecto en fase de pruebas: KIA todavía no tiene precio de mercado.",
    "inLanguage": "es",
    "isPartOf": {
-    "@id": "https://lordkukone.github.io/kukia-node/#sitio"
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio"
    }
   }
  ]
@@ -452,6 +455,46 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
 <!-- /kukia-seo -->
 </head>
 <body>
+<!-- AVISO DE ARRANQUE (26-10-2026). Si el JavaScript no corre -porque el
+     navegador lo tiene desactivado, porque una extension o un antivirus corta
+     los programas, o porque la copia que llega es vieja y esta rota- la pagina se
+     queda sin video y con botones muertos, y el visitante cree que la web no
+     funciona. Nadie sabe por que. Este aviso esta VISIBLE por defecto y lo
+     esconde el primer script SOLO si de verdad ha arrancado: asi, cuando algo
+     falla, lo dice la propia pagina en vez de quedarse muda. -->
+<div id="kukiaAvisoArranque" style="position:fixed;left:12px;right:12px;bottom:12px;z-index:9999;max-width:660px;margin:0 auto;background:#1a1206;border:1px solid #b8860b;border-radius:10px;padding:.85rem .95rem;color:#f3e6c8;font:14px/1.45 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.45)">
+  <p style="margin:0 0 .4rem"><b>Esta página no ha arrancado bien en este navegador.</b></p>
+  <p id="kukiaAvisoDetalle" style="margin:0 0 .5rem;font-size:12.5px;color:#cbb994">Por eso no se ve el vídeo y los botones no responden. Lo normal: el JavaScript está bloqueado, una extensión o un antivirus corta los programas, o el navegador está sirviendo una copia vieja de la web.</p>
+  <p style="margin:0"><a href="estado.html" style="color:#ffd478;font-weight:600;text-decoration:underline">Comprobar y reparar ahora</a> &nbsp;·&nbsp; <button type="button" id="kukiaAvisoCerrar" style="background:transparent;border:1px solid #b8860b;color:#f3e6c8;border-radius:6px;padding:.15rem .55rem;cursor:pointer;font:inherit">Cerrar</button></p>
+</div>
+<script>
+/* Este es el unico script que se permite el lujo de correr antes que nada: si
+   arranca, el aviso de arriba se esconde. Si mas adelante un script falla, o si
+   los programas no acaban de arrancar en 4 s, el aviso VUELVE con el motivo. */
+(function(){
+  var av = document.getElementById('kukiaAvisoArranque');
+  if(!av) return;
+  function mostrar(detalle){
+    if(detalle){ var d = document.getElementById('kukiaAvisoDetalle'); if(d) d.textContent = detalle; }
+    av.style.display = 'block';
+  }
+  window.KUKIA_AVISO = mostrar;
+  var cerrar = document.getElementById('kukiaAvisoCerrar');
+  if(cerrar) cerrar.addEventListener('click', function(){ av.style.display = 'none'; });
+  av.style.display = 'none';
+  window.addEventListener('error', function(e){
+    var m = (e && (e.message || (e.target && (e.target.src || e.target.href)))) || '';
+    if(!m) return;
+    mostrar('La página ha fallado al cargar: ' + String(m).slice(0, 240));
+  }, true);
+  setTimeout(function(){
+    if(window.KUKIA_OK !== true){
+      mostrar('Los programas de la página no han terminado de arrancar. Por eso no sale el vídeo y los botones no hacen nada.');
+    }
+  }, 4000);
+})();
+</script>
+
 <a class="salto" href="#que-es">Saltar al contenido</a>
 
 <header class="barra">
@@ -486,9 +529,16 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
   <video class="video-fondo" id="videoPortada" muted loop playsinline
          preload="none" poster="portada.jpg" aria-hidden="true" tabindex="-1"
          disablepictureinpicture disableremoteplayback>
-    <!-- 419 KB en vez de 1.828: 560x560 sin audio, con el color ya ajustado. Es
-         un fondo al 34 %, no necesita mas. El original sigue en la carpeta. -->
-    <source src="promo_web_lite.mp4" type="video/mp4">
+    <!-- UNA SOLA FUENTE, y con sonido (580 KB, 560x560 + pista AAC).
+         26-10-2026: aqui habia una segunda fuente, promo_web_lite.mp4, que NO
+         tiene pista de audio. Si el navegador fallaba al cargar la primera,
+         caia a esa y el boton de sonido se quedaba sin nada que sonar: el
+         video se veia y no se oia, sin decir por que. Como las dos son el mismo
+         H.264, la segunda no aportaba compatibilidad: solo esa trampa. Queda el
+         fichero original __sin__ audio en la carpeta, por si hiciera falta.
+         El video arranca callado a proposito (ningun navegador deja sonar solo
+         un video); el sonido se enciende con el boton "Con sonido". -->
+    <source src="promo_web_sonido.mp4" type="video/mp4">
   </video>
   <div class="velo" aria-hidden="true"></div>
   <div class="dentro">
@@ -515,6 +565,20 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
         <button class="btn btn-secundario btn-pequeno" id="frenoFondo" type="button"
                 aria-pressed="false" title="Para el vídeo y la animación de esta página: útil si el equipo está minando">
           <span aria-hidden="true" id="frenoIcono">⏸</span>&nbsp;<span id="frenoTexto">Pausar animación</span>
+        </button>
+        <!-- 26-10-2026: salida para el que quiera ver el video aunque el
+             navegador no lo reproduzca solo (movil, ahorro de datos,
+             animaciones reducidas o autoplay bloqueado). Si no se pulsa, no
+             se baja ni un byte del video. -->
+        <button class="btn btn-secundario btn-pequeno" id="verVideo" type="button" hidden
+                aria-label="Ver el vídeo de presentación de KUKIA"
+                title="Este equipo no lo reproduce solo (pantalla pequeña, ahorro de datos o animaciones reducidas). Púlsalo para verlo.">
+          <span aria-hidden="true">&#9654;</span>&nbsp;Ver el vídeo
+        </button>
+        <!-- El video arranca callado (si no, no arrancaria). Aqui se enciende. -->
+        <button class="btn btn-secundario btn-pequeno" id="sonidoVideo" type="button"
+                aria-pressed="false" title="Encender el sonido del vídeo (arranca callado: ningún navegador deja sonar solo un vídeo)">
+          <span aria-hidden="true" id="sonidoIcono">&#128266;</span>&nbsp;<span id="sonidoTexto">Con sonido</span>
         </button>
       </div>
       <div class="mini">
@@ -1042,6 +1106,16 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
         </p>
       </div>
       <div>
+        <h4>¿La ves mal?</h4>
+        <p style="font-size:.84rem;max-width:38ch;margin-bottom:.4rem">
+          Si no sale el vídeo, faltan imágenes o los botones no responden, esta
+          página lo comprueba y lo repara en un toque.
+        </p>
+        <ul>
+          <li><a href="estado.html">Comprobar y reparar</a></li>
+        </ul>
+      </div>
+      <div>
         <h4>Participar</h4>
         <ul>
           <li><a href="minar.html">Minar</a></li>
@@ -1071,7 +1145,9 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
     </div>
     <div class="legal">
       <span>KUKIA · KIA no tiene precio de mercado. Proyecto en fase de pruebas. Sin auditoría de seguridad independiente.</span>
-      <span>Última versión de esta página: <span id="verWeb">—</span> · Los datos de la red se leen de sus endpoints públicos.</span>
+      <span>Última versión de esta página: <span id="verWeb">v1.3.20-video-siempre</span>
+        · <a id="verCommit" href="https://github.com/lordkukone/kukia-node/commit/f36a30998737f719e46c459b6702f5d14260bdf6" target="_blank" rel="noopener">commit f36a309 (sin confirmar)</a>
+        · Los datos de la red se leen de sus endpoints públicos.</span>
     </div>
   </div>
 </footer>
@@ -1918,16 +1994,26 @@ if (io) {
   var dot=document.getElementById('liveDot'), txt=document.getElementById('liveText'),
       modo=document.getElementById('liveModo');
   if(!modo) return;
+  // 26-10-2026: esta funcion escribia en el DOM SIEMPRE, aunque el valor fuese
+  // el mismo, y el observador de abajo vigilaba el body entero: cada escritura
+  // volvia a despertar a pintar(), que volvia a escribir... en bucle sin fin.
+  // El navegador se quedaba sin poder pintar (la portada "no cargaba": a medias
+  // o en blanco, y en Firefox ni acababa de cargar). Ahora solo escribe si el
+  // valor CAMBIA, y el observador vigila solo el texto que se lee.
+  var ultimo='';
   function pintar(){
-    var t=((txt&&txt.textContent)||'').toUpperCase();
-    if(t.indexOf('EN VIVO')===0){ modo.textContent='datos en vivo'; modo.className='modo vivo'; }
-    else if(t.indexOf('INSTANTANEA')===0){ modo.textContent='instantánea firmada'; modo.className='modo cache'; }
-    else if(t.indexOf('ANTIGUOS')>=0){ modo.textContent='copia guardada'; modo.className='modo cache'; }
-    else if(t.indexOf('DESCONECTADO')>=0){ modo.textContent='sin datos'; modo.className='modo'; }
-    else { modo.textContent='comprobando…'; modo.className='modo'; }
+    var t=((txt&&txt.textContent)||'').toUpperCase(), m, c;
+    if(t.indexOf('EN VIVO')===0){ m='datos en vivo'; c='modo vivo'; }
+    else if(t.indexOf('INSTANTANEA')===0){ m='instantánea firmada'; c='modo cache'; }
+    else if(t.indexOf('ANTIGUOS')>=0){ m='copia guardada'; c='modo cache'; }
+    else if(t.indexOf('DESCONECTADO')>=0){ m='sin datos'; c='modo'; }
+    else { m='comprobando…'; c='modo'; }
+    if(m===ultimo) return;
+    ultimo=m;
+    modo.textContent=m; modo.className=c;
   }
-  if(window.MutationObserver){
-    new MutationObserver(pintar).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['style']});
+  if(window.MutationObserver && txt){
+    new MutationObserver(pintar).observe(txt,{subtree:true,childList:true,characterData:true});
   }
   setInterval(pintar,1500); pintar();
 })();
@@ -2112,12 +2198,13 @@ if (io) {
    bonito no puede costar medio segundo en un movil con datos:
      1) "reducir movimiento" activado en el sistema -> se queda el poster.
      2) ahorro de datos o red 2G -> poster.
-     3) pantalla de movil (<720 px) -> poster: ahi el texto manda.
+     3) pantalla de movil (<720 px) -> poster, pero CON BOTON para verlo.
      4) pestaña en segundo plano o portada fuera de pantalla -> no reproduce.
    Con el HTML se baja CERO bytes de video: `preload="none"` se cambia a "auto"
    solo cuando la portada entra en pantalla y pasa los filtros de arriba. */
 (function(){
   var v=document.getElementById('videoPortada'); if(!v) return;
+  var btn=document.getElementById('verVideo');
   function quedarse(){ v.setAttribute('data-modo','poster'); }
   var reducido=false;
   try{ reducido=window.matchMedia('(prefers-reduced-motion: reduce)').matches; }catch(e){}
@@ -2130,39 +2217,161 @@ if (io) {
     if(e.detail && e.detail.activo){ quiere(); }
     else { try{ v.pause(); }catch(err){} v.setAttribute('data-modo','poster'); }
   });
-  // Estos tres son frenos definitivos: ahi no hay video, punto.
-  if(reducido||ahorro||window.innerWidth<720){ quedarse(); return; }
+  // Frenos automaticos: YA NO cortan el script. Solo deciden si el video
+  // arranca solo. Si frenan, el visitante tiene el boton "Ver el video" y
+  // hasta que lo pulse no se baja ni un byte: se mantiene el ahorro, y el que
+  // quiera verlo puede. Antes, con pantalla de movil (<720 px) o con "reducir
+  // movimiento", el script salia aqui y el video no se veia NUNCA, ni con el
+  // boton de reanudar la animacion: el vigilante de pantalla no llegaba a
+  // montarse. Arreglado el 26-10-2026 (3).
+  var automatico = !(reducido||ahorro||window.innerWidth<720);
+  var forzado = false;   // lo ha pedido el visitante a mano
+  var rechazado = false; // el navegador ha dicho que no al autoplay
+  var trasCambio = false; // la ventana ha cambiado de tamano en esta visita
+  window.addEventListener('resize', function(){
+    automatico = !(reducido||ahorro||window.innerWidth<720);
+    // Girar el movil a horizontal pasa de 720 px: si no se marca esto, el
+    // video arrancaria solo y se bajaria los 419 KB por haber girado el
+    // telefono, que no es pedirlo. A partir de aqui lo pide el visitante.
+    trasCambio = true;
+    quiere();
+  });
   var pedido=false, visible=false;
+
+  // El boton esta para el caso en que el navegador no pone el video solo:
+  // pantalla pequeña, ahorro de datos o animaciones reducidas. No depende del
+  // vigilante de pantalla (ese solo avisa cuando la pestaña se esta viendo, y
+  // mientras tanto el boton tiene que estar): depende de los frenos.
+  function ajustaBoton(){
+    if(!btn) return;
+    var parado = window.KUKIA_FONDO_ACTIVO === false;  // lo ha parado el visitante
+    var reproduciendo = v.getAttribute('data-modo') === 'video';
+    // 26-10-2026: aqui estaba "parado ||" al principio y, con el freno de la
+    // portada puesto (el que se guarda para los PCs que estan minando), el
+    // boton "Ver el video" DESAPARECIA: el visitante solo veia la foto y el
+    // video no habia forma de verlo ni de oirlo. Ahora el boton se ofrece
+    // siempre que el video no este reproduciendo; si lo pulsan, el freno se
+    // quita (para eso lo han pulsado).
+    btn.hidden = reproduciendo || ((automatico && !trasCambio) && !forzado && !rechazado);
+  }
+
   function quiere(){
     // El freno del boton sí se puede quitar: por eso este se comprueba aqui y
     // no se sale antes (el observador tiene que quedar montado para reanudar).
-    if(window.KUKIA_FONDO_ACTIVO === false){ try{ v.pause(); }catch(e){} quedarse(); return; }
-    var on=visible && !document.hidden;
+    if(window.KUKIA_FONDO_ACTIVO === false){ try{ v.pause(); }catch(e){} quedarse(); ajustaBoton(); return; }
+    var on=((automatico && !trasCambio) || forzado) && visible && !document.hidden;
     if(on){
-      if(!pedido){ pedido=true; v.preload='auto'; v.load(); }
+      // OJO (26-10-2026): aqui habia un v.load(). load() reinicia la carga y
+      // ABORTA la reproduccion que se acaba de pedir, asi que el video se
+      // quedaba clavado en el poster: se veia fijo y sin sonido, y sin decir
+      // por que. Con preload='auto' basta: play() carga el fichero si hace
+      // falta, sin tirar la reproduccion.
+      if(!pedido){ pedido=true; v.preload='auto'; }
       var p=v.play();
       // Solo se marca "video" cuando de verdad esta reproduciendo: hasta
       // entonces (y si el navegador lo bloquea) manda el poster, que se ve.
-      if(p&&p.then){ p.then(function(){ v.setAttribute('data-modo','video'); })
-                      .catch(function(){ v.setAttribute('data-modo','poster'); }); }
-      else { v.setAttribute('data-modo','video'); }
+      if(p&&p.then){ p.then(function(){ v.setAttribute('data-modo','video'); ajustaBoton(); })
+                      .catch(function(){ rechazado=true; v.setAttribute('data-modo','poster'); ajustaBoton(); }); }
+      else { v.setAttribute('data-modo','video'); ajustaBoton(); }
     } else {
+      // Parado (fuera de pantalla, pestaña de fondo o freno de pantalla pequena):
+      // se marca como poster para que el boton vuelva a ofrecerse. Si estaba
+      // reproduciendo y se para por esto, el boton no se quedaba: ese era el
+      // ultimo cabo suelto (26-10-2026).
       try{ v.pause(); }catch(e){}
+      quedarse();
+      ajustaBoton();
     }
   }
+  // 26-10-2026: "Ver el video" solo ponia la imagen; el sonido estaba en otro
+  // boton y mucha gente se quedaba sin oirlo. Como este es un toque de verdad
+  // del visitante, el navegador SI deja sonar: se enciende tambien el sonido y
+  // el boton de al lado cambia solo a "Sin sonido" (escucha volumechange).
+  function pedirVideo(){
+    forzado=true;
+    // Si el freno de la portada estaba puesto, ver el video es pedir que se
+    // reanude: se quita aqui, igual que hace el boton de sonido.
+    if(window.KUKIA_FONDO_ACTIVO === false){
+      var freno = document.getElementById('frenoFondo');
+      if(freno) freno.click();
+    }
+    if(v.muted){
+      try{ v.volume=1; }catch(e){}
+      v.muted=false;
+    }
+    quiere();
+  }
+  if(btn){ btn.addEventListener('click', pedirVideo); }
+  document.addEventListener('kukia-ver-video', pedirVideo);
   if('IntersectionObserver' in window){
     new IntersectionObserver(function(es){
       visible=!!(es[0]&&es[0].isIntersecting); quiere();
     },{threshold:0.05}).observe(v);
   } else { visible=true; quiere(); }
   document.addEventListener('visibilitychange', quiere);
+  quiere();
+  ajustaBoton();
 })();
 </script>
 <script>
-/* Version publicada de la web (la misma que usa el guardia anti-cache). */
+/* Sonido del video de la portada (26-10-2026).
+   Por que un boton y no suena y ya: ningun navegador deja sonar solo un video.
+   Si se le quitara el silencio al elemento, no arrancaria NUNCA, ni en PC: el
+   navegador lo bloquearia entero. Asi que el video arranca callado y el sonido
+   va a un boton, que es un toque de verdad del visitante y si autoriza el audio.
+   Y si el video estaba parado (movil, ventana estrecha o el freno puesto), al
+   encender el sonido se pide tambien que empiece: es lo que espera quien pulsa. */
+(function(){
+  var v=document.getElementById('videoPortada');
+  var b=document.getElementById('sonidoVideo');
+  if(!v||!b) return;
+  var ic=document.getElementById('sonidoIcono'), tx=document.getElementById('sonidoTexto');
+  var ALTO=String.fromCodePoint(128266), BAJO=String.fromCodePoint(128263);
+  function pinta(){
+    var con=!v.muted;
+    b.setAttribute('aria-pressed', con?'true':'false');
+    if(ic) ic.textContent = con ? BAJO : ALTO;   // el icono dice lo que HARA el boton
+    if(tx) tx.textContent = con ? 'Sin sonido' : 'Con sonido';
+    b.title = con ? 'Silenciar el video' : 'Encender el sonido del video (arranca callado)';
+  }
+  b.addEventListener('click', function(){
+    v.muted = !v.muted;
+    if(!v.muted){
+      try{ v.volume = 1; }catch(e){}
+      // Si el fondo estaba EN PAUSA (movil, ventana estrecha o el freno
+      // puesto), encender el sonido es pedir que se vea: se quita el freno.
+      if(window.KUKIA_FONDO_ACTIVO === false){
+        var freno = document.getElementById('frenoFondo');
+        if(freno) freno.click();
+      }
+      // Intencion de verlo: asi no se vuelve a parar solo en la siguiente
+      // reevaluacion (ventana estrecha, giro del movil, vuelta a la pestana).
+      document.dispatchEvent(new CustomEvent('kukia-ver-video'));
+      var p = v.play();
+      if(p && p.then) p.then(function(){ v.setAttribute('data-modo','video'); }).catch(function(){});
+      else v.setAttribute('data-modo','video');
+    }
+    pinta();
+  });
+  v.addEventListener('volumechange', pinta);
+  pinta();
+})();
+</script>
+<script>
+/* Version publicada de la web (la misma que usa el guardia anti-cache). Este es
+   el ULTIMO script de la pagina: si llega hasta aqui, es que todos los demas se
+   han ejecutado, y es lo que apaga el aviso de arranque de arriba. */
+window.KUKIA_OK = true;
 (function(){
   fetch('version.json?_='+Date.now(),{cache:'no-store'}).then(function(r){return r.ok?r.json():null;})
-    .then(function(v){ var e=document.getElementById('verWeb'); if(e&&v&&v.v) e.textContent=v.v; })
+    .then(function(v){
+      var e=document.getElementById('verWeb'); if(e&&v&&v.v) e.textContent=v.v;
+      var c=document.getElementById('verCommit');
+      if(c&&v&&v.commit_corto){
+        c.textContent='commit '+v.commit_corto+(v.sucio?' (sin confirmar)':'');
+        if(v.commit_url) c.href=v.commit_url;
+      }
+    })
     .catch(function(){});
 })();
 </script>

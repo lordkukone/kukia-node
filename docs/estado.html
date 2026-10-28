@@ -47,56 +47,58 @@
   a{color:var(--mint)}
   .sinscript{border:1px solid var(--rojo);border-radius:12px;padding:1rem;margin:1rem 0}
 </style>
+
+<link rel="canonical" href="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/estado">
 <!-- kukia-seo -->
 <meta name="robots" content="noindex,follow">
 <meta name="google-site-verification" content="9d6cb22812b81092">
 <meta property="og:type" content="article">
 <meta property="og:site_name" content="KUKIA Network">
 <meta property="og:locale" content="es_ES">
-<meta property="og:url" content="https://lordkukone.github.io/kukia-node/estado">
+<meta property="og:url" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/estado">
 <meta property="og:title" content="KUKIA · qué falla en tu navegador">
 <meta property="og:description" content="">
-<meta property="og:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta property="og:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="KUKIA · qué falla en tu navegador">
 <meta name="twitter:description" content="">
-<meta name="twitter:image" content="https://lordkukone.github.io/kukia-node/moneda.jpg">
+<meta name="twitter:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
 <script type="application/ld+json">
 {
  "@context": "https://schema.org",
  "@graph": [
   {
    "@type": "WebSite",
-   "@id": "https://lordkukone.github.io/kukia-node/#sitio",
-   "url": "https://lordkukone.github.io/kukia-node/",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
    "name": "KUKIA Network",
    "alternateName": "KUKIA",
    "inLanguage": "es",
    "description": "Red descentralizada de computo GPU: conecta tu grafica y gana KIA por trabajo verificado.",
    "publisher": {
-    "@id": "https://lordkukone.github.io/kukia-node/#organizacion"
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion"
    }
   },
   {
    "@type": "Organization",
-   "@id": "https://lordkukone.github.io/kukia-node/#organizacion",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#organizacion",
    "name": "KUKIA Network",
-   "url": "https://lordkukone.github.io/kukia-node/",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/",
    "logo": {
     "@type": "ImageObject",
-    "url": "https://lordkukone.github.io/kukia-node/moneda.jpg",
+    "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg",
     "width": 512,
     "height": 512
    }
   },
   {
    "@type": "WebPage",
-   "@id": "https://lordkukone.github.io/kukia-node/estado#pagina",
-   "url": "https://lordkukone.github.io/kukia-node/estado",
+   "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/estado#pagina",
+   "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/estado",
    "name": "KUKIA · qué falla en tu navegador",
    "inLanguage": "es",
    "isPartOf": {
-    "@id": "https://lordkukone.github.io/kukia-node/#sitio"
+    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/#sitio"
    }
   }
  ]
@@ -162,9 +164,46 @@
     return (seg / 86400).toFixed(0) + ' dias';
   }
 
-  function versionMia(){
-    var m = document.querySelector('meta[name="kukia-build"]');
-    return m ? m.getAttribute('content') : '';
+  // Lo que se comprueba es LA PORTADA, no esta pagina: aqui no hay ni video ni
+  // sellos, asi que mirarse a si misma daria fallos falsos (y el primer intento
+  // de esta pagina los daba: decia "no declara su version" y "no ha cargado
+  // nacl" hablando de si misma). Se lee el HTML de la portada tal y como lo
+  // sirve el dominio y se prueba con su mismo hash de integridad.
+  function datoDeLaPortada(html, nombre){
+    var etiquetas = html.match(/<meta[^>]*>/gi) || [];
+    if(nombre === 'kukia-build'){
+      for(var i = 0; i < etiquetas.length; i++){
+        if(/name=["']kukia-build["']/i.test(etiquetas[i])){
+          var v = /content=["']([^"']*)["']/i.exec(etiquetas[i]);
+          if(v) return v[1];
+        }
+      }
+      return '';
+    }
+    var scripts = html.match(/<script[^>]*>/gi) || [];
+    for(var j = 0; j < scripts.length; j++){
+      if(scripts[j].indexOf(nombre) < 0) continue;
+      var s = /src=["']([^"']*)["']/i.exec(scripts[j]);
+      var g = /integrity=["']([^"']*)["']/i.exec(scripts[j]);
+      return { src: s ? s[1] : '', integrity: g ? g[1] : '' };
+    }
+    return null;
+  }
+
+  function probarScript(src, integrity){
+    // Se carga de verdad, con el MISMO hash que pide la portada: si el
+    // navegador tiene otra copia del fichero, aqui salta igual que alli.
+    return new Promise(function(res){
+      var s = document.createElement('script');
+      s.src = src;
+      if(integrity) s.integrity = integrity;
+      var terminado = false;
+      function fin(r){ if(!terminado){ terminado = true; res(r); } }
+      s.onload = function(){ fin('cargado'); };
+      s.onerror = function(){ fin('bloqueado'); };
+      document.head.appendChild(s);
+      setTimeout(function(){ fin('sin-respuesta'); }, 10000);
+    });
   }
 
   function pintarVeredicto(){
@@ -185,38 +224,148 @@
       'KUKIA · informe desde ' + location.href + '\n' + salida.join('\n');
   }
 
-  function ejecutar(){
-    // 1. La copia que te ha llegado
-    var mio = versionMia();
-    linea(mio ? 'ok' : 'mal', 'Copias que te ha llegado la web: ' + (mio || 'no lo dice'),
-          mio ? 'puede estar guardada en tu navegador y ser vieja; se comprueba en el punto 2'
-              : 'la pagina no declara su version: es una copia vieja de hace semanas');
+  // Llega o no llega a una direccion (no-cors: solo interesa si responde).
+  function alcanza(url){
+    return fetch(url, {mode:'no-cors', cache:'no-store'})
+      .then(function(){ return true; })
+      .catch(function(){ return false; });
+  }
 
-    // 2. La copia de verdad
-    fetch('version.json?_=' + Date.now(), {cache:'no-store'})
-      .then(function(r){ return r.ok ? r.json() : null; })
-      .then(function(v){
-        var publicado = v && v.v ? v.v : '';
-        if(!publicado){ ojo('version.json', 'El servidor no dice que version publica',
-                            'no se pudo leer version.json en este dominio'); }
-        else if(!mio){ /* ya avisado arriba */ }
-        else if(publicado === mio){ bien('Tu copia esta al dia', 'servidor y navegador dicen ' + mio); }
-        else { muda('copia-vieja', 'Tu navegador tiene una copia VIEJA de la web',
-                    'la tuya dice ' + mio + ' y el servidor publica ' + publicado +
-                    '.\nLo arregla el boton Reparar ahora.'); }
-
-        // 3. El fichero con hash de integridad (lo que dejaba la web sin datos)
-        var tieneNacl = (typeof window.nacl !== 'undefined' && window.nacl && window.nacl.sign);
-        if(tieneNacl){ bien('El verificador de sellos (nacl) esta cargado'); }
-        else {
-          muda('nacl', 'El navegador NO ha cargado nacl.min.js',
-               'Sin el no se pueden verificar los sellos y la portada se queda en DESCONECTADO sin datos.' +
-               '\nCausa habitual: tiene guardada una copia vieja de ese fichero y el hash de seguridad no cuadra' +
-               ' (el navegador lo bloquea en silencio).\nMira la consola: "Failed to find a valid digest ...".' +
-               '\nLo arregla el boton Reparar ahora.');
+  // Que copia te da TU navegador y a que direcciones llegas. Esto es lo que
+  // separa "la web esta mal" de "tu navegador tiene copia vieja o no llega
+  // al dominio", que es lo que pasa cuando en un navegador si y en otro no.
+  function comprobarCopiaYAlcance(){
+    return fetch('./', {cache:'default'})
+      .then(function(r){ return r.ok ? r.text() : ''; })
+      .catch(function(){ return ''; })
+      .then(function(propia){
+        var mia = datoDeLaPortada(propia, 'kukia-build');
+        return fetch('./?_copia=' + Date.now(), {cache:'no-store'})
+          .then(function(r){ return r.ok ? r.text() : ''; })
+          .catch(function(){ return ''; })
+          .then(function(servidor){
+            var suya = datoDeLaPortada(servidor, 'kukia-build');
+            if(mia && suya && mia === suya){
+              bien('Tu navegador te da la misma copia que el servidor', mia);
+            } else if(mia && suya){
+              muda('copia-guardada', 'Tu navegador te está dando una COPIA VIEJA',
+                   'tu copia dice ' + mia + ' y el servidor tiene ' + suya +
+                   '.\nEste es EXACTAMENTE el fallo de "en unos navegadores sí y en otros no":' +
+                   ' la copia nueva está en el servidor y no te llega.\nLo arregla el boton Reparar ahora.');
+            } else if(suya && !mia){
+              muda('copia-sin-version', 'La portada que te llega no declara su version',
+                   'el servidor tiene ' + suya + ' y a ti te llega un HTML de hace semanas.\n' +
+                   'Lo arregla el boton Reparar ahora.');
+            } else {
+              ojo('copia', 'No se ha podido leer la version de la portada',
+                  'ni de tu copia ni del servidor');
+            }
+            return null;
+          });
+      })
+      .then(function(){
+        if(navigator.serviceWorker && navigator.serviceWorker.controller){
+          muda('controlador', 'Un service worker viejo está sirviendo TU copia de la web',
+               'mientras ese worker siga controlando la pagina, el HTML que ves lo pone el, no el servidor.\n' +
+               'Lo arregla el boton Reparar ahora (lo retira y borra su copia).');
+        } else {
+          bien('Ningun worker viejo controlando esta pagina');
         }
+        return fetch('metricas.json?_=' + Date.now(), {cache:'no-store'})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .catch(function(){ return null; });
+      })
+      .then(function(cfg){
+        var relé = (cfg && cfg.api) ? String(cfg.api).replace(/\/+$/, '') : '';
+        // El nombre de cada copia dice el dominio DE VERDAD: asi la pagina
+        // sirve tambien desde la copia de GitHub, no solo desde surge.
+        var sitios = [
+          ['esta web (' + location.hostname + ')', location.origin + '/version.json'],
+          ['surge.sh', 'https://kukia-network.surge.sh/version.json'],
+          ['GitHub Pages', 'https://lordkukone.github.io/kukia-node/version.json']
+        ];
+        if(relé) sitios.push(['el relevo de datos', relé + '/api/metricas']);
+        return Promise.all(sitios.map(function(p){
+          return alcanza(p[1] + '?_=' + Date.now()).then(function(ok){
+            return { nombre: p[0], ok: ok };
+          });
+        }));
+      })
+      .then(function(res){
+        if(!res) return null;
+        var abajo = res.filter(function(x){ return !x.ok; }).map(function(x){ return x.nombre; });
+        var arriba = res.filter(function(x){ return x.ok; }).map(function(x){ return x.nombre; });
+        if(!abajo.length){
+          bien('Llegas a todo lo que la web necesita', arriba.join(' · '));
+        } else {
+          ojo('alcance', 'Tu navegador NO llega a: ' + abajo.join(', '),
+              'si llega a: ' + (arriba.join(', ') || 'nada') +
+              '\nSi aquí no llega a casi nada, el problema es tu red o tu filtro DNS' +
+              ' (VPN, bloqueador de anuncios, DNS con filtro o cortafuegos), no la web.' +
+              '\nPrueba en el movil con datos moviles en vez del wifi, o al reves, y compara.');
+        }
+        return null;
+      })
+      .catch(function(){});
+  }
 
-        // 4. Service workers y caches
+  function ejecutar(){
+    // 0. Antes que nada: tu copia contra la del servidor, y tu alcance.
+    comprobarCopiaYAlcance()
+      .then(function(){ return null; })
+      .catch(function(){ return null; });
+    // 1. y 2. La portada que sirve el dominio, y si cuadra con version.json
+    fetch('./?_=' + Date.now(), {cache:'no-store'})
+      .then(function(r){ return r.ok ? r.text() : null; })
+      .then(function(html){
+        if(!html){
+          muda('portada', 'No se ha podido leer la portada de este dominio',
+               'la direccion ./ no devuelve HTML');
+          return null;
+        }
+        var version = datoDeLaPortada(html, 'kukia-build');
+        return fetch('version.json?_=' + Date.now(), {cache:'no-store'})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(v){
+            var publicado = (v && v.v) ? v.v : '';
+            if(!version){
+              ojo('portada-sin-version', 'La portada que sirve el dominio no declara su version',
+                  'es un HTML viejo (de antes de que la web llevara sello de version)');
+            } else if(!publicado){
+              ojo('version.json', 'El servidor no dice que version publica',
+                  'no se pudo leer version.json en este dominio');
+            } else if(version === publicado){
+              bien('La portada que sirve este dominio esta al dia', version);
+            } else {
+              ojo('desincronia', 'La portada y version.json no dicen lo mismo',
+                  'portada ' + version + ' · version.json ' + publicado +
+                  ' (no impide que la web funcione: solo avisa de una publicacion a medias)');
+            }
+            // 3. El fichero con hash de integridad, cargado como lo carga la
+            //    portada. Es lo que dejaba la web sin datos en GitHub Pages.
+            var naclTag = datoDeLaPortada(html, 'nacl.min.js');
+            if(!naclTag || !naclTag.src){
+              ojo('nacl', 'La portada no pide nacl.min.js', 'no aparece en su HTML');
+              return null;
+            }
+            return probarScript(naclTag.src, naclTag.integrity).then(function(estado){
+              if(estado === 'cargado'){
+                bien('nacl.min.js se carga con su hash de seguridad', naclTag.src +
+                     (naclTag.integrity ? ' · ' + naclTag.integrity.slice(0, 22) + '…' : ' · SIN hash'));
+              } else {
+                muda('nacl', 'El navegador NO puede cargar nacl.min.js (' + estado + ')',
+                     'Sin ese fichero no se pueden verificar los sellos y la portada se queda en' +
+                     ' DESCONECTADO, sin datos.\nCausa habitual: el navegador tiene guardada una copia' +
+                     ' vieja del fichero y el hash de seguridad no cuadra, asi que lo bloquea en silencio.' +
+                     '\nEn la consola sale: "Failed to find a valid digest in the \'integrity\' attribute".' +
+                     '\nLo arregla el boton Reparar ahora.');
+              }
+              return null;
+            });
+          });
+      })
+      .then(function(){
+        // 4. Service workers y caches (lo que le pasa a ESTE navegador)
         return navigator.serviceWorker && navigator.serviceWorker.getRegistrations
           ? navigator.serviceWorker.getRegistrations() : [];
       })
