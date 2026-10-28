@@ -1704,6 +1704,14 @@ from starlette.requests import Request as StarRequest
 
 # AUDITORIA: antes era un unico contador por IP compartido por las 5 rutas:
 # un minero que pedia trabajo y entregaba resultados se autobloqueaba (429).
+# AUDITORIA 2026-10-28 (A1): las dos rutas de auditoria recorren el ledger
+# entero (13-15 s de CPU con 930.000 asientos). Su resultado se reutiliza
+# durante AUDITORIA_TTL y solo un hilo lo recalcula; los demas reciben el
+# veredicto anterior, siempre marcado con su edad. El techo global impide que
+# muchas IPs (o IPs falsificadas) conviertan el limite por IP en decorativo.
+AUDITORIA_TTL = max(30.0, float(os.environ.get("KUKIA_AUDITORIA_TTL", "300")))
+LIMITE_GLOBAL_FACTOR = max(1, int(os.environ.get("KUKIA_LIMITE_GLOBAL_X", "3")))
+
 LIMITES_POR_RUTA = {
     "/registro": 30,
     "/nodos/registrar": 30,
@@ -1730,6 +1738,10 @@ LIMITES_POR_RUTA = {
     # 240/min deja sitio a varios validadores en el mismo Core sin abrir la
     # puerta a un bucle desbocado.
     "/validador/atestacion": 240,
+    # Auditoria publica: con la cache de 300 s, 6/min por IP sobra para
+    # comprobar el ledger y ya no permite amasar CPU.
+    "/ledger/verificar": 6,
+    "/ledger/integridad": 6,
 }
 RATE_WINDOW = 60.0
 _rate_hist = {}
@@ -1776,18 +1788,30 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarRequest, call_next):
         limite = LIMITES_POR_RUTA.get(request.url.path)
         if limite:
-            ip = request.client.host if request.client else "?"
-            clave = (ip, request.url.path)
+            # AUDITORIA 2026-10-28 (A2): la IP se saca con _ip_cliente(). Antes
+            # se usaba request.client.host, que detras del tunel es 127.0.0.1
+            # para TODO el mundo: los cupos eran uno solo para la red entera y
+            # un cliente podia dejar a todos los mineros con 429.
+            ip = _ip_cliente(request)
+            ruta = request.url.path
+            clave = (ip, ruta)
+            clave_global = ("*", ruta)
             ahora = time.time()
             with _rate_lock:
                 if len(_rate_hist) > 5000:      # AUDITORIA: no crecer sin freno
                     for k in [k for k, v in _rate_hist.items() if not v or ahora - v[-1] > RATE_WINDOW]:
                         _rate_hist.pop(k, None)
+                glob = [t for t in _rate_hist.get(clave_global, []) if ahora - t < RATE_WINDOW]
+                if len(glob) >= limite * LIMITE_GLOBAL_FACTOR:
+                    return JSONResponse({"detail": "demasiadas peticiones en la red, espera un minuto"},
+                                        status_code=429)
                 hist = [t for t in _rate_hist.get(clave, []) if ahora - t < RATE_WINDOW]
                 if len(hist) >= limite:
                     return JSONResponse({"detail": "demasiadas peticiones, espera un minuto"}, status_code=429)
                 hist.append(ahora)
+                glob.append(ahora)
                 _rate_hist[clave] = hist
+                _rate_hist[clave_global] = glob
         return await call_next(request)
 
 app.add_middleware(RateLimitMiddleware)
@@ -2110,10 +2134,13 @@ def _ip_cliente(req: Request) -> str:
     """
     host = (req.client.host if req.client else "") or ""
     if CONFIA_PROXY_LOCAL and host in ("127.0.0.1", "::1", "localhost"):
-        for cab in ("cf-connecting-ip", "x-forwarded-for"):
-            valor = (req.headers.get(cab) or "").split(",")[0].strip()
-            if valor:
-                return valor[:64]
+        # AUDITORIA 2026-10-28 (A2): NO se acepta X-Forwarded-For. Cloudflare lo
+        # reenvia con la IP real DELANTE de la cadena que mando el cliente, asi
+        # que su primer valor lo elige quien llama: con el se saltaba cualquier
+        # cupo. CF-Connecting-IP lo escribe el borde y no se hereda del cliente.
+        valor = (req.headers.get("cf-connecting-ip") or "").strip()
+        if valor:
+            return valor[:64]
     return (host or "desconocida")[:64]
 
 def _cupo_registro(ip: str, pub: str) -> None:
@@ -3126,13 +3153,54 @@ def tarea_replica(r: ReplicaIn):
 def ledger():
     return [dict(r) for r in con.execute("SELECT * FROM ledger ORDER BY id DESC LIMIT 200").fetchall()]
 
-@app.get("/ledger/verificar")
-def verificar_ledger():
-    """AUDITORIA: comprueba la cadena de hashes del ledger.
+# AUDITORIA 2026-10-28 (A1): cache con un solo calculo en vuelo.
+_auditoria_lock = threading.Lock()
+_auditoria_locks = {"verificar": threading.Lock(), "integridad": threading.Lock()}
+_auditoria_datos = {}
 
-    Devuelve los ids que no cuadran (alterados a mano en el .db). La cadena
-    empieza en el primer asiento que tiene hash (los anteriores, de versiones
-    sin encadenar, se ignoran)."""
+
+def _auditoria_cacheada(nombre: str, calcular):
+    """Devuelve (datos, ts_del_calculo, cacheado).
+
+    Si el veredicto tiene menos de AUDITORIA_TTL se sirve tal cual. Si toca
+    recalcular y ya hay otro hilo haciendolo, no se lanza un segundo recorrido
+    del ledger: se sirve el anterior (marcado como viejo por `_con_fecha`). Si
+    nunca se calculo, se espera al que esta en curso.
+    """
+    ahora = time.time()
+    with _auditoria_lock:
+        guardado = _auditoria_datos.get(nombre)
+        if guardado and ahora - guardado["ts"] < AUDITORIA_TTL:
+            return guardado["datos"], guardado["ts"], True
+        cerrojo = _auditoria_locks[nombre]
+    if not cerrojo.acquire(blocking=False):
+        with _auditoria_lock:
+            guardado = _auditoria_datos.get(nombre)
+        if guardado:
+            return guardado["datos"], guardado["ts"], True
+        cerrojo.acquire()
+    try:
+        with _auditoria_lock:
+            guardado = _auditoria_datos.get(nombre)
+            if guardado and time.time() - guardado["ts"] < AUDITORIA_TTL:
+                return guardado["datos"], guardado["ts"], True
+        datos = calcular()
+        ts = time.time()
+        with _auditoria_lock:
+            _auditoria_datos[nombre] = {"datos": datos, "ts": ts}
+        return datos, ts, False
+    finally:
+        cerrojo.release()
+
+
+def _con_fecha(datos: dict, ts: float, cacheado: bool) -> dict:
+    """Un resultado cacheado nunca se presenta como una verificacion recien hecha."""
+    return {**datos, "medido_en": time.ctime(ts),
+            "edad_s": round(time.time() - ts, 1), "cacheado": bool(cacheado)}
+
+
+def _verificar_ledger_ahora():
+    """Recorre la cadena entera. Cuesta 13-15 s con 900.000 asientos."""
     prev = ""
     n_hash = 0
     alterados = []
@@ -3148,6 +3216,22 @@ def verificar_ledger():
     return {"asientos": total, "encadenados": n_hash, "cadena_ok": not alterados,
             "ids_alterados": alterados[:20]}
 
+
+@app.get("/ledger/verificar")
+def verificar_ledger():
+    """AUDITORIA: comprueba la cadena de hashes del ledger. Publico y cacheado.
+
+    Devuelve los ids que no cuadran (alterados a mano en el .db). La cadena
+    empieza en el primer asiento que tiene hash (los anteriores, de versiones
+    sin encadenar, se ignoran).
+
+    AUDITORIA 2026-10-28 (A1): el veredicto se reutiliza durante AUDITORIA_TTL
+    (300 s por defecto) y solo un hilo lo recalcula. La respuesta lleva
+    `medido_en`, `edad_s` y `cacheado`, para que nadie confunda una foto con una
+    verificacion recien hecha."""
+    datos, ts, cacheado = _auditoria_cacheada("verificar", _verificar_ledger_ahora)
+    return _con_fecha(datos, ts, cacheado)
+
 @app.get("/ledger/sellos")
 def ledger_sellos(limite: int = 20):
     """Ultimos sellos firmados (publico). Fijan el historial sin confiar en el Core."""
@@ -3156,54 +3240,57 @@ def ledger_sellos(limite: int = 20):
     return {"clave_publica": _sello_pub, "total": len(sellos),
             "sellos": sellos[-limite:]}
 
-_integridad_cache = {"ts": 0.0, "datos": None}
+def _integridad_ahora():
+    """Cadena + sellos + si los pagos estan bloqueados (sin cache)."""
+    sellos = _sellos_leidos()
+    # 27-10-2026 (H-01, hipotesis de concurrencia): las lecturas van dentro
+    # de UNA transaccion de solo lectura. En WAL eso les da la MISMA foto del
+    # ledger; sin esto, un asiento que entra entre la pasada de la cadena y
+    # la de los sellos puede hacer que la respuesta mezcle dos estados. No
+    # frena a los escritores (WAL) y no cambia QUE se comprueba.
+    _en_tx = True
+    try:
+        con.execute("BEGIN")
+    except Exception:
+        _en_tx = False          # ya habia transaccion en este hilo: se sigue sin foto
+    try:
+        est = SELLOS.estado_ledger(con) if SELLOS else {}
+        cadena = (SELLOS.verificar_cadena_db(con) if SELLOS
+                  else {"ok": False, "ids_alterados": []})
+        # La cadena ya esta recorrida: verificar_sellos la reutiliza en vez
+        # de volver a pasar por el ledger entero.
+        r = (SELLOS.verificar_sellos(con, sellos, _sello_pub, cadena=cadena)
+             if SELLOS else {"ok": False, "problemas": []})
+    finally:
+        if _en_tx:
+            try:
+                con.execute("COMMIT")
+            except Exception:
+                try:
+                    con.execute("ROLLBACK")
+                except Exception:
+                    pass
+    return {
+        "cadena_ok": bool(cadena.get("ok")),
+        "ids_alterados": cadena.get("ids_alterados", [])[:20],
+        "asientos_vivos": int(est.get("asientos", 0)),
+        "sellos": len(sellos),
+        "ultimo_sello": sellos[-1] if sellos else None,
+        "sellos_ok": bool(r.get("ok")),
+        "problemas": (r.get("problemas") or [])[:20],
+        "pagos_bloqueados": LEDGER_ROTO,
+        "clave_publica": _sello_pub,
+    }
+
 
 @app.get("/ledger/integridad")
 def ledger_integridad():
-    """Cadena + sellos + si los pagos estan bloqueados (cacheado 30 s)."""
-    ahora = time.time()
-    if _integridad_cache["datos"] is None or ahora - _integridad_cache["ts"] > 30:
-        sellos = _sellos_leidos()
-        # 27-10-2026 (H-01, hipotesis de concurrencia): las lecturas van dentro
-        # de UNA transaccion de solo lectura. En WAL eso les da la MISMA foto del
-        # ledger; sin esto, un asiento que entra entre la pasada de la cadena y
-        # la de los sellos puede hacer que la respuesta mezcle dos estados. No
-        # frena a los escritores (WAL) y no cambia QUE se comprueba.
-        _en_tx = True
-        try:
-            con.execute("BEGIN")
-        except Exception:
-            _en_tx = False          # ya habia transaccion en este hilo: se sigue sin foto
-        try:
-            est = SELLOS.estado_ledger(con) if SELLOS else {}
-            cadena = (SELLOS.verificar_cadena_db(con) if SELLOS
-                      else {"ok": False, "ids_alterados": []})
-            # La cadena ya esta recorrida: verificar_sellos la reutiliza en vez
-            # de volver a pasar por el ledger entero.
-            r = (SELLOS.verificar_sellos(con, sellos, _sello_pub, cadena=cadena)
-                 if SELLOS else {"ok": False, "problemas": []})
-        finally:
-            if _en_tx:
-                try:
-                    con.execute("COMMIT")
-                except Exception:
-                    try:
-                        con.execute("ROLLBACK")
-                    except Exception:
-                        pass
-        _integridad_cache["datos"] = {
-            "cadena_ok": bool(cadena.get("ok")),
-            "ids_alterados": cadena.get("ids_alterados", [])[:20],
-            "asientos_vivos": int(est.get("asientos", 0)),
-            "sellos": len(sellos),
-            "ultimo_sello": sellos[-1] if sellos else None,
-            "sellos_ok": bool(r.get("ok")),
-            "problemas": (r.get("problemas") or [])[:20],
-            "pagos_bloqueados": LEDGER_ROTO,
-            "clave_publica": _sello_pub,
-        }
-        _integridad_cache["ts"] = ahora
-    return _integridad_cache["datos"]
+    """Cadena + sellos + si los pagos estan bloqueados (cacheado 300 s).
+
+    La respuesta lleva `medido_en`, `edad_s` y `cacheado`: un veredicto
+    reutilizado nunca se presenta como recien calculado."""
+    datos, ts, cacheado = _auditoria_cacheada("integridad", _integridad_ahora)
+    return _con_fecha(datos, ts, cacheado)
 
 # ============================================================
 #  DIFICULTAD ADAPTATIVA (potencia de LA RED KUKIA, no mundial)
@@ -4725,7 +4812,9 @@ def registro(r: RegistroIn, request: Request):
 
     AUDITORIA: antes el 'ref' se guardaba en la columna 'ip' y la IP real no
     se guardaba nunca. Ahora cada dato va a su columna."""
-    ip = request.client.host if request.client else ""
+    # AUDITORIA 2026-10-28 (A2): la IP real, no la del socket (que detras del
+    # tunel es 127.0.0.1 y dejaba todas las altas con la misma IP).
+    ip = _ip_cliente(request)
     with _escritura():
         con.execute("INSERT INTO registros(nombre,email,gpu,tops,ceder,ref,ip,ts) VALUES(?,?,?,?,?,?,?,?)",
                     (r.nombre[:120], r.email[:160], r.gpu[:80], r.tops[:40],

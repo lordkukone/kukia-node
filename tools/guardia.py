@@ -594,7 +594,13 @@ def _tunel_con_dominio() -> bool:
 def construir_hijos(sin_minero: bool) -> dict:
     hijos = {}
     hijos["core"] = Hijo(
-        "core", [_py(), "-m", "uvicorn", "kukia_core:app", "--host", "127.0.0.1", "--port", "8300"],
+        # AUDITORIA 2026-10-28 (A2): uvicorn acepta X-Forwarded-For de
+        # 127.0.0.1 y reescribe request.client con el; detras del tunel eso
+        # permitia falsificar la IP en cada peticion y saltarse los cupos. Con
+        # --no-proxy-headers el socket manda y la unica cabecera que se mira es
+        # CF-Connecting-IP, que la pone el borde de Cloudflare.
+        "core", [_py(), "-m", "uvicorn", "kukia_core:app", "--host", "127.0.0.1", "--port", "8300",
+                 "--no-proxy-headers"],
         RAIZ / "coordinator", LOGS / "core.log")
     if (RAIZ / "validator" / "kukia_validator.py").exists():
         ident = RAIZ / "validator" / "identidad_validador.json"

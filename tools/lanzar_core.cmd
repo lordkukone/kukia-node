@@ -60,5 +60,7 @@ if /i "%OCUPADO%"=="si" (
 )
 
 echo [%date% %time%] ARRANCANDO CORE (puerto %PUERTO%) con %PY% >> "%LOG%"
-"%PY%" -u -m uvicorn kukia_core:app --host 127.0.0.1 --port %PUERTO% >> "%LOG%" 2>&1
+rem --no-proxy-headers (28-10-2026, A2): sin el, uvicorn acepta el X-Forwarded-For
+rem del visitante como IP del cliente y los cupos por IP se pueden falsificar.
+"%PY%" -u -m uvicorn kukia_core:app --host 127.0.0.1 --port %PUERTO% --no-proxy-headers >> "%LOG%" 2>&1
 echo [%date% %time%] CORE TERMINADO con codigo %errorlevel% >> "%LOG%"
