@@ -272,13 +272,20 @@ def main() -> int:
     # La clave con la que firma: la del original si sigue en su sitio; si no,
     # la que haya traido la replica (recuperacion en otra maquina).
     clave = clave_orig if clave_orig.exists() else clave_rep
+    # 28-10-2026: la replica ya no lleva el token de admin. Si se apuntara al
+    # de la carpeta, el Core no lo encontraria y se inventaria uno NUEVO alli:
+    # el tuyo dejaria de servir y quedaria un secreto mas dentro de la replica.
+    # Se usa el del original cuando existe; si no, el de la replica (o uno nuevo
+    # alli, que es lo unico posible en una maquina sin el original).
+    token_orig = COORD / "admin_token.txt"
+    token = token_orig if token_orig.exists() else (carpeta / "admin_token.txt")
 
     entorno = dict(os.environ)
     entorno.update({
         "KUKIA_DB": str(db),
         "KUKIA_SELLOS_FILE": str(carpeta / "sellos.jsonl"),
         "KUKIA_SELLO_KEY": str(clave),
-        "KUKIA_ADMIN_TOKEN": str(carpeta / "admin_token.txt"),
+        "KUKIA_ADMIN_TOKEN": str(token),
         "PYTHONUNBUFFERED": "1",
         "PYTHONIOENCODING": "utf-8",
     })
