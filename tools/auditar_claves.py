@@ -16,6 +16,7 @@ import argparse
 import io
 import json
 import os
+import re
 import sys
 import urllib.request
 import zipfile
@@ -24,6 +25,12 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 WALLETS = RAIZ / "ledger" / "wallet"
 SALTAR_DIR = {".git", "__pycache__", "node_modules", ".wrangler"}
+# Una billetera copiada fuera de ledger/wallet no se detecta por el valor de la
+# clave (va cifrada con DPAPI), pero si por la forma del fichero: el campo
+# cifrado siempre lleva un bloque base64 largo. En el codigo ese campo aparece
+# como texto corto ("x = cif_priv"), asi que no da falsos positivos.
+BILLETERA_COPIADA = re.compile(
+    r'"(?:clave_privada_cifrada|mnemonico_cifrado)"\s*:\s*"[A-Za-z0-9+/=]{40,}"')
 # Rutas que la web publica sirve y conviene revisar.
 WEB_RUTAS = ["", "index.html", "wallet.html", "codigo.html", "minar.html",
              "whitepaper.html", "metricas.json", "sw.js", "manifest.json",
@@ -52,6 +59,40 @@ def cargar_secretos():
                 secretos[" ".join(map(str, mn)).lower()] = f"20 palabras de {f.name}"
             elif isinstance(mn, str) and mn.strip():
                 secretos[" ".join(mn.split()).lower()] = f"20 palabras de {f.name}"
+    secretos.update(_secretos_de_recuperacion())
+    return secretos
+
+
+def _secretos_de_recuperacion():
+    """Contrasena y 20 palabras de los RECUPERACION_*.txt, que van EN CLARO.
+
+    AUDITORIA (27-10-2026): las billeteras se guardan cifradas con DPAPI, asi
+    que `clave_privada_cifrada` no aparece nunca en claro y una copia de una
+    billetera no se detectaba. Pero al lado de cada billetera hay un
+    RECUPERACION_<nombre>.txt con la contrasena y las 20 palabras sin cifrar:
+    copiar ESE fichero es copiar la billetera. Si no se busca, el auditor dice
+    LIMPIO pase lo que pase.
+    """
+    secretos = {}
+    for f in sorted(WALLETS.glob("RECUPERACION_*.txt")):
+        try:
+            lineas = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError as e:
+            print(f"[aviso] {f.name} no se pudo leer: {e}", file=sys.stderr)
+            continue
+        nombre = f.stem.replace("RECUPERACION_", "")
+        for linea in lineas:
+            bajo = linea.lower()
+            if bajo.startswith("contrasena:"):
+                pwd = linea.split(":", 1)[1].strip()
+                # Corta a proposito: una contrasena de 1-2 letras coincidiria
+                # con medio proyecto y llenaria el informe de ruido.
+                if len(pwd) >= 8:
+                    secretos[pwd.lower()] = f"contrasena de {nombre}"
+            elif bajo.startswith("20 palabras:"):
+                palabras = " ".join(linea.split(":", 1)[1].split())
+                if len(palabras.split()) == 20:
+                    secretos[palabras.lower()] = f"20 palabras de {nombre}"
     return secretos
 
 
@@ -71,7 +112,7 @@ def revisar_texto(texto, etiqueta_sitio, secretos):
     return hallazgos
 
 
-def revisar_fichero(ruta, secretos):
+def revisar_fichero(ruta, secretos, copias_fuera=False):
     try:
         if ruta.stat().st_size > 40_000_000:
             return 0
@@ -83,15 +124,30 @@ def revisar_fichero(ruta, secretos):
             with zipfile.ZipFile(io.BytesIO(datos)) as z:
                 total = 0
                 for nombre in z.namelist():
-                    texto = z.read(nombre).decode("utf-8", "ignore")
+                    crudo = z.read(nombre)
+                    texto = crudo.decode("utf-8", "ignore")
                     total += revisar_texto(texto, f"{ruta}!/{nombre}", secretos)
+                    if copias_fuera:
+                        total += _avisar_billetera_copiada(texto, f"{ruta}!/{nombre}")
                 return total
         except zipfile.BadZipFile:
             return 0
-    return revisar_texto(datos.decode("utf-8", "ignore"), str(ruta), secretos)
+    texto = datos.decode("utf-8", "ignore")
+    hallazgos = revisar_texto(texto, str(ruta), secretos)
+    if copias_fuera:
+        hallazgos += _avisar_billetera_copiada(texto, str(ruta))
+    return hallazgos
 
 
-def revisar_carpeta(carpeta, secretos):
+def _avisar_billetera_copiada(texto, etiqueta):
+    """Avisa si el fichero tiene pinta de ser una billetera (JSON cifrado)."""
+    if BILLETERA_COPIADA.search(texto):
+        print(f"  !! {etiqueta} -> COPIA DE BILLETERA fuera de ledger/wallet")
+        return 1
+    return 0
+
+
+def revisar_carpeta(carpeta, secretos, copias_fuera=False):
     revisados = 0
     fugas = 0
     for dp, dn, fn in os.walk(carpeta):
@@ -101,7 +157,7 @@ def revisar_carpeta(carpeta, secretos):
             if ruta.parent.resolve() == WALLETS.resolve():
                 continue  # las billeteras son el unico sitio donde deben estar
             revisados += 1
-            fugas += revisar_fichero(ruta, secretos)
+            fugas += revisar_fichero(ruta, secretos, copias_fuera)
     return revisados, fugas
 
 
@@ -139,6 +195,9 @@ def main():
     secretos = cargar_secretos()
     print(f"Billeteras: {len(list(WALLETS.glob('*.json')))} | "
           f"secretos distintos: {len(secretos)}")
+    if not secretos:
+        print("[aviso] no hay ningun secreto EN CLARO que buscar (billeteras cifradas y "
+              "sin RECUPERACION_*.txt): un LIMPIO aqui no prueba nada.", file=sys.stderr)
 
     revisados, fugas = revisar_carpeta(RAIZ, secretos)
     print(f"Proyecto: {revisados} ficheros revisados")
@@ -147,7 +206,7 @@ def main():
         if not carpeta.exists():
             print(f"[aviso] no existe {carpeta}", file=sys.stderr)
             continue
-        n, f = revisar_carpeta(carpeta, secretos)
+        n, f = revisar_carpeta(carpeta, secretos, copias_fuera=True)
         revisados += n
         fugas += f
         print(f"Extra {carpeta}: {n} ficheros revisados")
