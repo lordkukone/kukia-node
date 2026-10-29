@@ -29,7 +29,11 @@
 #     es unico (si hay varios, se miran los dos, y cada uno pasa por identidad).
 #  2) IDENTIDAD VERIFICADA antes de nada: nombre del proceso, ruta del
 #     ejecutable y (si se exige) que la linea de comandos mencione el Core.
-#     Si no se puede confirmar, NO SE TOCA y se registra "MODO SEGURO".
+#     Si no se puede confirmar, NO SE TOCA y se registra "MODO SEGURO" CON
+#     ALERTA en disco (29-10-2026): antes solo quedaba una linea en el log y el
+#     vigilante podia pasarse dias sin proteger nada. La lista de ejecutables
+#     acepta python.exe y pythonw.exe: el lanzador con ventana oculta usa el
+#     segundo y con una sola ruta el vigilante se ponia en MODO SEGURO.
 #  3) NO mata por UN sondeo fallido: sondea varias veces (-Intentos, 3 por
 #     defecto) y antes de dar por muerto al proceso mira si esta TRABAJANDO
 #     (CPU acumulada subiendo). Lo lento gasta CPU, lo colgado no. Medido el
@@ -119,7 +123,12 @@ $Cfg = [ordered]@{
     vigilar_si_puerto_libre   = $false
     proceso_esperado          = [ordered]@{
         nombre_regex            = "^python"
-        ejecutable              = "C:\Users\kuki\AppData\Local\Programs\Python312\python.exe"
+        # lista: el Core corre igual con python.exe o con pythonw.exe (el
+        # lanzador oculto usa pythonw). Ver R-01, 29-10-2026.
+        ejecutable              = @(
+            "C:\Users\kuki\AppData\Local\Programs\Python312\python.exe",
+            "C:\Users\kuki\AppData\Local\Programs\Python312\pythonw.exe"
+        )
         linea_comandos_contiene = "kukia_core"
         exigir_linea_comandos   = $true
     }
@@ -335,11 +344,29 @@ function IdentidadEsperada($id) {
         $script:MotivoIdentidad = "su nombre ('$($id.nombre)') no encaja con '$($Cfg.proceso_esperado.nombre_regex)'"
         return $false
     }
-    $esperado = "$($Cfg.proceso_esperado.ejecutable)"
-    if ($esperado) {
+    # El ejecutable puede venir como texto o como LISTA (29-10-2026, R-01).
+    # `python.exe` y `pythonw.exe` son el mismo interprete de la misma carpeta:
+    # el lanzador con ventana oculta arranca el Core con pythonw, y con la
+    # configuracion de una sola ruta el vigilante se ponia en MODO SEGURO y
+    # dejaba de protegerlo durante horas sin que nadie se enterara (log del
+    # 28-10 a las 19:49). Ahora se aceptan las dos rutas, comparadas ENTERAS y
+    # sin distinguir mayusculas: sigue sin valer cualquier otro python de otra
+    # instalacion, ni un proceso que solo se llame parecido.
+    $esperados = @($Cfg.proceso_esperado.ejecutable) |
+                 Where-Object { "$_" } | ForEach-Object { "$_" }
+    if ($esperados.Count -gt 0) {
         if (-not $id.ejecutable) { $script:MotivoIdentidad = "no se pudo leer la ruta del ejecutable"; return $false }
-        if ($id.ejecutable -ne $esperado) {
-            $script:MotivoIdentidad = "su ejecutable ('$($id.ejecutable)') no es el esperado ('$esperado')"
+        $rutaReal = "$($id.ejecutable)"
+        try { $rutaReal = [System.IO.Path]::GetFullPath("$($id.ejecutable)") } catch { }
+        $encaja = $false
+        foreach ($e in $esperados) {
+            $candidato = "$e"
+            try { $candidato = [System.IO.Path]::GetFullPath("$e") } catch { }
+            if ($rutaReal -ieq $candidato) { $encaja = $true; break }
+        }
+        if (-not $encaja) {
+            $script:MotivoIdentidad = ("su ejecutable ('$rutaReal') no es ninguno de los esperados ('" +
+                                       ($esperados -join "', '") + "')")
             return $false
         }
     }
@@ -440,7 +467,8 @@ Decir ("tick v2 (puerto $Puerto, simular=$($Simular.IsPresent), relanzar=$($Cfg.
        "intentos=$($Cfg.intentos), espera=$($Cfg.espera_stats_seg)s, freno=$($Cfg.freno.activo))")
 if ($avisoConfig) { Decir "configuracion: $avisoConfig" }
 Decir ("config efectiva: tarea=$TareaCore, identidad exigida: nombre '$($Cfg.proceso_esperado.nombre_regex)', " +
-       "ejecutable '$($Cfg.proceso_esperado.ejecutable)', linea contiene '$($Cfg.proceso_esperado.linea_comandos_contiene)': " +
+       "ejecutable '$(@($Cfg.proceso_esperado.ejecutable) -join "' o '")', " +
+       "linea contiene '$($Cfg.proceso_esperado.linea_comandos_contiene)': " +
        "$($Cfg.proceso_esperado.exigir_linea_comandos)")
 
 # --- mutex: una sola instancia por puerto
@@ -585,6 +613,15 @@ foreach ($idProceso in $duenos) {
         Decir ("MODO SEGURO: el PID $idProceso ocupa el puerto $Puerto pero su identidad no esta " +
                "confirmada ($($script:MotivoIdentidad)). NO se toca. Si es el Core de verdad, ajusta " +
                "'proceso_esperado' en vigilante_core.config.json.")
+        # 29-10-2026 (R-01): callarse aqui era el fallo de verdad. MODO SEGURO es
+        # lo correcto (no se toca un proceso que no se puede identificar), pero
+        # significa que el vigilante NO ESTA PROTEGIENDO el puerto: si el Core se
+        # cuelga, nadie lo levanta. Antes solo quedaba una linea en el log.
+        # Ahora se deja ALERTA en disco, que es lo que mira el fundador.
+        PonerAlerta ("vigilante: el PID $idProceso ocupa el puerto $Puerto y su identidad no esta " +
+                     "confirmada ($($script:MotivoIdentidad)). El vigilante NO protege ese Core " +
+                     "mientras siga asi: si se cuelga, no se reinicia.")
+        $alertaPuesta = $true
         continue
     }
     Decir ("identidad confirmada: PID $idProceso '$($id.nombre)' creado $($id.creado), padre $($id.padre), exe $($id.ejecutable)")

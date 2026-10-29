@@ -13,7 +13,10 @@
 
   "proceso_esperado": {
     "nombre_regex": "^python",
-    "ejecutable": "C:\\Users\\kuki\\AppData\\Local\\Programs\\Python312\\python.exe",
+    "ejecutable": [
+      "C:\\Users\\kuki\\AppData\\Local\\Programs\\Python312\\python.exe",
+      "C:\\Users\\kuki\\AppData\\Local\\Programs\\Python312\\pythonw.exe"
+    ],
     "linea_comandos_contiene": "kukia_core",
     "exigir_linea_comandos": true
   },
