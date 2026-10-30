@@ -4668,11 +4668,74 @@ def version():
     return _HUELLA
 
 
+@contextmanager
+def _lectura_una_foto():
+    """Transaccion de LECTURA: todo lo que se lea dentro ve la misma foto.
+
+    FALLO REAL (30-10-2026): /stats leia cada contador con su propia consulta.
+    Con el minero entregando trabajo, un commit podia caer ENTRE dos lecturas,
+    asi que la foto mezclaba dos instantes: `tareas_ok_en_tabla` contaba ya la
+    tarea nueva y `tareas_ok` (meta) todavia no, y la identidad de F2-57
+    parecia rota justo por 1. En WAL un BEGIN fija la foto hasta el COMMIT, y
+    los lectores no frenan a los escritores (ni al reves).
+    """
+    try:
+        con.execute("BEGIN")
+        propia = True
+    except Exception:
+        propia = False      # ya habia transaccion abierta en este hilo: no se toca
+    try:
+        yield
+    finally:
+        if propia:
+            try:
+                con.execute("COMMIT")
+            except Exception:
+                try:
+                    con.execute("ROLLBACK")
+                except Exception:
+                    pass
+
+
+def _foto_contadores() -> dict:
+    """Los contadores de /stats, leidos de UNA vez y de la misma foto."""
+    with _lectura_una_foto():
+        meta = {r["clave"]: float(r["valor"] or 0.0) for r in con.execute(
+            "SELECT clave, valor FROM meta WHERE clave IN "
+            "('tareas_ok_total','tareas_archivadas','tareas_ok_archivadas',"
+            "'tareas_fallo_archivadas')")}
+        ok_tabla = con.execute(
+            "SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"]
+        cola = con.execute(
+            "SELECT COUNT(*) c FROM tareas WHERE estado='queued'").fetchone()["c"]
+        nodos = con.execute(
+            "SELECT COUNT(*) c FROM nodos WHERE COALESCE(retirado,0)=0").fetchone()["c"]
+        registros = con.execute(
+            "SELECT COUNT(*) c FROM registros").fetchone()["c"]
+        # El suministro entra en la misma foto: si la cache TTL esta caliente
+        # devuelve el ultimo valor sumado (que es lo que ya publicaba /stats).
+        supply = supply_emitido()
+    ok_total = int(meta.get("tareas_ok_total", -1.0))
+    if ok_total < 0:        # base anterior a los contadores materializados
+        ok_total = ok_tabla
+    return {"supply": supply,
+            "ok_total": ok_total,
+            "ok_en_tabla": ok_tabla,
+            "archivadas": int(meta.get("tareas_archivadas", 0.0)),
+            "ok_archivadas": int(meta.get("tareas_ok_archivadas", 0.0)),
+            "fallo_archivadas": int(meta.get("tareas_fallo_archivadas", 0.0)),
+            "pend": cola,
+            "nodos": nodos,
+            "registros": registros}
+
+
 @app.get("/stats")
 def stats():
     # AUDITORIA 2026-10-20: total materializado; antes era un SUM de todo el
     # ledger en cada peticion (el panel lo pide cada 2 s).
-    sum = min(supply_emitido(), MAX_SUPPLY)
+    # F2-59: todos los contadores salen de UNA sola lectura (misma foto).
+    foto = _foto_contadores()
+    sum = min(foto["supply"], MAX_SUPPLY)
     pago1, info1 = recompensa_pago(1.0)
     _pot = precio_gflop() if PAGO_POR_FLOP else {}
     if PAGO_POR_FLOP and _pot.get("modo") == "potencia":
@@ -4687,10 +4750,8 @@ def stats():
                      precio_gflop=_pot["precio_gflop"],
                      gflop_por_min=_pot.get("gflop_por_min"),
                      pago_min_kia=round(PAGO_MIN_KIA, 9))
-    total_ok = int(_meta_float("tareas_ok_total", -1.0))
-    if total_ok < 0:
-        total_ok = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"]
-    en_tabla = con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='ok'").fetchone()["c"]
+    total_ok = foto["ok_total"]
+    en_tabla = foto["ok_en_tabla"]
     _ss = _sellos_leidos()
     return {
         "version": app.version,
@@ -4700,8 +4761,7 @@ def stats():
         "max_supply": MAX_SUPPLY,
         # Nodos VIVOS: los retirados (nombres repetidos de identidades viejas)
         # no cuentan. Antes se contaban las filas, no los nodos.
-        "nodos": con.execute("SELECT COUNT(*) c FROM nodos "
-                             "WHERE COALESCE(retirado,0)=0").fetchone()["c"],
+        "nodos": foto["nodos"],
         # Historico real (sobrevive al archivado); 'en_tabla' son las que quedan
         # guardadas por si se quiere auditar el detalle.
         # F2-57: las archivadas van partidas por estado, para que la cuenta
@@ -4710,11 +4770,11 @@ def stats():
         #   tareas_archivadas   == tareas_ok_archivadas + tareas_fallo_archivadas
         "tareas_ok": total_ok,
         "tareas_ok_en_tabla": en_tabla,
-        "tareas_archivadas": int(_meta_float("tareas_archivadas", 0.0)),
-        "tareas_ok_archivadas": int(_meta_float("tareas_ok_archivadas", 0.0)),
-        "tareas_fallo_archivadas": int(_meta_float("tareas_fallo_archivadas", 0.0)),
-        "tareas_pend": con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='queued'").fetchone()["c"],
-        "registros": con.execute("SELECT COUNT(*) c FROM registros").fetchone()["c"],
+        "tareas_archivadas": foto["archivadas"],
+        "tareas_ok_archivadas": foto["ok_archivadas"],
+        "tareas_fallo_archivadas": foto["fallo_archivadas"],
+        "tareas_pend": foto["pend"],
+        "registros": foto["registros"],
         "emision": emission_info(),
         "dificultad": dificultad(),
         "recompensa_base_actual": pago1,
