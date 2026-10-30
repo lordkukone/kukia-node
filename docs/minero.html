@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Minero KUKIA · F2-53</title>
+<title>Minero KUKIA · 1.0</title>
 <meta name="description" content="Minero de KUKIA Network: versión publicada, hardware probado, requisitos, instalación, diagnóstico, actualización y reversión. Red en TESTNET.">
 <link rel="canonical" href="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minero">
 <style>
@@ -32,11 +32,11 @@ small{color:#8fa6cc}
 <meta property="og:site_name" content="KUKIA Network">
 <meta property="og:locale" content="es_ES">
 <meta property="og:url" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minero">
-<meta property="og:title" content="Minero KUKIA · F2-53">
+<meta property="og:title" content="Minero KUKIA · 1.0">
 <meta property="og:description" content="Minero de KUKIA Network: versión publicada, hardware probado, requisitos, instalación, diagnóstico, actualización y reversión. Red en TESTNET.">
 <meta property="og:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Minero KUKIA · F2-53">
+<meta name="twitter:title" content="Minero KUKIA · 1.0">
 <meta name="twitter:description" content="Minero de KUKIA Network: versión publicada, hardware probado, requisitos, instalación, diagnóstico, actualización y reversión. Red en TESTNET.">
 <meta name="twitter:image" content="https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/moneda.jpg">
 <script type="application/ld+json">
@@ -71,7 +71,7 @@ small{color:#8fa6cc}
    "@type": "WebPage",
    "@id": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minero#pagina",
    "url": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page/minero",
-   "name": "Minero KUKIA · F2-53",
+   "name": "Minero KUKIA · 1.0",
    "description": "Minero de KUKIA Network: versión publicada, hardware probado, requisitos, instalación, diagnóstico, actualización y reversión. Red en TESTNET.",
    "inLanguage": "es",
    "isPartOf": {
@@ -88,7 +88,7 @@ small{color:#8fa6cc}
 <a class="back" href="index.html">&larr; Volver a KUKIA</a>
 
 <h1>Minero de KUKIA</h1>
-<p class="badge">TESTNET · Proof-of-Compute · versión F2-53 · 30/10/2026</p>
+<p class="badge">TESTNET · Proof-of-Compute · versión 1.0 · 30/10/2026</p>
 
 <p class="aviso">Esta página describe solo lo que se ha medido. KUKIA está en fase de
 pruebas: no hay auditoría de seguridad independiente ni valor de mercado de KIA, y el
@@ -98,11 +98,12 @@ defecto <strong>M-02</strong> (un dispositivo que puede quedarse sin trabajar) s
 <h2>Versión publicada</h2>
 <table>
 <tr><th>Componente</th><th>Valor verificado</th></tr>
-<tr><td>Worker</td><td><code>worker/kukia_worker.py</code> · F2-53 · 2.164 líneas</td></tr>
-<tr><td>SHA-256 del worker</td><td><code>e005dcd06259bf3ad4ffaa08ab5b87c187e07e7ca8f9a666c2a0cda48441301a</code></td></tr>
+<tr><td>Worker</td><td><code>worker/kukia_worker.py</code> · versión 1.0 · 2.194 líneas</td></tr>
+<tr><td>SHA-256 del worker</td><td><code>79865c1f1747992aad961f001eb1de5c24d135a01edefd61fdf8c42440fde89c</code></td></tr>
+<tr><td>Paquete</td><td><code>kukia-miner-1.0.zip</code> · 67.550 bytes · SHA-256 <code>0a8d8065593ab876b63eac495e0f1f9721aa53e548392cfde158429aa80a23dd</code></td></tr>
 <tr><td>SHA-256 de <code>tools/rotar_logs.py</code></td><td><code>eb6d1620ecec905b393a2e2b871b676363af1bdf31abf71d4fb59da293aad9b7</code></td></tr>
 <tr><td>Core compatible</td><td>0.4.4 (rama <code>pqc-integrado-20261027</code>)</td></tr>
-<tr><td>Descarga</td><td><a href="https://github.com/lordkukone/kukia-node/releases/tag/minero-f2-53">GitHub · Release minero-f2-53</a> · <a href="https://github.com/lordkukone/kukia-node/releases/download/minero-f2-53/kukia_worker-f2-53.py">kukia_worker-f2-53.py</a> · <a href="https://github.com/lordkukone/kukia-node/releases/download/minero-f2-53/SHA256SUMS.txt">SHA256SUMS.txt</a></td></tr>
+<tr><td>Descarga</td><td><a href="https://github.com/lordkukone/kukia-node/releases/download/minero-1.0/kukia-miner-1.0.zip">kukia-miner-1.0.zip</a> · <a href="https://github.com/lordkukone/kukia-node/releases/tag/minero-1.0">Release minero-1.0</a> · <a href="https://github.com/lordkukone/kukia-node/releases/download/minero-1.0/SHA256SUMS.txt">SHA256SUMS.txt</a></td></tr>
 </table>
 
 <h2>Qué hace, comprobado con datos</h2>
@@ -120,6 +121,8 @@ defecto <strong>M-02</strong> (un dispositivo que puede quedarse sin trabajar) s
 <tr><th>Equipo</th><th>VRAM</th><th>Resultado</th></tr>
 <tr><td>NVIDIA GeForce RTX 5070 (<code>cuda:0</code>)</td><td>12 GB</td><td>Tareas entregadas y aceptadas; 42,99 GFLOPS medidos en el arranque</td></tr>
 <tr><td>NVIDIA GeForce RTX 5060 Ti (<code>cuda:1</code>)</td><td>16 GB</td><td>Tareas entregadas y aceptadas; 41,81 GFLOPS medidos en el arranque</td></tr>
+<tr><td>Una sola GPU (<code>CUDA_VISIBLE_DEVICES=0</code>)</td><td>12 GB</td><td>Arranca con 1 GPU, entrega y no intenta usar la que no ve</td></tr>
+<tr><td>Sin CUDA (<code>CUDA_VISIBLE_DEVICES=""</code>)</td><td>—</td><td>Reintenta 6 veces con aviso claro y despues mina en CPU, entregando tareas aceptadas</td></tr>
 <tr><td>Windows 11 · Python 3.12.9 · PyTorch 2.12.1+cu130 · CUDA 13.0</td><td>—</td><td>Arranque, cálculo, entrega, reinicio y parada</td></tr>
 </table>
 <p><small>No probado: AMD (ROCm), Intel, Linux, macOS ni tarjetas de 2–8 GB. La CPU puede
@@ -133,6 +136,10 @@ añadirse como nodo con <code>KUKIA_USAR_CPU=1</code>, pero en un PC con GPU res
 </ul>
 
 <h2>Instalación y arranque</h2>
+<p>Opción rápida, sin clonar nada: descarga <code>kukia-miner-1.0.zip</code>,
+descomprímelo en una carpeta propia, comprueba su SHA-256 y ejecuta
+<code>ARRANCAR_MINERO.cmd</code>. El paquete se puede reconstruir bit a bit con
+<code>empaquetar_f2_54.py</code> desde el repositorio.</p>
 <pre>git clone https://github.com/lordkukone/kukia-node
 cd kukia-node
 INSTALAR_Y_MINAR.cmd   (un clic: comprueba, mide la GPU y arranca la guardia)
@@ -171,6 +178,7 @@ rem y reiniciar solo el minero: cerrar su proceso kukia_worker.py y dejar que la
 <h2>Historial</h2>
 <table>
 <tr><th>Versión</th><th>Fecha</th><th>Cambios</th></tr>
+<tr><td>1.0</td><td>30/10/2026</td><td>Cupo con <code>BoundedSemaphore</code> (no puede inflarse); telemetría por GPU con temperatura y VRAM libre; paquete reproducible con README, instalación y desinstalación</td></tr>
 <tr><td>F2-53</td><td>30/10/2026</td><td>Doble liberación del cupo corregida; registro propio con rotación interna y cero NUL; cola con timeout; aviso <code>HILO_MUERTO</code>; <code>BaseException</code> con rastro en cálculo y entrega</td></tr>
 <tr><td>F2-52</td><td>30/10/2026</td><td><code>arranque.log</code>, contadores por GPU, aviso <code>ESTERIL</code>, timeout por defecto en HTTP</td></tr>
 <tr><td>F2-51</td><td>29/10/2026</td><td>Detección correcta de dos GPU, VRAM real, TOPS etiquetados</td></tr>

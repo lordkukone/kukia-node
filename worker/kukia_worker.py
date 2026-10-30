@@ -244,11 +244,16 @@ def _indice_gpu(device) -> int:
     return 0
 
 def _gpu_stats(device):
-    """(utilizacion %, VRAM usada MB) reales, o (None, None) si no se puede.
+    """(utilizacion %, VRAM usada MB, temperatura C, VRAM libre MB) de esa GPU.
 
-    nvidia-smi es lo mas fiable y viene con el driver; torch.cuda.utilization
-    necesita nvidia-ml-py, que no siempre esta instalado. Se intenta primero
-    nvidia-smi y se cae a torch sin romper el minero.
+    Cada valor es None si el equipo no lo da. nvidia-smi es lo mas fiable y viene
+    con el driver; torch.cuda.utilization necesita nvidia-ml-py, que no siempre
+    esta instalado. Se intenta primero nvidia-smi y se cae a torch sin romper el
+    minero.
+
+    F2-54 (M-06): se anaden temperatura y VRAM LIBRE. Con solo la usada no se
+    distingue una tarjeta llena de una tarjeta atascada, y sin temperatura no se
+    ve venir un problema termico. Son datos por dispositivo, no de la maquina.
     """
     idx = _indice_gpu(device)
     # FALLO REAL (21-10-2026): esto se llama desde la telemetria cada 3 s y
@@ -260,13 +265,26 @@ def _gpu_stats(device):
         extra["creationflags"] = 0x08000000   # CREATE_NO_WINDOW
     try:
         salida = subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used",
+            ["nvidia-smi",
+             "--query-gpu=utilization.gpu,memory.used,temperature.gpu,memory.total",
              "--format=csv,noheader,nounits", "-i", str(idx)],
             capture_output=True, text=True, timeout=4, **extra)
         if salida.returncode == 0 and salida.stdout.strip():
             partes = [x.strip() for x in salida.stdout.strip().splitlines()[0].split(",")]
             if len(partes) >= 2:
-                return int(float(partes[0])), int(float(partes[1]))
+                def _num(txt):
+                    try:
+                        v = int(float(txt))
+                        return v if v >= 0 else None
+                    except Exception:
+                        return None
+                util = _num(partes[0])
+                usada = _num(partes[1])
+                temp = _num(partes[2]) if len(partes) > 2 else None
+                total = _num(partes[3]) if len(partes) > 3 else None
+                libre = (total - usada) if (total is not None
+                                            and usada is not None) else None
+                return util, usada, temp, libre
     except Exception:
         pass
     try:
@@ -274,10 +292,10 @@ def _gpu_stats(device):
         if torch.cuda.is_available():
             util = int(torch.cuda.utilization(idx))
             libre, total = torch.cuda.mem_get_info(idx)
-            return util, int((total - libre) / 1048576)
+            return util, int((total - libre) / 1048576), None, int(libre / 1048576)
     except Exception:
         pass
-    return None, None
+    return None, None, None, None
 
 def _bucle_telemetria(nid: str, device: str, vram_gb: int, tops: float,
                       privkey: str, estado: dict) -> None:
@@ -285,12 +303,16 @@ def _bucle_telemetria(nid: str, device: str, vram_gb: int, tops: float,
     avisado = False
     while True:
         try:
-            util, mem = _gpu_stats(device)
+            util, mem, temp, libre = _gpu_stats(device)
             datos = {"device": str(device), "vram_gb": int(vram_gb),
                      "tops_declarados": float(tops),
                      "gflops_base": _GFLOPS_BASE.get(str(device), 0.0),
                      "gpu_util_pct": int(util) if util is not None else -1,
                      "gpu_mem_mb": int(mem) if mem is not None else -1,
+                     # F2-54 (M-06): por dispositivo, para ver una tarjeta
+                     # atascada o caliente sin mirar la maquina entera.
+                     "gpu_temp_c": int(temp) if temp is not None else -1,
+                     "vram_libre_mb": int(libre) if libre is not None else -1,
                      "tarea_ms": round(float(estado.get("ms") or 0.0), 1),
                      # F2-52: contadores por dispositivo, firmados con el resto.
                      "cuentas": _cuentas_json(device)}
@@ -1464,7 +1486,11 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
     # para tenerlas a las dos ocupadas (cada pedido tarda ~350 ms y cada tarea
     # ~120 ms). El Core tiene que permitirlo: KUKIA_MAX_TAREAS_NODO=8.
     # Defecto 4 = el de siempre; ver el comentario de PROFUNDIDAD arriba.
-    cupo_vuelo = threading.Semaphore(max(2, min(12, int(os.environ.get("KUKIA_EN_VUELO", "4")))))
+    # F2-54 (M-03): BoundedSemaphore y no Semaphore. Con el acotado, liberar de
+    # mas lanza ValueError en vez de inflar el contador: el tope de tareas en
+    # vuelo no puede desaparecer ni por un camino de error que se olvide.
+    cupo_vuelo = threading.BoundedSemaphore(
+        max(2, min(12, int(os.environ.get("KUKIA_EN_VUELO", "4")))))
     cola_tareas = queue.Queue(maxsize=PROFUNDIDAD)
     en_vuelo = {"n": 0}
     en_vuelo_lock = threading.Lock()
@@ -1494,6 +1520,10 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
             return
         try:
             cupo_vuelo.release()
+        except ValueError:
+            # Con BoundedSemaphore esto es un defecto de contabilidad, no ruido:
+            # se anota con nombre y numero para poder cazarlo.
+            _log_arranque("cupo: BoundedSemaphore rechaza una liberacion de mas")
         except Exception:
             pass
 
