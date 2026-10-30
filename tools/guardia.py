@@ -555,6 +555,13 @@ class Hijo:
         if not self.vivo() and _ya_corriendo(PATRONES[self.nombre]):
             log(f"[{self.nombre}] ya esta corriendo (abierto aparte): no se duplica")
             self.ultimo_arranque = time.time()
+            # FALLO REAL (30-10-2026): el asa del proceso muerto se quedaba
+            # guardada. Con ella, caido() era True para siempre y el guardia
+            # repetia "estaba caido" en cada ciclo (16.964 lineas desde el
+            # 21-10) sin poder relanzar nada; peor aun, vivo() era False, asi
+            # que la recuperacion de un Core COLGADO nunca podia entrar. Si
+            # otro proceso hace ese trabajo, esta asa ya no vale: se suelta.
+            self.proc = None
             return False
         self.detener()
         try:
@@ -838,7 +845,9 @@ def ciclo(hijos: dict, estado: Estado, verbose: bool) -> int:
     #    Core caido), y la red quedaba parada por un problema de relojeria.
     for nombre, h in list(hijos.items()):
         if h.caido():
-            log(f"[{nombre}] estaba caido; relanzando ya")
+            # El mensaje lo pone arrancar(), que es quien sabe si de verdad ha
+            # lanzado algo: antes se anunciaba "relanzando ya" tambien cuando
+            # la decision era NO relanzar (y una y otra vez, en bucle).
             if h.arrancar():
                 problemas += 1
                 if nombre == "core":
