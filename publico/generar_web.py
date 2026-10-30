@@ -189,6 +189,8 @@ h1 {{ color:var(--gold); font-size:2.2rem; margin-bottom:.4rem; }}
 .sub {{ color:var(--text); margin-bottom:1rem; font-style:italic; }}
 .intro {{ background:rgba(18,48,94,.4); border-left:3px solid var(--gold); padding:1rem 1.3rem; border-radius:0 10px 10px 0; margin:1.5rem 0 2.5rem; color:var(--text); font-size:.95rem; }}
 h2 {{ color:var(--gold); font-size:1.2rem; margin:2.5rem 0 .8rem; border-bottom:1px solid var(--line); padding-bottom:.5rem; }}
+.huella {{ color:var(--text); font-size:.8rem; line-height:1.7; margin:-.4rem 0 1rem; word-break:break-all; }}
+.huella code {{ color:#d4af37; font-size:.78rem; white-space:normal; }}
 pre {{ background:#050f22; border:1px solid var(--line); border-radius:12px; padding:1.2rem; overflow-x:auto; }}
 code {{ font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#c8d6f0; white-space:pre; }}
 .back {{ display:inline-block; margin-bottom:2rem; color:var(--gold); text-decoration:none; }}
@@ -210,6 +212,18 @@ en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows.
 <br><br>Generado desde los ficheros reales el {fecha}. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
 """
 
+# 30-10-2026 (F2-61): las dos huellas de cada fichero se publican JUNTAS en la
+# pagina de codigo. Antes solo salia el SHA-256 del paquete y, para el codigo,
+# habia que ir a /version: quien descargaba el fichero de GitHub y lo comparaba
+# con el de disco veia distinto SIEMPRE (en Windows el fichero de trabajo lleva
+# CRLF y el repositorio sirve LF), y parecia que alguien habia tocado el codigo.
+DOS_HUELLAS = """<div class="intro" style="margin-top:-1rem"><b>Dos huellas por fichero.</b>
+La <b>cruda</b> es de los bytes exactos del fichero que corre en este PC: en Windows los finales de linea son CRLF.
+La <b>LF</b> es del mismo texto con los finales de linea pasados a LF, que es como lo guarda y lo sirve GitHub.
+Si descargas un fichero del repositorio y no te cuadra la cruda, no es un error: compara con la LF.
+Si no cuadra ninguna de las dos, lo que hay aqui no es lo que esta en el repositorio, y eso si es un fallo.</div>
+"""
+
 PIE = """<div class="foot">KUKIA Network - prototipo en fase de pruebas. Sin auditoria externa todavia. Sin precio hasta demanda real.</div>
 </div>
 </body>
@@ -217,16 +231,36 @@ PIE = """<div class="foot">KUKIA Network - prototipo en fase de pruebas. Sin aud
 """
 
 
+def dos_huellas(datos: bytes) -> tuple[str, str]:
+    """(cruda, LF) de un fichero.
+
+    La cruda es la de los bytes tal cual (CRLF en Windows: lo que corre y lo que
+    publica /version como 'sha256'). La LF es la del mismo texto normalizado,
+    que es lo que devuelve GitHub al descargar el fichero ('sha256_git').
+    """
+    return (hashlib.sha256(datos).hexdigest(),
+            hashlib.sha256(datos.replace(b"\r\n", b"\n")).hexdigest())
+
+
 def generar_codigo(destino: Path, fecha: str, hash_zip: str = "",
                    canonico: str = CANONICO) -> Path:
     partes = [CABECERA.format(fecha=fecha, hash_zip=hash_zip or "(pendiente)",
-                              canonico=canonico)]
+                              canonico=canonico), DOS_HUELLAS]
     for titulo, rel in FUENTES:
         ruta = RAIZ / rel
         if not ruta.exists():
             continue
-        texto = ruta.read_text(encoding="utf-8")
+        datos = ruta.read_bytes()
+        # El texto se publica con los saltos ya normalizados a LF: si se colara
+        # el CRLF del disco, la escritura en modo texto lo volveria a traducir y
+        # el codigo saldria con una linea en blanco entre cada linea. Las
+        # huellas NO se toman de 'texto', sino de 'datos' (los bytes reales).
+        texto = datos.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
+        cruda, lf = dos_huellas(datos)
         partes.append(f"<h2>{html.escape(titulo)} - {html.escape(rel)}</h2>\n")
+        partes.append(
+            '<p class="huella">SHA-256 cruda: <code>' + cruda +
+            '</code><br>SHA-256 LF: <code>' + lf + '</code></p>\n')
         partes.append("<pre><code>" + html.escape(texto) + "</code></pre>\n")
     partes.append(PIE)
     salida = destino / "codigo.html"
