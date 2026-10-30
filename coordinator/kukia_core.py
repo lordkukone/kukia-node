@@ -18,7 +18,8 @@ AUDITORIA 2026-10-18 (todas las marcas "AUDITORIA" son de esta revision):
   - monto de transferencia finito (NaN daba 500 despues de escribir).
   - /registro guarda la IP real (antes guardaba el 'ref' en su columna).
 """
-import collections, hashlib, json, math, os, secrets, sqlite3, threading, uuid, time, sys, urllib.parse
+import claves  # F2-14: ciclo de vida de claves (ver informes/f2-14)
+import collections, functools, hashlib, json, math, os, secrets, sqlite3, threading, uuid, time, sys, urllib.parse
 from contextlib import contextmanager
 from pathlib import Path
 import numpy as np
@@ -90,6 +91,10 @@ if SELLOS is not None:
         print(f"[KUKIA] AVISO: no se pudo crear la clave del sello ({_e})", flush=True)
 
 MAX_SUPPLY = 100_000_000          # techo fijo 100M
+# F2-35: cache del suministro. Se define AQUI, antes de `_asiento`/`genesis`,
+# porque genesis() escribe el asiento fundacional al importar el modulo.
+SUPPLY_TTL_S = float(os.environ.get("KUKIA_SUPPLY_TTL_S", "5") or 5)
+_supply_cache = {"ts": 0.0, "valor": 0.0}
 REWARD_BASE = 10.0                # KIA por tarea base
 
 # --- Puerta de cliente (24-10-2026) ---
@@ -515,6 +520,29 @@ def _base_ocupada(e) -> bool:
             or "sqlite_busy" in t)
 
 
+def _reintentar_si_ocupada(manejador):
+    """F2-36: un lock ocupado en una ruta concreta -> 503, nunca 500.
+
+    `_escritura()` ya convierte en 503 el `BEGIN IMMEDIATE` que no entra, pero
+    una lectura o un INSERT fuera de ese cerrojo seguian subiendo como
+    `sqlite3.OperationalError` y FastAPI las publicaba como 500 "error interno".
+    Un 500 le dice al minero que ha hecho algo mal; un 503 con `Retry-After` le
+    dice la verdad: la base esta ocupada, reintenta.
+    """
+    @functools.wraps(manejador)
+    def envoltura(*args, **kwargs):
+        try:
+            return manejador(*args, **kwargs)
+        except HTTPException:
+            raise
+        except sqlite3.OperationalError as e:
+            if not _base_ocupada(e):
+                raise
+            raise HTTPException(503, "Core ocupado (la base esta bloqueada), reintentar",
+                                headers={"Retry-After": "2"})
+    return envoltura
+
+
 # Columnas cuya UNIQUE significa de verdad "ese nonce ya se uso". sqlite lo
 # dice en el propio mensaje: "UNIQUE constraint failed: transferencias.de_nodo,
 # transferencias.nonce".
@@ -601,27 +629,70 @@ def _rollback_seguro() -> None:
         pass
 
 
+def _espera_registro_s() -> float:
+    """Cuanto puede esperar un REGISTRO a que se libere la base (H7).
+
+    Un registro ocurre una vez por nodo y es la puerta de entrada de un minero
+    nuevo: en el pico de arranque de una campana, devolver 503 al primer choque
+    obliga al cliente a reintentar a ciegas. Se le da un presupuesto acotado y
+    se le hace esperar el turno.
+
+    NO cambia el resto de escrituras: pagos y transferencias siguen con el 503
+    rapido de siempre, porque ahi el cliente necesita saber pronto que no se ha
+    movido nada.
+    """
+    texto = (os.environ.get("KUKIA_REGISTRO_ESPERA_MS") or "").strip()
+    try:
+        ms = int(texto)
+    except Exception:
+        ms = 20000
+    return max(0.5, min(60.0, ms / 1000.0))
+
+
 @contextmanager
-def _escritura():
+def _escritura(espera_total_s: float | None = None):
     """Escritura corta y atomica: lock + BEGIN IMMEDIATE + commit.
 
     AUDITORIA: /nodos/registrar, /tareas/crear y /registro escribian sin
     lock (dos peticiones a la vez podian mezclar transacciones).
+
+    H7 (picos de registro): con `espera_total_s` se reintenta el BEGIN dentro de
+    un presupuesto, con espera creciente y jitter. Sin argumento, el
+    comportamiento es el de siempre: dos intentos y 503.
+
+    El lock se mantiene mientras se espera A PROPOSITO: si se soltara, otro hilo
+    del mismo proceso entraria a pedir BEGIN IMMEDIATE, chocaria con nuestra
+    propia transaccion y devolveria 503 por un bloqueo que es nuestro.
     """
     with _pago_lock:
-        # AUDITORIA: si otro programa tiene la base bloqueada, se reintenta una
-        # vez y se responde 503 rapido (antes se quedaba esperando 30 s).
-        listo = False
-        for intento in (1, 2):
+        limite = (time.monotonic() + max(0.0, float(espera_total_s))
+                  if espera_total_s is not None else None)
+        intento = 0
+        while True:
+            # AUDITORIA: si otro programa tiene la base bloqueada, se reintenta
+            # una vez y se responde 503 rapido (antes se quedaba esperando 30 s).
             try:
                 con.execute("BEGIN IMMEDIATE")
-                listo = True
                 break
-            except Exception:
-                if intento == 1:
+            except Exception as e:
+                if limite is not None and not _base_ocupada(e):
+                    # Disco lleno u otro fallo real: no tiene sentido esperar.
+                    raise _error_escritura(e)
+                intento += 1
+                if limite is None:
+                    if intento >= 2:
+                        raise HTTPException(503, "Core ocupado (la base esta bloqueada), reintentar",
+                                            headers={"Retry-After": "2"})
                     time.sleep(0.3)
-        if not listo:
-            raise HTTPException(503, "Core ocupado (la base esta bloqueada), reintentar")
+                    continue
+                if time.monotonic() >= limite:
+                    raise HTTPException(
+                        503, "Core ocupado (la base esta bloqueada), reintentar",
+                        headers={"Retry-After": "2"})
+                # Espera creciente (50, 100, 200... ms, tope 250) + jitter, para
+                # que varios registros simultaneos no choquen todos a la vez.
+                time.sleep(min(0.05 * (2 ** intento), 0.25)
+                           + secrets.randbelow(40) / 1000.0)
         try:
             yield
             con.commit()
@@ -637,6 +708,17 @@ def _escritura():
             except Exception:
                 pass
             raise _error_escritura(e)
+
+# ============================================================
+#  F2-47: la regla de vigencia de claves vive SOLO en `claves.py`
+#  (F2-46 la habia copiado aqui en SQL; ver informes/f2-47_regla_unica)
+# ============================================================
+# Este fichero ya no sabe que es una clave vigente: pregunta.
+#   - pago     -> claves.clave_vigente(con, nodo, clave, "resultado")   1 consulta
+#   - replica  -> claves.predicado_vigente(...) pegado DENTRO del UPDATE 0 extra
+# Si alguien vuelve a escribir la regla aqui (mirando tablas de claves o
+# estados de rotacion), `prueba_f2_47.py` (TD1) falla.
+
 
 def schema():
     con.execute("CREATE TABLE IF NOT EXISTS nodos(id TEXT PRIMARY KEY, nombre TEXT, vram_gb INT, "
@@ -810,6 +892,10 @@ def schema():
     con.commit()
 
 schema()
+_esquema_claves = claves.crear_esquema(con)   # F2-14: tablas del ciclo de vida
+if _esquema_claves["sembradas"]:
+    print(f"[KUKIA] claves: {_esquema_claves['sembradas']} nodo(s) sembrados en el "
+          f"historial de claves", flush=True)
 
 # MODO DE DIARIO: WAL desde el 25-10-2026 (lectores ajenos ya no frenan los
 # pagos). Ver `_poner_en_wal`. Si el cambio no entra, se sigue en DELETE.
@@ -888,28 +974,56 @@ if _n_podados:
 
 
 def retirar_nodos_duplicados(con) -> int:
-    """Deja UNA identidad viva por nombre; las demas quedan retiradas.
+    """Deja UNA identidad viva por (nombre, clave_publica).
+
+    ANTES (fallo H1, auditoria F2-13): se consideraba duplicado cualquier nodo
+    que compartiera `nombre`, un campo que elige el cliente y que nadie
+    verifica. Un tercero podia registrar el nombre de otro y conseguir que, en
+    el siguiente arranque, se retirara la identidad legitima (la que tuviera
+    menos tareas o un `visto` mas antiguo).
+
+    AHORA: la identidad es la pareja (nombre, clave_publica). Solo se retira
+    cuando coinciden LAS DOS cosas. Se mantiene intacto:
+      - multi-dispositivo con la MISMA clave (nombres distintos: cpu/cuda:0...);
+      - dos operadores con el MISMO nombre (claves distintas);
+      - nodos sin clave valida: quedan fuera de esta regla, nunca se retiran;
+      - los ya retirados: no se borran ni se reasignan.
 
     No borra: la fila vieja conserva sus tareas, su reputacion y sus pagos (el
     ledger apunta a `nodo_id`, borrarla dejaria asientos huerfanos). Se queda
-    la que mas ha trabajado y, a igualdad, la vista mas recientemente.
+    la que mas ha trabajado y, a igualdad, la vista mas recientemente, la mas
+    antigua y, por ultimo, el `id` menor: orden total y determinista.
 
+    OJO: no se llama a `pubkey_valida()` a proposito. Esta funcion se ejecuta en
+    la linea 925 y `pubkey_valida` se define en la 952: llamarla aqui romperia
+    el arranque con NameError. El validador local hace exactamente lo mismo.
     """
+    def _clave_valida(clave: str) -> bool:
+        try:
+            return len(bytes.fromhex(clave)) == 32
+        except ValueError:
+            return False
+
     try:
         filas = con.execute(
-            "SELECT id, nombre FROM nodos WHERE COALESCE(retirado,0)=0 "
-            "ORDER BY COALESCE(tareas_ok,0) DESC, COALESCE(visto,0) DESC, creado ASC"
+            "SELECT id, nombre, clave_publica FROM nodos "
+            "WHERE COALESCE(retirado,0)=0 "
+            "ORDER BY COALESCE(tareas_ok,0) DESC, COALESCE(visto,0) DESC, "
+            "creado ASC, id ASC"
         ).fetchall()
     except Exception:
         return 0
     vistos = set()
     sobran = []
     for f in filas:
-        nombre = (f["nombre"] or "")
-        if nombre in vistos:
+        clave = (f["clave_publica"] or "").strip().lower()
+        if not clave or not _clave_valida(clave):
+            continue
+        identidad = ((f["nombre"] or ""), clave)
+        if identidad in vistos:
             sobran.append(f["id"])
         else:
-            vistos.add(nombre)
+            vistos.add(identidad)
     if not sobran:
         return 0
     try:
@@ -926,6 +1040,45 @@ _n_retirados = retirar_nodos_duplicados(con)
 if _n_retirados:
     print(f"[KUKIA] retirados {_n_retirados} nodos con nombre repetido "
           f"(un nombre, una identidad viva; no se borra nada)", flush=True)
+
+
+def crear_indice_identidad() -> bool:
+    """Indice unico parcial: una sola fila VIVA por (nombre, clave_publica).
+
+    H2 (F2-13). No impone unicidad de nombre (seria H1) ni de clave (rompe el
+    multi-GPU): solo de la pareja, que es la identidad real.
+
+    Va DESPUES de `retirar_nodos_duplicados` para aprovechar la limpieza del
+    arranque. Antes de crearlo hace preflight: si quedara algun grupo duplicado,
+    NO se crea y se avisa (el Core arranca igual; nunca se cae por esto).
+    """
+    try:
+        malos = con.execute(
+            "SELECT nombre, clave_publica, COUNT(*) n FROM nodos "
+            "WHERE COALESCE(retirado,0)=0 AND clave_publica IS NOT NULL "
+            "AND clave_publica<>'' GROUP BY nombre, clave_publica HAVING n>1"
+        ).fetchall()
+        if malos:
+            print(f"[KUKIA] indice de identidad NO creado: {len(malos)} grupo(s) "
+                  f"duplicado(s) entre nodos vivos; revisar antes de forzarlo",
+                  flush=True)
+            return False
+        con.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_nodos_vivo "
+            "ON nodos(nombre, clave_publica) "
+            "WHERE COALESCE(retirado,0)=0 AND clave_publica IS NOT NULL "
+            "AND clave_publica<>''")
+        con.commit()
+        return True
+    except Exception as e:
+        print(f"[KUKIA] indice de identidad no creado: {e}", flush=True)
+        return False
+
+
+_indice_identidad = crear_indice_identidad()
+if _indice_identidad:
+    print("[KUKIA] identidad de nodo protegida por indice unico (nombre, clave)",
+          flush=True)
 
 def direccion_valida(d: str) -> bool:
     """Formato de direccion KUKIA: KUK + 38 hex (41 caracteres)."""
@@ -1138,9 +1291,12 @@ def _asiento(tarea_id, nodo_id, kuki, motivo):
     # asi que ninguna cuenta puede volver a quedar con signo negativo.
     con.execute("UPDATE saldos_cuenta SET total=0.0 WHERE cuenta=? "
                 "AND total > -1e-9 AND total < 1e-9", (nodo_id,))
-    con.execute("INSERT INTO meta(clave,valor) VALUES('supply_emitido',?)"
-                "ON CONFLICT(clave) DO UPDATE SET valor=valor+excluded.valor",
-                (float(kuki),))
+    # F2-35: la cache del suministro se ajusta con el importe exacto que se
+    # acaba de anotar (no se relee el ledger aqui: son 186 ms por asiento).
+    # Si nunca se ha leido, se deja sin inicializar y el proximo
+    # `supply_emitido()` la recalcula desde el ledger (no se suma dos veces).
+    if _supply_cache["ts"]:
+        _supply_cache["valor"] = _supply_cache["valor"] + float(kuki)
     return h
 
 # ============================================================
@@ -1306,6 +1462,14 @@ def recalcular_resumen() -> dict:
                         "SELECT nodo_id, COALESCE(SUM(kuki),0) FROM ledger GROUP BY nodo_id")
             fila = con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger").fetchone()
             total = float(fila["s"] or 0.0)
+            # F2-35: el total ya no se guarda como contador; se refresca la cache.
+            _supply_cache["ts"] = time.time()
+            _supply_cache["valor"] = total
+            # F2-35: INSTANTANEA, no fuente de verdad. Se reescribe aqui (arranque
+            # y /admin/recalcular_resumen) para que las herramientas que leen la
+            # columna no se queden con un valor de hace semanas ni con None
+            # (`tools/migrar_entero.py` hace fetchone()["valor"]), pero el Core
+            # no la vuelve a leer nunca: miente entre reinicios por diseno.
             con.execute("INSERT INTO meta(clave,valor) VALUES('supply_emitido',?) "
                         "ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor", (total,))
             cuentas = con.execute("SELECT COUNT(*) c FROM saldos_cuenta").fetchone()["c"]
@@ -2218,15 +2382,20 @@ def registrar(n: NodoIn, req: Request):
     # Antes cada registro insertaba una fila nueva con el mismo nombre y el
     # registro se llenaba de "minero_pc[cuda:0]" repetidos.
     nombre_nodo = n.nombre[:64]
-    previo = None
-    if pub:
-        previo = con.execute(
-            "SELECT id FROM nodos WHERE nombre=? AND clave_publica=? "
-            "AND COALESCE(retirado,0)=0 ORDER BY COALESCE(tareas_ok,0) DESC LIMIT 1",
-            (nombre_nodo, pub)).fetchone()
-    nid = previo["id"] if previo else uuid.uuid4().hex[:12]
     ip = _ip_cliente(req)
-    with _escritura():   # AUDITORIA: antes escribia sin lock (500 con 2 GPUs)
+    nid = None
+    with _escritura(_espera_registro_s()):   # H7: en un pico, esperar el turno
+        # H2 (F2-13): el SELECT de dedupe va DENTRO de la transaccion. Antes se
+        # hacia fuera del lock, asi que dos procesos podian decidir a la vez "no
+        # existe" y crear dos filas con la misma identidad. `BEGIN IMMEDIATE`
+        # bloquea la base a nivel de fichero: serializa tambien entre procesos.
+        previo = None
+        if pub:
+            previo = con.execute(
+                "SELECT id FROM nodos WHERE nombre=? AND clave_publica=? "
+                "AND COALESCE(retirado,0)=0 ORDER BY COALESCE(tareas_ok,0) DESC LIMIT 1",
+                (nombre_nodo, pub)).fetchone()
+        nid = previo["id"] if previo else uuid.uuid4().hex[:12]
         _cupo_registro(ip, pub)
         if n.prueba_gpu:
             con.execute("INSERT INTO gpu_pruebas(nodo_id,prueba,creado) VALUES(?,?,?)",
@@ -2245,9 +2414,32 @@ def registrar(n: NodoIn, req: Request):
                         (vram, tier(vram), tops, 1 if n.tops_estimado else 0,
                          n.ref[:64], dir_cobro, dispositivo, nid))
         else:
-            con.execute("INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto,device) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (nid, nombre_nodo, vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
-                         pub, 1 if n.tops_estimado else 0, dir_cobro, 0.0, dispositivo))
+            try:
+                con.execute("INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto,device) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            (nid, nombre_nodo, vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
+                             pub, 1 if n.tops_estimado else 0, dir_cobro, 0.0, dispositivo))
+            except sqlite3.IntegrityError:
+                # H2: red de seguridad del indice unico. Otro proceso gano la
+                # carrera justo entre nuestro SELECT y este INSERT: se reutiliza
+                # su fila en lugar de devolver un 500 al minero.
+                fila = con.execute(
+                    "SELECT id FROM nodos WHERE nombre=? AND clave_publica=? "
+                    "AND COALESCE(retirado,0)=0 LIMIT 1",
+                    (nombre_nodo, pub)).fetchone()
+                if not fila:
+                    raise
+                nid = fila["id"]
+                con.execute("UPDATE nodos SET vram_gb=?, tier=?, tops=?, tops_estimado=?, "
+                            "ref=?, direccion_cobro=?, device=? WHERE id=?",
+                            (vram, tier(vram), tops, 1 if n.tops_estimado else 0,
+                             n.ref[:64], dir_cobro, dispositivo, nid))
+        # F2-36: el historial de claves nace con el nodo, DENTRO de esta misma
+        # transaccion. Antes se sembraba de forma perezosa en la primera lectura
+        # (con su propio commit), y eso metia una escritura en la autenticacion.
+        if pub:
+            con.execute(
+                "INSERT OR IGNORE INTO claves_nodo(nodo_id,clave_publica,estado,desde) "
+                "VALUES(?,?,'active',?)", (nid, pub.strip().lower(), time.time()))
     return {"id": nid, "tier": tier(vram), "max_supply": MAX_SUPPLY, "tops_registrados": tops,
             "autenticado": bool(pub), "direccion_cobro": dir_cobro}
 
@@ -2742,15 +2934,16 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
     pub = (node["clave_publica"] or "") if "clave_publica" in node.keys() else ""
     if EXIGIR_FIRMA_GLOBAL and not pub:
         raise HTTPException(401, "nodo sin clave registrada (firma obligatoria)")
-    if pub:
-        if not firma:
-            raise HTTPException(401, "falta firma del nodo (suplantacion bloqueada)")
-        try:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
-                bytes.fromhex(firma), f"{tid}:{metrica}".encode())
-        except Exception:
-            raise HTTPException(401, "firma invalida (suplantacion bloqueada)")
+    clave_firmada = ""
+    if pub or claves.clave_activa(con, nodo_id):
+        # F2-14: firma v2 ligada al nodo (F2-13), claves revocadas fuera y
+        # gracia solo para resultados. Modo: off | dual | on (por defecto dual).
+        _modo_firma = (os.environ.get("KUKIA_FIRMA_RESULTADO") or "dual").strip().lower()
+        _verif = claves.verificar_firma_resultado(con, nodo_id, tid, metrica,
+                                                  firma, _modo_firma)
+        if not _verif["ok"]:
+            raise HTTPException(401, f"firma rechazada: {_verif['motivo']}")
+        clave_firmada = (_verif.get("clave") or "").strip()
     # Rechazo temprano si la tarea no es pagable (evita trabajo inutil)
     if task["estado"] == "ok":
         raise HTTPException(409, "tarea ya pagada (doble pago bloqueado)")
@@ -2889,6 +3082,17 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = "", firma: s
             if task2["nodo_id"] and task2["nodo_id"] != nodo_id:
                 _rollback_seguro()
                 raise HTTPException(409, "tarea asignada a otro nodo")
+            # F2-38: el recalculo de la verificacion es trabajo real (cientos de
+            # ms en una matriz). En ese hueco el nodo pudo revocar o rotar sin
+            # gracia, y la clave muerta cobraba igual. F2-46: la revalidacion ya
+            # con el cerrojo tomado, con la MISMA regla que al firmar (una
+            # rotacion planificada en gracia sigue valiendo), pero en UNA
+            # consulta en vez de tres y sin construir el conjunto en Python.
+            if clave_firmada and not claves.clave_vigente(con, nodo_id,
+                                                         clave_firmada, "resultado"):
+                _rollback_seguro()
+                raise HTTPException(409, "clave cambiada durante la entrega; "
+                                         "firma de nuevo con la clave vigente")
 
             kuki = 0.0
             info_pago = {}
@@ -3082,6 +3286,7 @@ class ReplicaIn(BaseModel):
 
 
 @app.post("/tareas/replica")
+@_reintentar_si_ocupada
 def tarea_replica(r: ReplicaIn):
     """Un nodo entrega el resultado de una REPLICA (verificacion redundante).
 
@@ -3099,15 +3304,25 @@ def tarea_replica(r: ReplicaIn):
     if not node:
         raise HTTPException(404, "nodo no registrado")
     pub = (node["clave_publica"] or "") if "clave_publica" in node.keys() else ""
-    if pub:
-        if not r.firma:
-            raise HTTPException(401, "falta firma del nodo")
-        try:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
-                bytes.fromhex(r.firma), f"{r.tid}:{r.metrica}".encode())
-        except Exception:
-            raise HTTPException(401, "firma invalida")
+    # F2-29 (D-09): la replica exige la MISMA autenticacion que el resultado
+    # primario. Antes esta ruta se saltaba `EXIGIR_FIRMA_GLOBAL`: un nodo sin
+    # clave podia publicar una replica sin demostrar que era el. No se paga al
+    # entregarla, pero DECIDE — reparto 70/30 y castigo del primario.
+    if EXIGIR_FIRMA_GLOBAL and not pub:
+        raise HTTPException(401, "nodo sin clave registrada (firma obligatoria)")
+    clave_firmada = ""
+    if pub or claves.clave_activa(con, r.nodo_id):
+        # Dominio propio (replica:v2) y sin gracia: una clave sustituida no
+        # puede mover dinero ni reputacion por la via de la replica.
+        _modo_rep = (os.environ.get("KUKIA_FIRMA_REPLICA") or "dual").strip().lower()
+        _verif_rep = claves.verificar_firma_replica(con, r.nodo_id, r.tid,
+                                                    r.metrica, r.firma, _modo_rep)
+        if not _verif_rep["ok"]:
+            raise HTTPException(401, f"firma rechazada: {_verif_rep['motivo']}")
+        # F2-38: se recuerda que clave valido la firma para revalidarla dentro
+        # del cerrojo. Sin esto, una clave revocada entre la firma y el UPDATE
+        # seguia entregando la replica (y con ella el reparto y el castigo).
+        clave_firmada = (_verif_rep.get("clave") or "").strip()
     rep = con.execute("SELECT * FROM tareas_replica WHERE tarea_id=?", (r.tid,)).fetchone()
     if not rep:
         # AUDITORIA 21-10-2026: la fila de la replica se borra en cuanto la tarea
@@ -3141,10 +3356,22 @@ def tarea_replica(r: ReplicaIn):
     if not math.isfinite(dur) or not (0.0 <= dur <= 86_400_000.0):
         dur = 0.0
     with _escritura():
-        con.execute("UPDATE tareas_replica SET estado='entregada', metrica=?, firma=?, "
-                    "device=?, duracion_ms=?, ts=? WHERE tarea_id=? AND nodo_id=?",
-                    (r.metrica[:16384], r.firma[:256], device_limpio(r.device), dur,
-                     time.time(), r.tid, r.nodo_id))
+        # F2-38: la clave pudo cambiar mientras se esperaba el cerrojo. F2-47:
+        # el predicado lo construye `claves` (regla unica) y se pega DENTRO del
+        # UPDATE, asi que revalidar no cuesta una consulta mas; si la clave dejo
+        # de valer, no se toca ninguna fila.
+        sql = ("UPDATE tareas_replica SET estado='entregada', metrica=?, firma=?, "
+               "device=?, duracion_ms=?, ts=? WHERE tarea_id=? AND nodo_id=?")
+        args = [r.metrica[:16384], r.firma[:256], device_limpio(r.device), dur,
+                time.time(), r.tid, r.nodo_id]
+        if clave_firmada:          # la ruta v1 entrega sin firma: sin revalidar
+            pred, pargs = claves.predicado_vigente(r.nodo_id, clave_firmada, "activa")
+            sql += " AND " + pred
+            args.extend(pargs)
+        cur = con.execute(sql, tuple(args))
+        if int(cur.rowcount or 0) != 1:
+            raise HTTPException(409, "clave cambiada durante la entrega; "
+                                     "firma de nuevo con la clave vigente")
         con.execute("UPDATE nodos SET visto=? WHERE id=?", (time.time(), r.nodo_id))
     return {"ok": True, "guardada": True}
 
@@ -3398,15 +3625,43 @@ def dificultad() -> dict:
                               max(300, int(1500 * escala * escala))),
     }
 
+# F2-35: el suministro ya NO es un contador que se suma a si mismo. El viejo
+# `meta.supply_emitido` se incrementaba con `valor = valor + kuki` en coma
+# flotante: cada asiento redondeaba sobre un total de ~1,5e7 (ULP 1,9e-9) y el
+# error se acumulaba sin volver nunca al ledger. Medido el 30-10-2026 con
+# 200.000 pagos de 0,0001 KIA (test S1): el contador queda 3,397e-05 KIA POR
+# DEBAJO de la suma de asientos, y crece con el numero de pagos. En reposo no
+# se ve porque el arranque re-ancla el contador al ledger.
+#
+# Ahora la unica fuente de verdad es el ledger, y el contador solo CACHEA el
+# resultado de sumarlo:
+#   - cada asiento ajusta la cache con el importe exacto que acaba de escribir,
+#     asi que el tope de emision (MAX_SUPPLY - supply) nunca va por detras;
+#   - pasado SUPPLY_TTL_S se vuelve a sumar el ledger y la cache se sustituye
+#     por el valor exacto. El error de la cache es, como mucho, el de los
+#     asientos de la ventana TTL (unos pocos nanokIA), nunca acumulativo.
+#
+# COSTE MEDIDO (1,2 M de asientos): SUM(ledger) = 186 ms; MAX(id) = 0,02 ms;
+# SUM(saldos_cuenta) = 0,02 ms. Por eso no se suma en cada peticion: con
+# TTL=5 s son ~4 % de un nucleo, y KUKIA_SUPPLY_TTL_S=0 lo vuelve exacto en
+# cada llamada (es lo que usan las pruebas de igualdad estricta).
+# F2-35: `SUPPLY_TTL_S` y `_supply_cache` viven arriba (junto a MAX_SUPPLY)
+# porque `genesis()` llama a `_asiento()` al importar el modulo, antes de
+# llegar aqui.
+def _supply_desde_ledger() -> float:
+    fila = con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger").fetchone()
+    return float(fila["s"] or 0.0)
+
+
 def supply_emitido() -> float:
-    """Suministro desde el total materializado (con respaldo al ledger)."""
-    try:
-        fila = con.execute("SELECT valor FROM meta WHERE clave='supply_emitido'").fetchone()
-        if fila is not None:
-            return float(fila["valor"] or 0.0)
-    except Exception:
-        pass
-    return float(con.execute("SELECT COALESCE(SUM(kuki),0) s FROM ledger").fetchone()["s"] or 0.0)
+    """Suministro emitido: suma EXACTA del ledger, cacheada TTL segundos."""
+    ahora = time.time()
+    if _supply_cache["ts"] and (ahora - _supply_cache["ts"]) < SUPPLY_TTL_S:
+        return _supply_cache["valor"]
+    valor = _supply_desde_ledger()
+    _supply_cache["ts"] = ahora
+    _supply_cache["valor"] = valor
+    return valor
 
 def _epoch(ts: str) -> float:
     try:
@@ -5999,3 +6254,150 @@ def cliente_ver_tarea(tid: str, c=Depends(exigir_cliente)):
 
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300
+
+
+# ==========================================================================
+# F2-14 â€” ciclo de vida de claves (endpoints nuevos, NO desplegados)
+# ==========================================================================
+class ClaveRetoIn(BaseModel):
+    tipo: str = "planificada"
+
+
+class ClaveRotarIn(BaseModel):
+    reto: str
+    clave_vieja: str
+    clave_nueva: str
+    firma_vieja: str
+    firma_nueva: str
+    ts: float = 0
+    tipo: str = "planificada"
+    gracia_seg: float = 0
+
+
+class ClaveSecretoIn(BaseModel):
+    secreto: str
+
+
+class ClaveConfigurarIn(BaseModel):
+    secreto: str
+    reto: str = ""
+    firma: str = ""
+    ts: float = 0
+
+
+class ClaveRecuperarIn(BaseModel):
+    clave_nueva: str
+    firma: str
+    secreto: str
+    ts: float = 0
+    tipo: str = "compromiso"
+    retraso_seg: float = 0
+
+
+class ClaveConfirmarIn(BaseModel):
+    firma: str
+    ts: float = 0
+
+
+def _clave_http(motivo: str):
+    """Codigos estables: 401 autenticidad, 409 conflicto, 400 entrada."""
+    if motivo in ("firma_clave_vieja_invalida", "falta_posesion_clave_nueva",
+                  "clave_invalida", "falta_posesion_clave_activa",
+                  "firma_invalida"):
+        return HTTPException(401, motivo)
+    if motivo in ("reto_invalido_o_caducado", "clave_desactualizada",
+                  "ya_aplicada", "conflicto_concurrente", "clave_ya_usada",
+                  "recuperacion_ya_configurada"):
+        return HTTPException(409, motivo)
+    return HTTPException(400, motivo)
+
+
+def _reto_http(out):
+    """Traduce la emision de un reto a HTTP.
+
+    None = nodo sin clave activa (404). Cuota agotada = 429 con `Retry-After`.
+    Cualquier otro motivo sigue el mapa estable de `_clave_http`.
+    """
+    if out is None:
+        raise HTTPException(404, "nodo sin clave activa")
+    if not out.get("ok"):
+        if out.get("motivo") == "cuota_reto_excedida":
+            espera = max(1, int(math.ceil(float(out.get("reintentar_en") or 1.0))))
+            raise HTTPException(429, out.get("motivo", "cuota_reto_excedida"),
+                                headers={"Retry-After": str(espera)})
+        raise _clave_http(out.get("motivo", "error"))
+    return out
+
+
+@app.post("/nodos/{nodo_id}/clave/reto")
+def clave_reto(nodo_id: str, r: ClaveRetoIn, req: Request):
+    """Reto de un solo uso para rotar la clave. Caduca en 5 minutos.
+
+    F2-23: emision con cuota propia (`rot:`), independiente de la de
+    configuracion, para que inundar una no bloquee la otra.
+    """
+    return _reto_http(claves.reto_rotacion(con, nodo_id, r.tipo,
+                                           ip=_ip_cliente(req)))
+
+
+@app.post("/nodos/{nodo_id}/clave/rotar")
+def clave_rotar(nodo_id: str, r: ClaveRotarIn):
+    """Rotacion: firma de la clave vieja + posesion de la nueva, misma frase."""
+    out = claves.rotar(con, nodo_id, r.reto, r.clave_vieja, r.clave_nueva,
+                       r.firma_vieja, r.firma_nueva, r.ts, r.tipo, r.gracia_seg)
+    if not out.get("ok"):
+        raise _clave_http(out.get("motivo", "error"))
+    return out
+
+
+@app.post("/nodos/{nodo_id}/clave/reto-configuracion")
+def clave_reto_configuracion(nodo_id: str, req: Request):
+    """Reto de un solo uso para inscribir el secreto. Caduca en 5 minutos.
+
+    F2-22: emision con cuota por nodo y por IP. Al agotarla responde 429 con
+    `Retry-After`.
+    """
+    return _reto_http(claves.reto_configuracion(con, nodo_id,
+                                               ip=_ip_cliente(req)))
+
+
+@app.post("/nodos/{nodo_id}/clave/recuperacion")
+def clave_configurar_recuperacion(nodo_id: str, r: ClaveConfigurarIn):
+    """Inscribe el secreto de recuperacion con prueba de la clave ACTIVA."""
+    out = claves.configurar_recuperacion(con, nodo_id, r.secreto, reto=r.reto,
+                                         firma=r.firma, ts=r.ts)
+    if not out.get("ok"):
+        raise _clave_http(out.get("motivo", "error"))
+    return out
+
+
+@app.post("/nodos/{nodo_id}/clave/recuperar")
+def clave_recuperar(nodo_id: str, r: ClaveRecuperarIn):
+    """Recupera con el secreto + posesion de la nueva clave.
+
+    `compromiso` (por defecto) revoca la clave actual en el acto y sin gracia.
+    `perdida` deja la nueva en `recovery_pending` hasta confirmarla.
+    """
+    out = claves.recuperar(con, nodo_id, r.clave_nueva, r.firma, r.secreto, r.ts,
+                           r.tipo, r.retraso_seg)
+    if not out.get("ok"):
+        raise _clave_http(out.get("motivo", "error"))
+    return out
+
+
+@app.post("/nodos/{nodo_id}/clave/confirmar")
+def clave_confirmar(nodo_id: str, r: ClaveConfirmarIn):
+    """Cierra una recuperacion por perdida (la nueva pasa a activa)."""
+    out = claves.confirmar_recuperacion(con, nodo_id, r.firma, r.ts)
+    if not out.get("ok"):
+        raise _clave_http(out.get("motivo", "error"))
+    return out
+
+
+@app.post("/nodos/{nodo_id}/clave/revocar")
+def clave_revocar(nodo_id: str, r: ClaveSecretoIn):
+    """Revoca sin sustituta: la identidad deja de firmar nada."""
+    out = claves.revocar(con, nodo_id, r.secreto)
+    if not out.get("ok"):
+        raise _clave_http(out.get("motivo", "error"))
+    return out
