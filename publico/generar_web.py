@@ -458,18 +458,29 @@ def generar_version(destino: Path, canonico: str = CANONICO,
                           "(Windows: 'certutil -hashfile kukia-node.zip SHA256'): tiene que "
                           "dar el zip_sha256 de este fichero. La version del Core se ve en "
                           "http://127.0.0.1:8300/version, que ademas publica el hash de "
-                          "cada fichero que esta ejecutando.")}
+                          "cada fichero que esta ejecutando. Para las paginas: 'ficheros' "
+                          "cuadra con lo que sirve el sitio y 'ficheros_git' con el mismo "
+                          "fichero descargado del repositorio, donde los saltos de linea "
+                          "son LF.")}
     info = dict(info or {})
     # Huella de CADA pagina publicada: es lo que se puede comprobar sin git.
     # Se calcula AQUI porque este paso va el ULTIMO, cuando el HTML ya es el
     # definitivo (canonica, SEO y version visibles ya escritos).
     ficheros = {}
+    # F2-60: la MISMA pagina con los finales de linea pasados a LF. En Windows
+    # git guarda y GitHub sirve LF, mientras estos ficheros estan en CRLF en
+    # disco: sin esta segunda huella, comparar con el repositorio daba distinto
+    # SIEMPRE y parecia que alguien habia tocado la web.
+    ficheros_git = {}
     for ruta in sorted(destino.iterdir()):
         if not ruta.is_file():
             continue
         if ruta.suffix == ".html" or ruta.name in ("sitemap.xml", "robots.txt"):
             try:
-                ficheros[ruta.name] = hashlib.sha256(ruta.read_bytes()).hexdigest()
+                datos = ruta.read_bytes()
+                ficheros[ruta.name] = hashlib.sha256(datos).hexdigest()
+                ficheros_git[ruta.name] = hashlib.sha256(
+                    datos.replace(b"\r\n", b"\n")).hexdigest()
             except Exception:
                 pass
     dato.update({
@@ -483,6 +494,9 @@ def generar_version(destino: Path, canonico: str = CANONICO,
                        "es el punto de partida, no cada linea. Lo que se publico "
                        "cuadra con 'ficheros'." if info.get("sucio") else ""),
         "ficheros": ficheros,
+        # `ficheros` = lo que sirve el sitio, tal cual se sube.
+        # `ficheros_git` = lo mismo en LF, que es lo que se descarga del repo.
+        "ficheros_git": ficheros_git,
     })
     salida = destino / "version.json"
     salida.write_text(json.dumps(dato, indent=2, ensure_ascii=False) + "\n",
