@@ -9,6 +9,7 @@ Uso:
   python publico/generar_web.py --destino <carpeta>
 """
 import argparse
+import ast
 import hashlib
 import html
 import json
@@ -240,6 +241,83 @@ def dos_huellas(datos: bytes) -> tuple[str, str]:
     """
     return (hashlib.sha256(datos).hexdigest(),
             hashlib.sha256(datos.replace(b"\r\n", b"\n")).hexdigest())
+
+
+# 30-10-2026 (F2-62): la pagina del minero y version.json publican las huellas
+# del codigo en las DOS formas que ya da /version: `sha256` (bytes del disco, con
+# CRLF en Windows) y `sha256_git` (los mismos con LF, que es lo que se descarga
+# de GitHub). La lista de ficheros NO se copia aqui: se lee del propio Core, para
+# que no pueda quedarse corta si mañana se anade otro modulo a la huella.
+MINERO_PAGINA = "minero.html"
+MARCAS_HUELLAS = ("<!-- huellas-codigo:inicio -->", "<!-- huellas-codigo:fin -->")
+# Ficheros del minero que la pagina cita y que no estan en la huella del Core.
+HUELLAS_EXTRA = ("tools/rotar_logs.py",)
+
+
+def ficheros_huella() -> list[str]:
+    """La lista FICHEROS_HUELLA leida del AST de kukia_core.py (sin importarlo)."""
+    try:
+        arbol = ast.parse((RAIZ / "coordinator" / "kukia_core.py").read_text(
+            encoding="utf-8"))
+    except Exception:
+        return []
+    for nodo in arbol.body:
+        objetivos = getattr(nodo, "targets", None) or []
+        if any(getattr(t, "id", "") == "FICHEROS_HUELLA" for t in objetivos):
+            try:
+                return [str(e.value) for e in nodo.value.elts]
+            except Exception:
+                return []
+    return []
+
+
+def huellas_codigo() -> dict:
+    """{ruta: {sha256, sha256_git}} de lo que corre, en crudo y normalizado."""
+    salida = {}
+    for rel in ficheros_huella() + list(HUELLAS_EXTRA):
+        ruta = RAIZ / rel
+        if not ruta.is_file():
+            continue
+        cruda, lf = dos_huellas(ruta.read_bytes())
+        salida[rel] = {"sha256": cruda, "sha256_git": lf}
+    return salida
+
+
+def publicar_huellas_minero(destino: Path) -> int:
+    """Reescribe el bloque de huellas de minero.html entre sus dos marcas.
+
+    La pagina se escribe a mano, pero los hashes no: si se copian a mano se
+    quedan viejos el dia que cambie el worker y mienten sin avisar.
+    """
+    ruta = destino / MINERO_PAGINA
+    if not ruta.is_file():
+        return 0
+    huellas = huellas_codigo()
+    filas = ["<table>",
+             "<tr><th>Fichero</th><th>SHA-256 cruda (bytes del disco)</th>"
+             "<th>SHA-256 normalizada (LF)</th></tr>"]
+    for rel, h in huellas.items():
+        filas.append("<tr><td><code>" + html.escape(rel) + "</code></td><td><code>" +
+                     h["sha256"] + "</code></td><td><code>" + h["sha256_git"] +
+                     "</code></td></tr>")
+    filas.append("</table>")
+    filas.append("<p><small>Los dos valores son los que publica <code>/version</code> "
+                 "en el PC que lo ejecuta (<code>sha256</code> y <code>sha256_git</code>). "
+                 "El de la derecha es el que da el fichero descargado del repositorio: "
+                 "si compara y no cuadra, está mirando la columna equivocada.</small></p>")
+    bloque = "\n".join([MARCAS_HUELLAS[0]] + filas + [MARCAS_HUELLAS[1]])
+    datos = ruta.read_bytes()
+    eol = "\r\n" if b"\r\n" in datos else "\n"
+    texto = datos.decode("utf-8").replace("\r\n", "\n")
+    ini, fin = MARCAS_HUELLAS
+    i, j = texto.find(ini), texto.find(fin)
+    if i < 0 or j < i:
+        print(f"[generar_web] AVISO: {MINERO_PAGINA} no tiene las marcas de huellas; "
+              "no se actualiza")
+        return 0
+    nuevo = texto[:i] + bloque + texto[j + len(fin):]
+    ruta.write_bytes(nuevo.replace("\n", eol).encode("utf-8"))
+    return len(huellas)
 
 
 def generar_codigo(destino: Path, fecha: str, hash_zip: str = "",
@@ -527,6 +605,11 @@ def generar_version(destino: Path, canonico: str = CANONICO,
         "sucio_nota": ("cuando se genero esto habia cambios sin confirmar: el commit "
                        "es el punto de partida, no cada linea. Lo que se publico "
                        "cuadra con 'ficheros'." if info.get("sucio") else ""),
+        "codigo": huellas_codigo(),
+        "codigo_nota": ("Huellas del codigo que corre, en las dos formas: 'sha256' son "
+                        "los bytes del fichero en disco (CRLF en Windows) y 'sha256_git' "
+                        "los mismos con LF, que es lo que devuelve el repositorio. Las "
+                        "mismas dos que publica /version."),
         "ficheros": ficheros,
         # `ficheros` = lo que sirve el sitio, tal cual se sube.
         # `ficheros_git` = lo mismo en LF, que es lo que se descarga del repo.
@@ -855,6 +938,7 @@ def main() -> int:
     (destino / "kukia-node.zip.sha256").write_text(
         f"{huella}  kukia-node.zip\n", encoding="ascii", newline="\n")
     h = generar_codigo(destino, args.fecha, huella, canonico)
+    n_hue = publicar_huellas_minero(destino)
     n_html = fijar_canonico(destino, canonico)
     n_seo = inyectar_seo(destino, canonico)
     r, s = generar_seo(destino, canonico)
@@ -867,6 +951,7 @@ def main() -> int:
     print(f"kukia-node.zip {z.stat().st_size} bytes | sha256 {huella}")
     print(f"version.json {json.loads(v.read_text(encoding='utf-8'))['v']}")
     print(f"robots.txt {r.stat().st_size} bytes / sitemap.xml {s.stat().st_size} bytes")
+    print(f"minero.html: {n_hue} fichero(s) con sus dos huellas")
     print(f"canonica {canonico} en {n_html} pagina(s)")
     print(f"SEO tecnico (robots, Open Graph, JSON-LD) en {n_seo} pagina(s)")
     print(f"IndexNow: clave publicada en /{k.name} (para Bing, Yandex, Seznam, Naver)")

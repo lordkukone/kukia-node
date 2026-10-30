@@ -99,12 +99,29 @@ defecto <strong>M-02</strong> (un dispositivo que puede quedarse sin trabajar) s
 <table>
 <tr><th>Componente</th><th>Valor verificado</th></tr>
 <tr><td>Worker</td><td><code>worker/kukia_worker.py</code> · versión 1.0 · 2.194 líneas</td></tr>
-<tr><td>SHA-256 del worker</td><td><code>79865c1f1747992aad961f001eb1de5c24d135a01edefd61fdf8c42440fde89c</code> (el del paquete y el que corre, con CRLF)<br><code>5824d34fe66583e89387fa581008c7cdb7caa3be72f8a250baef2b73ee3056a9</code> (el mismo fichero descargado del repositorio, con LF)</td></tr>
 <tr><td>Paquete</td><td><code>kukia-miner-1.0.zip</code> · 67.550 bytes · SHA-256 <code>0a8d8065593ab876b63eac495e0f1f9721aa53e548392cfde158429aa80a23dd</code></td></tr>
-<tr><td>SHA-256 de <code>tools/rotar_logs.py</code></td><td><code>eb6d1620ecec905b393a2e2b871b676363af1bdf31abf71d4fb59da293aad9b7</code> (disco, CRLF)<br><code>9e9f75b2f93ee87ec3058c724313f9ceeb522297017cf028c5bfe81b656eda50</code> (repositorio, LF)</td></tr>
 <tr><td>Core compatible</td><td>0.4.4 (rama <code>pqc-integrado-20261027</code>)</td></tr>
 <tr><td>Descarga</td><td><a href="https://github.com/lordkukone/kukia-node/releases/download/minero-1.0/kukia-miner-1.0.zip">kukia-miner-1.0.zip</a> · <a href="https://github.com/lordkukone/kukia-node/releases/tag/minero-1.0">Release minero-1.0</a> · <a href="https://github.com/lordkukone/kukia-node/releases/download/minero-1.0/SHA256SUMS.txt">SHA256SUMS.txt</a></td></tr>
 </table>
+
+<h2>Huellas del código publicado</h2>
+<p>Las mismas dos que publica <code>/version</code>. La <strong>cruda</strong> son los
+bytes del fichero en disco (CRLF en Windows); la <strong>normalizada</strong> es el mismo
+texto en LF, que es lo que devuelve el repositorio. Se regeneran en cada publicación:
+si están escritas a mano, mienten en cuanto cambia el código.</p>
+<!-- huellas-codigo:inicio -->
+<table>
+<tr><th>Fichero</th><th>SHA-256 cruda (bytes del disco)</th><th>SHA-256 normalizada (LF)</th></tr>
+<tr><td><code>coordinator/kukia_core.py</code></td><td><code>99d60bd63914ee392604a5497b11ca3b97ca2915145905b1cad1431270634115</code></td><td><code>0ae8ada026bd8cfaacdd23af97d35cf6be58b158cc62320eb368618590af92fd</code></td></tr>
+<tr><td><code>coordinator/claves.py</code></td><td><code>571107401ecb15f6dc73d267446d9b8fd2a4c57ba7289b6e4713aeb2b07c6d14</code></td><td><code>1542bf3f3146e5880dcf7b1d01f8ded01c75cfccb7b52717672a71d71cd9e43a</code></td></tr>
+<tr><td><code>worker/kukia_worker.py</code></td><td><code>79865c1f1747992aad961f001eb1de5c24d135a01edefd61fdf8c42440fde89c</code></td><td><code>5824d34fe66583e89387fa581008c7cdb7caa3be72f8a250baef2b73ee3056a9</code></td></tr>
+<tr><td><code>ledger/kukia_wallet.py</code></td><td><code>b5b9730531143d0bd9a45bf14797687877485003cde256fc52a5568a838d885c</code></td><td><code>b5b9730531143d0bd9a45bf14797687877485003cde256fc52a5568a838d885c</code></td></tr>
+<tr><td><code>ledger/sellos.py</code></td><td><code>d9786b191c41d5a0cbae9f264765038ac47e840be5f0ee02980905a8d09af60d</code></td><td><code>3302e8381009bf9e48921738e6f2a9d53a806f05c0fd5b5e8f03a7dd7a7fd83d</code></td></tr>
+<tr><td><code>tools/guardia.py</code></td><td><code>02eb8a6081176d7ba208724e937ab89e8df61d164549249f98302dfe208d5396</code></td><td><code>02eb8a6081176d7ba208724e937ab89e8df61d164549249f98302dfe208d5396</code></td></tr>
+<tr><td><code>tools/rotar_logs.py</code></td><td><code>eb6d1620ecec905b393a2e2b871b676363af1bdf31abf71d4fb59da293aad9b7</code></td><td><code>9e9f75b2f93ee87ec3058c724313f9ceeb522297017cf028c5bfe81b656eda50</code></td></tr>
+</table>
+<p><small>Los dos valores son los que publica <code>/version</code> en el PC que lo ejecuta (<code>sha256</code> y <code>sha256_git</code>). El de la derecha es el que da el fichero descargado del repositorio: si compara y no cuadra, está mirando la columna equivocada.</small></p>
+<!-- huellas-codigo:fin -->
 
 <h2>Qué hace, comprobado con datos</h2>
 <ul>

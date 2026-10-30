@@ -1,25 +1,56 @@
 {
   "v": "v1.3.20-video-siempre",
-  "generado": "2026-10-30 22:38:22",
+  "generado": "2026-10-30 22:51:27",
   "core": "0.4.4",
   "zip": "kukia-node.zip",
   "zip_sha256": "82e7d98d64720c722eaf006ed8c0138ef79d4996de8d66df3ac423dc31b59cac",
   "verificar": "Descarga kukia-node.zip y ejecuta 'sha256sum kukia-node.zip' (Windows: 'certutil -hashfile kukia-node.zip SHA256'): tiene que dar el zip_sha256 de este fichero. La version del Core se ve en http://127.0.0.1:8300/version, que ademas publica el hash de cada fichero que esta ejecutando. Para las paginas: 'ficheros' cuadra con lo que sirve el sitio y 'ficheros_git' con el mismo fichero descargado del repositorio, donde los saltos de linea son LF.",
   "web": "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page",
-  "commit": "e41b06e4e81889482e329b5057f56e1bac4ccd01",
-  "commit_corto": "e41b06e",
-  "commit_url": "https://github.com/lordkukone/kukia-node/commit/e41b06e4e81889482e329b5057f56e1bac4ccd01",
+  "commit": "d0985aa75dd4475ad9ff9d3ec67c0dfc563ff960",
+  "commit_corto": "d0985aa",
+  "commit_url": "https://github.com/lordkukone/kukia-node/commit/d0985aa75dd4475ad9ff9d3ec67c0dfc563ff960",
   "rama": "f2-53-minero-estable",
   "sucio": true,
   "sucio_nota": "cuando se genero esto habia cambios sin confirmar: el commit es el punto de partida, no cada linea. Lo que se publico cuadra con 'ficheros'.",
+  "codigo": {
+    "coordinator/kukia_core.py": {
+      "sha256": "99d60bd63914ee392604a5497b11ca3b97ca2915145905b1cad1431270634115",
+      "sha256_git": "0ae8ada026bd8cfaacdd23af97d35cf6be58b158cc62320eb368618590af92fd"
+    },
+    "coordinator/claves.py": {
+      "sha256": "571107401ecb15f6dc73d267446d9b8fd2a4c57ba7289b6e4713aeb2b07c6d14",
+      "sha256_git": "1542bf3f3146e5880dcf7b1d01f8ded01c75cfccb7b52717672a71d71cd9e43a"
+    },
+    "worker/kukia_worker.py": {
+      "sha256": "79865c1f1747992aad961f001eb1de5c24d135a01edefd61fdf8c42440fde89c",
+      "sha256_git": "5824d34fe66583e89387fa581008c7cdb7caa3be72f8a250baef2b73ee3056a9"
+    },
+    "ledger/kukia_wallet.py": {
+      "sha256": "b5b9730531143d0bd9a45bf14797687877485003cde256fc52a5568a838d885c",
+      "sha256_git": "b5b9730531143d0bd9a45bf14797687877485003cde256fc52a5568a838d885c"
+    },
+    "ledger/sellos.py": {
+      "sha256": "d9786b191c41d5a0cbae9f264765038ac47e840be5f0ee02980905a8d09af60d",
+      "sha256_git": "3302e8381009bf9e48921738e6f2a9d53a806f05c0fd5b5e8f03a7dd7a7fd83d"
+    },
+    "tools/guardia.py": {
+      "sha256": "02eb8a6081176d7ba208724e937ab89e8df61d164549249f98302dfe208d5396",
+      "sha256_git": "02eb8a6081176d7ba208724e937ab89e8df61d164549249f98302dfe208d5396"
+    },
+    "tools/rotar_logs.py": {
+      "sha256": "eb6d1620ecec905b393a2e2b871b676363af1bdf31abf71d4fb59da293aad9b7",
+      "sha256_git": "9e9f75b2f93ee87ec3058c724313f9ceeb522297017cf028c5bfe81b656eda50"
+    }
+  },
+  "codigo_nota": "Huellas del codigo que corre, en las dos formas: 'sha256' son los bytes del fichero en disco (CRLF en Windows) y 'sha256_git' los mismos con LF, que es lo que devuelve el repositorio. Las mismas dos que publica /version.",
   "ficheros": {
     "calculadora.html": "75e979956d9695904d3d71353634bd5bd72657426038724bcf35952bff023c43",
     "codigo.html": "8a74552fcf4f6a28819cc752b83a31357049df750db24e9607e45f9588e7c1cb",
     "estado.html": "1446d82177767d6cc646e90be5f8f3fe955939ab1d9995c460671912a9a946e1",
     "google9d6cb22812b81092.html": "c965bccc5962cafa2f861ffcd91e90ab5d1e11dd84f0940037a6ce52a2600f60",
-    "index.html": "f5ce33babfed91c0fb76261cfad89d0b0eb8daecd4c5dbbab8b5a77d6d910025",
+    "index.html": "a42a07c5f8eafa721f912f7a90fc95f467de3772722672fb0aa86b9c8a94193f",
     "minar.html": "401b86c645f4126d6e0af7b82b90bbc63c43a2aee805f317fdae82ee24ff17e4",
-    "minero.html": "e2cd46b51fa5b07322fdac39b3ba9df7e719496d31a8be6a915681161b6c81dd",
+    "minero.html": "ef46c59e149d209ded7cc868235006d771fc123524ae2c62b5d17290171237b0",
     "robots.txt": "cafcda360e0c64bace4474213c8c23493478e083386a7c6187cf311589ba523b",
     "seguro.html": "1be4cc31a31d2312e62ae36780bb0280597312cd7e539999365cbf8bbf1191b6",
     "simple.html": "054bcd9a75810a688968199f704dc377fd271d16324053a89ecf2b568339e035",
@@ -33,9 +64,9 @@
     "codigo.html": "5f501c7550cba973dcd00d8be854734ef1fbd4ab145fe62bf53c4036a88a7149",
     "estado.html": "1740ea577af4e9cf220e95dfc45451fcdb87c59ca381f8ff6dfcdb35f290355b",
     "google9d6cb22812b81092.html": "c965bccc5962cafa2f861ffcd91e90ab5d1e11dd84f0940037a6ce52a2600f60",
-    "index.html": "1468f8e5cf23bbbd7e5d8f453b6f5d711d9f5572f2a27e411f69bc1695c2b4b1",
+    "index.html": "873ec88c735719bebca235c5e3a55a36852f5728851e99727181a06181481803",
     "minar.html": "113760fd091522239227bb0db58e15f9663db9dbb70ae3bb80cb7e7ce3e2e5b8",
-    "minero.html": "6667e50b1883a857d565d8b95c19e9c287bfb80eab1f5485be3c30731432947d",
+    "minero.html": "70cbbe89d4b0cf469aa4a41804da3f6de175c2d97a79abb5e79eb75cf5f78999",
     "robots.txt": "6ee38b79123911909929fd15877969f5ef5a6a22e09bad80ce9fce6f61db3276",
     "seguro.html": "736bf6f80f5c45e39de30e881e9e3f6b878c3c368139398fae0b7bd95dfd8466",
     "simple.html": "7be15c63d172f5a91bea533b31a02bbdbbdac7c8f1b5d104be7dcd5359d661bf",
