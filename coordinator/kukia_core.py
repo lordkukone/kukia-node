@@ -1840,6 +1840,21 @@ def _sha256_fichero(ruta: Path) -> str:
         return ""
 
 
+def _sha256_normalizado(ruta: Path) -> str:
+    """SHA-256 del fichero con los finales de linea pasados a LF.
+
+    POR QUE EXISTE (30-10-2026): en Windows este repo tiene core.autocrlf=true,
+    asi que git guarda y GitHub sirve los .py en LF, mientras en disco estan en
+    CRLF. `sha256` hashea los bytes del disco; compararlo con el fichero
+    descargado de GitHub daba SIEMPRE distinto, y un auditor habria concluido
+    que el Core corre codigo manipulado. Este es el hash que cuadra con GitHub.
+    """
+    try:
+        return hashlib.sha256(ruta.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+    except Exception:
+        return ""
+
+
 def _commit_del_repo(raiz: Path) -> str:
     """Commit de HEAD leido del .git a mano: sin lanzar git ni tocar la red."""
     try:
@@ -1868,6 +1883,7 @@ def _huella_codigo() -> dict:
     for rel in FICHEROS_HUELLA:
         f = raiz / rel
         ficheros[rel] = {"sha256": _sha256_fichero(f)[:16],
+                         "sha256_git": _sha256_normalizado(f)[:16],
                          "mtime": (time.strftime("%Y-%m-%d %H:%M:%S",
                                                   time.localtime(f.stat().st_mtime))
                                    if f.exists() else "")}
@@ -1876,7 +1892,9 @@ def _huella_codigo() -> dict:
             "arranque": time.strftime("%Y-%m-%d %H:%M:%S"),
             "arranque_ts": round(time.time(), 3),
             "ficheros": ficheros,
-            "nota": "sha256 en 16 hex: se compara con el fichero de GitHub tal cual"}
+            "nota": ("sha256 = bytes del fichero que corre (los del disco); "
+                     "sha256_git = los mismos con finales de linea LF, que es el "
+                     "que coincide con el fichero descargado de GitHub. 16 hex.")}
 
 
 _HUELLA = _huella_codigo()
