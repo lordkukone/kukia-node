@@ -874,6 +874,22 @@ def schema():
         con.execute("INSERT INTO meta(clave,valor) VALUES('tareas_ok_total',?)", (float(_ok),))
         con.execute("INSERT OR IGNORE INTO meta(clave,valor) VALUES('primera_ok_epoch',?)", (_prim_e,))
         con.execute("INSERT OR IGNORE INTO meta(clave,valor) VALUES('tareas_archivadas',0)")
+    # F2-57 (30-10-2026): el archivado borra 'ok' Y 'fallo', pero un solo
+    # contador sumaba ambos. Publicado al lado de dos contadores de 'ok', la
+    # suma no cuadraba y parecia que faltaban tareas (desfase constante de 7).
+    # Se parte en dos. La siembra sale de la identidad, no de la historia:
+    # lo que falta entre tareas_ok_total y las 'ok' que siguen en la tabla es
+    # exactamente lo archivado siendo 'ok'; el resto de lo archivado es 'fallo'.
+    if con.execute("SELECT valor FROM meta WHERE clave='tareas_ok_archivadas'").fetchone() is None:
+        _r = con.execute("SELECT (SELECT valor FROM meta WHERE clave='tareas_ok_total') AS total,"
+                         " (SELECT COUNT(*) FROM tareas WHERE estado='ok') AS en_tabla,"
+                         " (SELECT valor FROM meta WHERE clave='tareas_archivadas') AS arch").fetchone()
+        _arch = int(_r["arch"] or 0)
+        _ok_arch = max(0, min(_arch, int((_r["total"] or 0) - int(_r["en_tabla"] or 0))))
+        con.execute("INSERT INTO meta(clave,valor) VALUES('tareas_ok_archivadas',?)", (float(_ok_arch),))
+        con.execute("INSERT INTO meta(clave,valor) VALUES('tareas_fallo_archivadas',?)",
+                    (float(max(0, _arch - _ok_arch)),))
+        con.commit()
     for _ix in (
         "CREATE INDEX IF NOT EXISTS idx_tareas_estado ON tareas(estado)",
         "CREATE INDEX IF NOT EXISTS idx_tareas_cola ON tareas(estado, cola, prioridad)",
@@ -4670,9 +4686,15 @@ def stats():
                              "WHERE COALESCE(retirado,0)=0").fetchone()["c"],
         # Historico real (sobrevive al archivado); 'en_tabla' son las que quedan
         # guardadas por si se quiere auditar el detalle.
+        # F2-57: las archivadas van partidas por estado, para que la cuenta
+        # cuadre sin ambiguedad:
+        #   tareas_ok_en_tabla + tareas_ok_archivadas == tareas_ok
+        #   tareas_archivadas   == tareas_ok_archivadas + tareas_fallo_archivadas
         "tareas_ok": total_ok,
         "tareas_ok_en_tabla": en_tabla,
         "tareas_archivadas": int(_meta_float("tareas_archivadas", 0.0)),
+        "tareas_ok_archivadas": int(_meta_float("tareas_ok_archivadas", 0.0)),
+        "tareas_fallo_archivadas": int(_meta_float("tareas_fallo_archivadas", 0.0)),
         "tareas_pend": con.execute("SELECT COUNT(*) c FROM tareas WHERE estado='queued'").fetchone()["c"],
         "registros": con.execute("SELECT COUNT(*) c FROM registros").fetchone()["c"],
         "emision": emission_info(),
@@ -4912,13 +4934,25 @@ def archivar_tareas(retencion: int = None, lote: int = None) -> dict:
             return {"borradas": 0, "retencion": ret, "lote": bat,
                     "error": "base ocupada, se reintenta"}
         try:
-            cur = con.execute("DELETE FROM tareas WHERE rowid IN (SELECT rowid FROM tareas "
-                              "WHERE rowid < ? AND estado IN ('ok','fallo') LIMIT ?)",
-                              (corte["r"], bat))
-            borradas = cur.rowcount or 0
+            # Se materializa el lote ANTES de borrar para poder contarlo por
+            # estado: es el mismo conjunto que borraba el DELETE anterior, con
+            # ORDER BY rowid para que el lote sea siempre el mas antiguo.
+            lote = con.execute("SELECT rowid r, estado FROM tareas "
+                               "WHERE rowid < ? AND estado IN ('ok','fallo') "
+                               "ORDER BY rowid LIMIT ?", (corte["r"], bat)).fetchall()
+            n_ok = sum(1 for f in lote if f["estado"] == "ok")
+            n_fallo = len(lote) - n_ok
+            if lote:
+                con.executemany("DELETE FROM tareas WHERE rowid=?", [(f["r"],) for f in lote])
+            borradas = len(lote)
             if borradas:
-                con.execute("INSERT INTO meta(clave,valor) VALUES('tareas_archivadas',?) "
-                            "ON CONFLICT(clave) DO UPDATE SET valor=valor+excluded.valor", (float(borradas),))
+                for _clave, _n in (("tareas_archivadas", borradas),
+                                   ("tareas_ok_archivadas", n_ok),
+                                   ("tareas_fallo_archivadas", n_fallo)):
+                    if _n:
+                        con.execute("INSERT INTO meta(clave,valor) VALUES(?,?) "
+                                    "ON CONFLICT(clave) DO UPDATE SET valor=valor+excluded.valor",
+                                    (_clave, float(_n)))
             con.commit()
         except Exception:
             try:
@@ -4926,8 +4960,11 @@ def archivar_tareas(retencion: int = None, lote: int = None) -> dict:
             except Exception:
                 pass
             raise
-    return {"borradas": borradas, "retencion": ret, "lote": bat,
-            "archivadas_total": int(_meta_float("tareas_archivadas", 0.0))}
+    return {"borradas": borradas, "borradas_ok": n_ok, "borradas_fallo": n_fallo,
+            "retencion": ret, "lote": bat,
+            "archivadas_total": int(_meta_float("tareas_archivadas", 0.0)),
+            "archivadas_ok_total": int(_meta_float("tareas_ok_archivadas", 0.0)),
+            "archivadas_fallo_total": int(_meta_float("tareas_fallo_archivadas", 0.0))}
 
 # ============================================================
 #  PODA DE TELEMETRIA (23-10-2026)
