@@ -1,0 +1,331 @@
+{
+  "pruebas": [
+    {
+      "prueba": "borradas = 10",
+      "pasa": true,
+      "detalle": "borradas=10"
+    },
+    {
+      "prueba": "borradas_ok = 7",
+      "pasa": true,
+      "detalle": "7"
+    },
+    {
+      "prueba": "borradas_fallo = 3",
+      "pasa": true,
+      "detalle": "3"
+    },
+    {
+      "prueba": "archivadas_total = 10",
+      "pasa": true,
+      "detalle": "10"
+    },
+    {
+      "prueba": "archivadas_ok_total = 7",
+      "pasa": true,
+      "detalle": "7"
+    },
+    {
+      "prueba": "archivadas_fallo_total = 3",
+      "pasa": true,
+      "detalle": "3"
+    },
+    {
+      "prueba": "identidad: en_tabla + ok_archivadas == tareas_ok",
+      "pasa": true,
+      "detalle": "1000 + 7 vs 1007"
+    },
+    {
+      "prueba": "total: ok_archivadas + fallo_archivadas == archivadas",
+      "pasa": true,
+      "detalle": "7 + 3 vs 10"
+    },
+    {
+      "prueba": "con la cuenta vieja habria descuadre de 3",
+      "pasa": true,
+      "detalle": "1000 + 10 vs 1007"
+    },
+    {
+      "prueba": "pasada sin nada que borrar: 0 y sin error",
+      "pasa": true,
+      "detalle": "{'borradas': 0, 'borradas_ok': 0, 'borradas_fallo': 0, 'retencion': 1000, 'lote': 20000, 'archivadas_total': 10, 'archivadas_ok_total': 7, 'archivadas_fallo_total': 3}"
+    },
+    {
+      "prueba": "antes del archivado ya cuadraba con 0 archivadas",
+      "pasa": true,
+      "detalle": "0/0"
+    },
+    {
+      "prueba": "siembra: 1.050 terminadas y ok_total correcto",
+      "pasa": true,
+      "detalle": "ok_total=1290 esperado=1290"
+    },
+    {
+      "prueba": "r1 [r1] borradas 100",
+      "pasa": true,
+      "detalle": "borradas=100"
+    },
+    {
+      "prueba": "r1 [r1] mezcla 80 ok / 20 fallo",
+      "pasa": true,
+      "detalle": "80/20"
+    },
+    {
+      "prueba": "r1 ok_archivadas +80",
+      "pasa": true,
+      "detalle": "0 -> 80"
+    },
+    {
+      "prueba": "r1 fallo_archivadas +20",
+      "pasa": true,
+      "detalle": "0 -> 20"
+    },
+    {
+      "prueba": "r1 identidad cuadra",
+      "pasa": true,
+      "detalle": "1210+80 vs 1290"
+    },
+    {
+      "prueba": "r1 tareas_ok no la toca el archivado",
+      "pasa": true,
+      "detalle": "1290 -> 1290"
+    },
+    {
+      "prueba": "r1 desaparecen exactamente las suyas",
+      "pasa": true,
+      "detalle": "esperadas 100 fuera, siguen 0"
+    },
+    {
+      "prueba": "r1 las tareas vivas siguen ahi",
+      "pasa": true,
+      "detalle": "7 vivas"
+    },
+    {
+      "prueba": "r1 contadores de meta coherentes con /stats",
+      "pasa": true,
+      "detalle": "meta == /stats"
+    },
+    {
+      "prueba": "r2 [r2] borradas 100",
+      "pasa": true,
+      "detalle": "borradas=100"
+    },
+    {
+      "prueba": "r2 [r2] mezcla 50 ok / 50 fallo",
+      "pasa": true,
+      "detalle": "50/50"
+    },
+    {
+      "prueba": "r2 ok_archivadas +50",
+      "pasa": true,
+      "detalle": "80 -> 130"
+    },
+    {
+      "prueba": "r2 fallo_archivadas +50",
+      "pasa": true,
+      "detalle": "20 -> 70"
+    },
+    {
+      "prueba": "r2 identidad cuadra",
+      "pasa": true,
+      "detalle": "1160+130 vs 1290"
+    },
+    {
+      "prueba": "r2 tareas_ok no la toca el archivado",
+      "pasa": true,
+      "detalle": "1290 -> 1290"
+    },
+    {
+      "prueba": "r2 desaparecen exactamente las suyas",
+      "pasa": true,
+      "detalle": "esperadas 100 fuera, siguen 0"
+    },
+    {
+      "prueba": "r2 las tareas vivas siguen ahi",
+      "pasa": true,
+      "detalle": "7 vivas"
+    },
+    {
+      "prueba": "r2 contadores de meta coherentes con /stats",
+      "pasa": true,
+      "detalle": "meta == /stats"
+    },
+    {
+      "prueba": "r3 [r3] borradas 100",
+      "pasa": true,
+      "detalle": "borradas=100"
+    },
+    {
+      "prueba": "r3 [r3] mezcla 0 ok / 100 fallo",
+      "pasa": true,
+      "detalle": "0/100"
+    },
+    {
+      "prueba": "r3 ok_archivadas +0",
+      "pasa": true,
+      "detalle": "130 -> 130"
+    },
+    {
+      "prueba": "r3 fallo_archivadas +100",
+      "pasa": true,
+      "detalle": "70 -> 170"
+    },
+    {
+      "prueba": "r3 identidad cuadra",
+      "pasa": true,
+      "detalle": "1160+130 vs 1290"
+    },
+    {
+      "prueba": "r3 tareas_ok no la toca el archivado",
+      "pasa": true,
+      "detalle": "1290 -> 1290"
+    },
+    {
+      "prueba": "r3 desaparecen exactamente las suyas",
+      "pasa": true,
+      "detalle": "esperadas 100 fuera, siguen 0"
+    },
+    {
+      "prueba": "r3 las tareas vivas siguen ahi",
+      "pasa": true,
+      "detalle": "7 vivas"
+    },
+    {
+      "prueba": "r3 contadores de meta coherentes con /stats",
+      "pasa": true,
+      "detalle": "meta == /stats"
+    },
+    {
+      "prueba": "r4 [r4] borradas 100",
+      "pasa": true,
+      "detalle": "borradas=100"
+    },
+    {
+      "prueba": "r4 [r4] mezcla 100 ok / 0 fallo",
+      "pasa": true,
+      "detalle": "100/0"
+    },
+    {
+      "prueba": "r4 ok_archivadas +100",
+      "pasa": true,
+      "detalle": "130 -> 230"
+    },
+    {
+      "prueba": "r4 fallo_archivadas +0",
+      "pasa": true,
+      "detalle": "170 -> 170"
+    },
+    {
+      "prueba": "r4 identidad cuadra",
+      "pasa": true,
+      "detalle": "1060+230 vs 1290"
+    },
+    {
+      "prueba": "r4 tareas_ok no la toca el archivado",
+      "pasa": true,
+      "detalle": "1290 -> 1290"
+    },
+    {
+      "prueba": "r4 desaparecen exactamente las suyas",
+      "pasa": true,
+      "detalle": "esperadas 100 fuera, siguen 0"
+    },
+    {
+      "prueba": "r4 las tareas vivas siguen ahi",
+      "pasa": true,
+      "detalle": "7 vivas"
+    },
+    {
+      "prueba": "r4 contadores de meta coherentes con /stats",
+      "pasa": true,
+      "detalle": "meta == /stats"
+    },
+    {
+      "prueba": "r5 [r5] borradas 100",
+      "pasa": true,
+      "detalle": "borradas=100"
+    },
+    {
+      "prueba": "r5 [r5] mezcla 60 ok / 40 fallo",
+      "pasa": true,
+      "detalle": "60/40"
+    },
+    {
+      "prueba": "r5 ok_archivadas +60",
+      "pasa": true,
+      "detalle": "230 -> 290"
+    },
+    {
+      "prueba": "r5 fallo_archivadas +40",
+      "pasa": true,
+      "detalle": "170 -> 210"
+    },
+    {
+      "prueba": "r5 identidad cuadra",
+      "pasa": true,
+      "detalle": "1000+290 vs 1290"
+    },
+    {
+      "prueba": "r5 tareas_ok no la toca el archivado",
+      "pasa": true,
+      "detalle": "1290 -> 1290"
+    },
+    {
+      "prueba": "r5 desaparecen exactamente las suyas",
+      "pasa": true,
+      "detalle": "esperadas 100 fuera, siguen 0"
+    },
+    {
+      "prueba": "r5 las tareas vivas siguen ahi",
+      "pasa": true,
+      "detalle": "7 vivas"
+    },
+    {
+      "prueba": "r5 contadores de meta coherentes con /stats",
+      "pasa": true,
+      "detalle": "meta == /stats"
+    },
+    {
+      "prueba": "sexta ronda: 0 borradas",
+      "pasa": true,
+      "detalle": "{'borradas': 0, 'borradas_ok': 0, 'borradas_fallo': 0, 'retencion': 1000, 'lote': 100, 'archivadas_total': 500, 'archivadas_ok_total': 290, 'archivadas_fallo_total': 210}"
+    },
+    {
+      "prueba": "final: ok_archivadas = 290 y fallo_archivadas = 210",
+      "pasa": true,
+      "detalle": "290/210"
+    },
+    {
+      "prueba": "final: archivadas = 500 = 290 + 210",
+      "pasa": true,
+      "detalle": "500"
+    },
+    {
+      "prueba": "final: identidad tras 5 rondas",
+      "pasa": true,
+      "detalle": "1000 + 290 vs 1290"
+    },
+    {
+      "prueba": "final: ninguna viva borrada en todo el recorrido",
+      "pasa": true,
+      "detalle": "7 vivas"
+    },
+    {
+      "prueba": "resiembra: ok_archivadas = 7",
+      "pasa": true,
+      "detalle": "7"
+    },
+    {
+      "prueba": "resiembra: fallo_archivadas = 3",
+      "pasa": true,
+      "detalle": "3"
+    },
+    {
+      "prueba": "resiembra: identidad sigue cuadrando",
+      "pasa": true,
+      "detalle": "1000 + 7 vs 1007"
+    }
+  ],
+  "pass": 65,
+  "total": 65
+}

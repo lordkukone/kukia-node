@@ -1,0 +1,77 @@
+[F2-57] copia aislada: C:\Users\kuki\AppData\Local\Temp\kukia_f257_cat8h5hp
+[F2-57] puerto efimero: 44823
+
+A. Lote mixto (7 ok + 3 fallo de 1.010 terminadas)
+  [PASS] borradas = 10  borradas=10
+  [PASS] borradas_ok = 7  7
+  [PASS] borradas_fallo = 3  3
+  [PASS] archivadas_total = 10  10
+  [PASS] archivadas_ok_total = 7  7
+  [PASS] archivadas_fallo_total = 3  3
+  [PASS] identidad: en_tabla + ok_archivadas == tareas_ok  1000 + 7 vs 1007
+  [PASS] total: ok_archivadas + fallo_archivadas == archivadas  7 + 3 vs 10
+  [PASS] con la cuenta vieja habria descuadre de 3  1000 + 10 vs 1007
+  [PASS] pasada sin nada que borrar: 0 y sin error  {'borradas': 0, 'borradas_ok': 0, 'borradas_fallo': 0, 'retencion': 1000, 'lote': 20000, 'archivadas_total': 10, 'archivadas_ok_total': 7, 'archivadas_fallo_total': 3}
+  [PASS] antes del archivado ya cuadraba con 0 archivadas  0/0
+
+B. Cinco rondas consecutivas con mezclas distintas
+  [PASS] siembra: 1.050 terminadas y ok_total correcto  ok_total=1290 esperado=1290
+     rondas: [('r1', 80, 20), ('r2', 50, 50), ('r3', 0, 100), ('r4', 100, 0), ('r5', 60, 40)]  relleno ok: 1000
+  [PASS] r1 [r1] borradas 100  borradas=100
+  [PASS] r1 [r1] mezcla 80 ok / 20 fallo  80/20
+  [PASS] r1 ok_archivadas +80  0 -> 80
+  [PASS] r1 fallo_archivadas +20  0 -> 20
+  [PASS] r1 identidad cuadra  1210+80 vs 1290
+  [PASS] r1 tareas_ok no la toca el archivado  1290 -> 1290
+  [PASS] r1 desaparecen exactamente las suyas  esperadas 100 fuera, siguen 0
+  [PASS] r1 las tareas vivas siguen ahi  7 vivas
+  [PASS] r1 contadores de meta coherentes con /stats  meta == /stats
+  [PASS] r2 [r2] borradas 100  borradas=100
+  [PASS] r2 [r2] mezcla 50 ok / 50 fallo  50/50
+  [PASS] r2 ok_archivadas +50  80 -> 130
+  [PASS] r2 fallo_archivadas +50  20 -> 70
+  [PASS] r2 identidad cuadra  1160+130 vs 1290
+  [PASS] r2 tareas_ok no la toca el archivado  1290 -> 1290
+  [PASS] r2 desaparecen exactamente las suyas  esperadas 100 fuera, siguen 0
+  [PASS] r2 las tareas vivas siguen ahi  7 vivas
+  [PASS] r2 contadores de meta coherentes con /stats  meta == /stats
+  [PASS] r3 [r3] borradas 100  borradas=100
+  [PASS] r3 [r3] mezcla 0 ok / 100 fallo  0/100
+  [PASS] r3 ok_archivadas +0  130 -> 130
+  [PASS] r3 fallo_archivadas +100  70 -> 170
+  [PASS] r3 identidad cuadra  1160+130 vs 1290
+  [PASS] r3 tareas_ok no la toca el archivado  1290 -> 1290
+  [PASS] r3 desaparecen exactamente las suyas  esperadas 100 fuera, siguen 0
+  [PASS] r3 las tareas vivas siguen ahi  7 vivas
+  [PASS] r3 contadores de meta coherentes con /stats  meta == /stats
+  [PASS] r4 [r4] borradas 100  borradas=100
+  [PASS] r4 [r4] mezcla 100 ok / 0 fallo  100/0
+  [PASS] r4 ok_archivadas +100  130 -> 230
+  [PASS] r4 fallo_archivadas +0  170 -> 170
+  [PASS] r4 identidad cuadra  1060+230 vs 1290
+  [PASS] r4 tareas_ok no la toca el archivado  1290 -> 1290
+  [PASS] r4 desaparecen exactamente las suyas  esperadas 100 fuera, siguen 0
+  [PASS] r4 las tareas vivas siguen ahi  7 vivas
+  [PASS] r4 contadores de meta coherentes con /stats  meta == /stats
+  [PASS] r5 [r5] borradas 100  borradas=100
+  [PASS] r5 [r5] mezcla 60 ok / 40 fallo  60/40
+  [PASS] r5 ok_archivadas +60  230 -> 290
+  [PASS] r5 fallo_archivadas +40  170 -> 210
+  [PASS] r5 identidad cuadra  1000+290 vs 1290
+  [PASS] r5 tareas_ok no la toca el archivado  1290 -> 1290
+  [PASS] r5 desaparecen exactamente las suyas  esperadas 100 fuera, siguen 0
+  [PASS] r5 las tareas vivas siguen ahi  7 vivas
+  [PASS] r5 contadores de meta coherentes con /stats  meta == /stats
+  [PASS] sexta ronda: 0 borradas  {'borradas': 0, 'borradas_ok': 0, 'borradas_fallo': 0, 'retencion': 1000, 'lote': 100, 'archivadas_total': 500, 'archivadas_ok_total': 290, 'archivadas_fallo_total': 210}
+  [PASS] final: ok_archivadas = 290 y fallo_archivadas = 210  290/210
+  [PASS] final: archivadas = 500 = 290 + 210  500
+  [PASS] final: identidad tras 5 rondas  1000 + 290 vs 1290
+  [PASS] final: ninguna viva borrada en todo el recorrido  7 vivas
+
+C. Resiembra al perder las claves nuevas (caso de la base real)
+  [PASS] resiembra: ok_archivadas = 7  7
+  [PASS] resiembra: fallo_archivadas = 3  3
+  [PASS] resiembra: identidad sigue cuadrando  1000 + 7 vs 1007
+
+[F2-57] 65/65 PASS
+[F2-57] artefacto: C:\Users\kuki\Desktop\KUKIA\informes_mainnet_20261030\f2-57_desglose_archivadas\resultado_f2_57.json
