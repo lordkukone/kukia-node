@@ -1803,8 +1803,13 @@ app = FastAPI(title="KUKIA Core", version="0.4.4")
 #  huella sigue siendo la del codigo cargado en memoria, que es justo lo que
 #  se quiere demostrar (que no basta con editar el .py para cambiar el Core).
 # ============================================================
+#
+#  claves.py entro en la huella el 30-10-2026: decide vigencia, posesion y
+#  rotacion de las claves de nodo. Sin su hash, /version no probaba que
+#  modulo de claves estaba corriendo de verdad.
 FICHEROS_HUELLA = (
     "coordinator/kukia_core.py",
+    "coordinator/claves.py",
     "worker/kukia_worker.py",
     "ledger/kukia_wallet.py",
     "ledger/sellos.py",
