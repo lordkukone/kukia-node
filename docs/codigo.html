@@ -89,7 +89,7 @@ code { font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#
 <div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
 y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
 se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>38ac9edf67812ee641154cae50fb0de02427dcc0fc6cbfe7349e327a3cb5c57e</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
+(huella SHA-256: <code>972c33b4a9e4ac432f6d995c9fb5405290cb38b33258237753498223f1cbce26</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
 <br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
 en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
 <br><br>Generado desde los ficheros reales el 20-10-2026. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
@@ -116,7 +116,8 @@ AUDITORIA 2026-10-18 (todas las marcas &quot;AUDITORIA&quot; son de esta revisio
   - monto de transferencia finito (NaN daba 500 despues de escribir).
   - /registro guarda la IP real (antes guardaba el &#x27;ref&#x27; en su columna).
 &quot;&quot;&quot;
-import collections, hashlib, json, math, os, secrets, sqlite3, threading, uuid, time, sys, urllib.parse
+import claves  # F2-14: ciclo de vida de claves (ver informes/f2-14)
+import collections, functools, hashlib, json, math, os, secrets, sqlite3, threading, uuid, time, sys, urllib.parse
 from contextlib import contextmanager
 from pathlib import Path
 import numpy as np
@@ -188,6 +189,10 @@ if SELLOS is not None:
         print(f&quot;[KUKIA] AVISO: no se pudo crear la clave del sello ({_e})&quot;, flush=True)
 
 MAX_SUPPLY = 100_000_000          # techo fijo 100M
+# F2-35: cache del suministro. Se define AQUI, antes de `_asiento`/`genesis`,
+# porque genesis() escribe el asiento fundacional al importar el modulo.
+SUPPLY_TTL_S = float(os.environ.get(&quot;KUKIA_SUPPLY_TTL_S&quot;, &quot;5&quot;) or 5)
+_supply_cache = {&quot;ts&quot;: 0.0, &quot;valor&quot;: 0.0}
 REWARD_BASE = 10.0                # KIA por tarea base
 
 # --- Puerta de cliente (24-10-2026) ---
@@ -613,6 +618,29 @@ def _base_ocupada(e) -&gt; bool:
             or &quot;sqlite_busy&quot; in t)
 
 
+def _reintentar_si_ocupada(manejador):
+    &quot;&quot;&quot;F2-36: un lock ocupado en una ruta concreta -&gt; 503, nunca 500.
+
+    `_escritura()` ya convierte en 503 el `BEGIN IMMEDIATE` que no entra, pero
+    una lectura o un INSERT fuera de ese cerrojo seguian subiendo como
+    `sqlite3.OperationalError` y FastAPI las publicaba como 500 &quot;error interno&quot;.
+    Un 500 le dice al minero que ha hecho algo mal; un 503 con `Retry-After` le
+    dice la verdad: la base esta ocupada, reintenta.
+    &quot;&quot;&quot;
+    @functools.wraps(manejador)
+    def envoltura(*args, **kwargs):
+        try:
+            return manejador(*args, **kwargs)
+        except HTTPException:
+            raise
+        except sqlite3.OperationalError as e:
+            if not _base_ocupada(e):
+                raise
+            raise HTTPException(503, &quot;Core ocupado (la base esta bloqueada), reintentar&quot;,
+                                headers={&quot;Retry-After&quot;: &quot;2&quot;})
+    return envoltura
+
+
 # Columnas cuya UNIQUE significa de verdad &quot;ese nonce ya se uso&quot;. sqlite lo
 # dice en el propio mensaje: &quot;UNIQUE constraint failed: transferencias.de_nodo,
 # transferencias.nonce&quot;.
@@ -699,27 +727,70 @@ def _rollback_seguro() -&gt; None:
         pass
 
 
+def _espera_registro_s() -&gt; float:
+    &quot;&quot;&quot;Cuanto puede esperar un REGISTRO a que se libere la base (H7).
+
+    Un registro ocurre una vez por nodo y es la puerta de entrada de un minero
+    nuevo: en el pico de arranque de una campana, devolver 503 al primer choque
+    obliga al cliente a reintentar a ciegas. Se le da un presupuesto acotado y
+    se le hace esperar el turno.
+
+    NO cambia el resto de escrituras: pagos y transferencias siguen con el 503
+    rapido de siempre, porque ahi el cliente necesita saber pronto que no se ha
+    movido nada.
+    &quot;&quot;&quot;
+    texto = (os.environ.get(&quot;KUKIA_REGISTRO_ESPERA_MS&quot;) or &quot;&quot;).strip()
+    try:
+        ms = int(texto)
+    except Exception:
+        ms = 20000
+    return max(0.5, min(60.0, ms / 1000.0))
+
+
 @contextmanager
-def _escritura():
+def _escritura(espera_total_s: float | None = None):
     &quot;&quot;&quot;Escritura corta y atomica: lock + BEGIN IMMEDIATE + commit.
 
     AUDITORIA: /nodos/registrar, /tareas/crear y /registro escribian sin
     lock (dos peticiones a la vez podian mezclar transacciones).
+
+    H7 (picos de registro): con `espera_total_s` se reintenta el BEGIN dentro de
+    un presupuesto, con espera creciente y jitter. Sin argumento, el
+    comportamiento es el de siempre: dos intentos y 503.
+
+    El lock se mantiene mientras se espera A PROPOSITO: si se soltara, otro hilo
+    del mismo proceso entraria a pedir BEGIN IMMEDIATE, chocaria con nuestra
+    propia transaccion y devolveria 503 por un bloqueo que es nuestro.
     &quot;&quot;&quot;
     with _pago_lock:
-        # AUDITORIA: si otro programa tiene la base bloqueada, se reintenta una
-        # vez y se responde 503 rapido (antes se quedaba esperando 30 s).
-        listo = False
-        for intento in (1, 2):
+        limite = (time.monotonic() + max(0.0, float(espera_total_s))
+                  if espera_total_s is not None else None)
+        intento = 0
+        while True:
+            # AUDITORIA: si otro programa tiene la base bloqueada, se reintenta
+            # una vez y se responde 503 rapido (antes se quedaba esperando 30 s).
             try:
                 con.execute(&quot;BEGIN IMMEDIATE&quot;)
-                listo = True
                 break
-            except Exception:
-                if intento == 1:
+            except Exception as e:
+                if limite is not None and not _base_ocupada(e):
+                    # Disco lleno u otro fallo real: no tiene sentido esperar.
+                    raise _error_escritura(e)
+                intento += 1
+                if limite is None:
+                    if intento &gt;= 2:
+                        raise HTTPException(503, &quot;Core ocupado (la base esta bloqueada), reintentar&quot;,
+                                            headers={&quot;Retry-After&quot;: &quot;2&quot;})
                     time.sleep(0.3)
-        if not listo:
-            raise HTTPException(503, &quot;Core ocupado (la base esta bloqueada), reintentar&quot;)
+                    continue
+                if time.monotonic() &gt;= limite:
+                    raise HTTPException(
+                        503, &quot;Core ocupado (la base esta bloqueada), reintentar&quot;,
+                        headers={&quot;Retry-After&quot;: &quot;2&quot;})
+                # Espera creciente (50, 100, 200... ms, tope 250) + jitter, para
+                # que varios registros simultaneos no choquen todos a la vez.
+                time.sleep(min(0.05 * (2 ** intento), 0.25)
+                           + secrets.randbelow(40) / 1000.0)
         try:
             yield
             con.commit()
@@ -735,6 +806,17 @@ def _escritura():
             except Exception:
                 pass
             raise _error_escritura(e)
+
+# ============================================================
+#  F2-47: la regla de vigencia de claves vive SOLO en `claves.py`
+#  (F2-46 la habia copiado aqui en SQL; ver informes/f2-47_regla_unica)
+# ============================================================
+# Este fichero ya no sabe que es una clave vigente: pregunta.
+#   - pago     -&gt; claves.clave_vigente(con, nodo, clave, &quot;resultado&quot;)   1 consulta
+#   - replica  -&gt; claves.predicado_vigente(...) pegado DENTRO del UPDATE 0 extra
+# Si alguien vuelve a escribir la regla aqui (mirando tablas de claves o
+# estados de rotacion), `prueba_f2_47.py` (TD1) falla.
+
 
 def schema():
     con.execute(&quot;CREATE TABLE IF NOT EXISTS nodos(id TEXT PRIMARY KEY, nombre TEXT, vram_gb INT, &quot;
@@ -908,6 +990,10 @@ def schema():
     con.commit()
 
 schema()
+_esquema_claves = claves.crear_esquema(con)   # F2-14: tablas del ciclo de vida
+if _esquema_claves[&quot;sembradas&quot;]:
+    print(f&quot;[KUKIA] claves: {_esquema_claves[&#x27;sembradas&#x27;]} nodo(s) sembrados en el &quot;
+          f&quot;historial de claves&quot;, flush=True)
 
 # MODO DE DIARIO: WAL desde el 25-10-2026 (lectores ajenos ya no frenan los
 # pagos). Ver `_poner_en_wal`. Si el cambio no entra, se sigue en DELETE.
@@ -986,28 +1072,56 @@ if _n_podados:
 
 
 def retirar_nodos_duplicados(con) -&gt; int:
-    &quot;&quot;&quot;Deja UNA identidad viva por nombre; las demas quedan retiradas.
+    &quot;&quot;&quot;Deja UNA identidad viva por (nombre, clave_publica).
+
+    ANTES (fallo H1, auditoria F2-13): se consideraba duplicado cualquier nodo
+    que compartiera `nombre`, un campo que elige el cliente y que nadie
+    verifica. Un tercero podia registrar el nombre de otro y conseguir que, en
+    el siguiente arranque, se retirara la identidad legitima (la que tuviera
+    menos tareas o un `visto` mas antiguo).
+
+    AHORA: la identidad es la pareja (nombre, clave_publica). Solo se retira
+    cuando coinciden LAS DOS cosas. Se mantiene intacto:
+      - multi-dispositivo con la MISMA clave (nombres distintos: cpu/cuda:0...);
+      - dos operadores con el MISMO nombre (claves distintas);
+      - nodos sin clave valida: quedan fuera de esta regla, nunca se retiran;
+      - los ya retirados: no se borran ni se reasignan.
 
     No borra: la fila vieja conserva sus tareas, su reputacion y sus pagos (el
     ledger apunta a `nodo_id`, borrarla dejaria asientos huerfanos). Se queda
-    la que mas ha trabajado y, a igualdad, la vista mas recientemente.
+    la que mas ha trabajado y, a igualdad, la vista mas recientemente, la mas
+    antigua y, por ultimo, el `id` menor: orden total y determinista.
 
+    OJO: no se llama a `pubkey_valida()` a proposito. Esta funcion se ejecuta en
+    la linea 925 y `pubkey_valida` se define en la 952: llamarla aqui romperia
+    el arranque con NameError. El validador local hace exactamente lo mismo.
     &quot;&quot;&quot;
+    def _clave_valida(clave: str) -&gt; bool:
+        try:
+            return len(bytes.fromhex(clave)) == 32
+        except ValueError:
+            return False
+
     try:
         filas = con.execute(
-            &quot;SELECT id, nombre FROM nodos WHERE COALESCE(retirado,0)=0 &quot;
-            &quot;ORDER BY COALESCE(tareas_ok,0) DESC, COALESCE(visto,0) DESC, creado ASC&quot;
+            &quot;SELECT id, nombre, clave_publica FROM nodos &quot;
+            &quot;WHERE COALESCE(retirado,0)=0 &quot;
+            &quot;ORDER BY COALESCE(tareas_ok,0) DESC, COALESCE(visto,0) DESC, &quot;
+            &quot;creado ASC, id ASC&quot;
         ).fetchall()
     except Exception:
         return 0
     vistos = set()
     sobran = []
     for f in filas:
-        nombre = (f[&quot;nombre&quot;] or &quot;&quot;)
-        if nombre in vistos:
+        clave = (f[&quot;clave_publica&quot;] or &quot;&quot;).strip().lower()
+        if not clave or not _clave_valida(clave):
+            continue
+        identidad = ((f[&quot;nombre&quot;] or &quot;&quot;), clave)
+        if identidad in vistos:
             sobran.append(f[&quot;id&quot;])
         else:
-            vistos.add(nombre)
+            vistos.add(identidad)
     if not sobran:
         return 0
     try:
@@ -1024,6 +1138,45 @@ _n_retirados = retirar_nodos_duplicados(con)
 if _n_retirados:
     print(f&quot;[KUKIA] retirados {_n_retirados} nodos con nombre repetido &quot;
           f&quot;(un nombre, una identidad viva; no se borra nada)&quot;, flush=True)
+
+
+def crear_indice_identidad() -&gt; bool:
+    &quot;&quot;&quot;Indice unico parcial: una sola fila VIVA por (nombre, clave_publica).
+
+    H2 (F2-13). No impone unicidad de nombre (seria H1) ni de clave (rompe el
+    multi-GPU): solo de la pareja, que es la identidad real.
+
+    Va DESPUES de `retirar_nodos_duplicados` para aprovechar la limpieza del
+    arranque. Antes de crearlo hace preflight: si quedara algun grupo duplicado,
+    NO se crea y se avisa (el Core arranca igual; nunca se cae por esto).
+    &quot;&quot;&quot;
+    try:
+        malos = con.execute(
+            &quot;SELECT nombre, clave_publica, COUNT(*) n FROM nodos &quot;
+            &quot;WHERE COALESCE(retirado,0)=0 AND clave_publica IS NOT NULL &quot;
+            &quot;AND clave_publica&lt;&gt;&#x27;&#x27; GROUP BY nombre, clave_publica HAVING n&gt;1&quot;
+        ).fetchall()
+        if malos:
+            print(f&quot;[KUKIA] indice de identidad NO creado: {len(malos)} grupo(s) &quot;
+                  f&quot;duplicado(s) entre nodos vivos; revisar antes de forzarlo&quot;,
+                  flush=True)
+            return False
+        con.execute(
+            &quot;CREATE UNIQUE INDEX IF NOT EXISTS ux_nodos_vivo &quot;
+            &quot;ON nodos(nombre, clave_publica) &quot;
+            &quot;WHERE COALESCE(retirado,0)=0 AND clave_publica IS NOT NULL &quot;
+            &quot;AND clave_publica&lt;&gt;&#x27;&#x27;&quot;)
+        con.commit()
+        return True
+    except Exception as e:
+        print(f&quot;[KUKIA] indice de identidad no creado: {e}&quot;, flush=True)
+        return False
+
+
+_indice_identidad = crear_indice_identidad()
+if _indice_identidad:
+    print(&quot;[KUKIA] identidad de nodo protegida por indice unico (nombre, clave)&quot;,
+          flush=True)
 
 def direccion_valida(d: str) -&gt; bool:
     &quot;&quot;&quot;Formato de direccion KUKIA: KUK + 38 hex (41 caracteres).&quot;&quot;&quot;
@@ -1236,9 +1389,12 @@ def _asiento(tarea_id, nodo_id, kuki, motivo):
     # asi que ninguna cuenta puede volver a quedar con signo negativo.
     con.execute(&quot;UPDATE saldos_cuenta SET total=0.0 WHERE cuenta=? &quot;
                 &quot;AND total &gt; -1e-9 AND total &lt; 1e-9&quot;, (nodo_id,))
-    con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;supply_emitido&#x27;,?)&quot;
-                &quot;ON CONFLICT(clave) DO UPDATE SET valor=valor+excluded.valor&quot;,
-                (float(kuki),))
+    # F2-35: la cache del suministro se ajusta con el importe exacto que se
+    # acaba de anotar (no se relee el ledger aqui: son 186 ms por asiento).
+    # Si nunca se ha leido, se deja sin inicializar y el proximo
+    # `supply_emitido()` la recalcula desde el ledger (no se suma dos veces).
+    if _supply_cache[&quot;ts&quot;]:
+        _supply_cache[&quot;valor&quot;] = _supply_cache[&quot;valor&quot;] + float(kuki)
     return h
 
 # ============================================================
@@ -1404,6 +1560,14 @@ def recalcular_resumen() -&gt; dict:
                         &quot;SELECT nodo_id, COALESCE(SUM(kuki),0) FROM ledger GROUP BY nodo_id&quot;)
             fila = con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger&quot;).fetchone()
             total = float(fila[&quot;s&quot;] or 0.0)
+            # F2-35: el total ya no se guarda como contador; se refresca la cache.
+            _supply_cache[&quot;ts&quot;] = time.time()
+            _supply_cache[&quot;valor&quot;] = total
+            # F2-35: INSTANTANEA, no fuente de verdad. Se reescribe aqui (arranque
+            # y /admin/recalcular_resumen) para que las herramientas que leen la
+            # columna no se queden con un valor de hace semanas ni con None
+            # (`tools/migrar_entero.py` hace fetchone()[&quot;valor&quot;]), pero el Core
+            # no la vuelve a leer nunca: miente entre reinicios por diseno.
             con.execute(&quot;INSERT INTO meta(clave,valor) VALUES(&#x27;supply_emitido&#x27;,?) &quot;
                         &quot;ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor&quot;, (total,))
             cuentas = con.execute(&quot;SELECT COUNT(*) c FROM saldos_cuenta&quot;).fetchone()[&quot;c&quot;]
@@ -1802,6 +1966,14 @@ from starlette.requests import Request as StarRequest
 
 # AUDITORIA: antes era un unico contador por IP compartido por las 5 rutas:
 # un minero que pedia trabajo y entregaba resultados se autobloqueaba (429).
+# AUDITORIA 2026-10-28 (A1): las dos rutas de auditoria recorren el ledger
+# entero (13-15 s de CPU con 930.000 asientos). Su resultado se reutiliza
+# durante AUDITORIA_TTL y solo un hilo lo recalcula; los demas reciben el
+# veredicto anterior, siempre marcado con su edad. El techo global impide que
+# muchas IPs (o IPs falsificadas) conviertan el limite por IP en decorativo.
+AUDITORIA_TTL = max(30.0, float(os.environ.get(&quot;KUKIA_AUDITORIA_TTL&quot;, &quot;300&quot;)))
+LIMITE_GLOBAL_FACTOR = max(1, int(os.environ.get(&quot;KUKIA_LIMITE_GLOBAL_X&quot;, &quot;3&quot;)))
+
 LIMITES_POR_RUTA = {
     &quot;/registro&quot;: 30,
     &quot;/nodos/registrar&quot;: 30,
@@ -1828,6 +2000,10 @@ LIMITES_POR_RUTA = {
     # 240/min deja sitio a varios validadores en el mismo Core sin abrir la
     # puerta a un bucle desbocado.
     &quot;/validador/atestacion&quot;: 240,
+    # Auditoria publica: con la cache de 300 s, 6/min por IP sobra para
+    # comprobar el ledger y ya no permite amasar CPU.
+    &quot;/ledger/verificar&quot;: 6,
+    &quot;/ledger/integridad&quot;: 6,
 }
 RATE_WINDOW = 60.0
 _rate_hist = {}
@@ -1874,18 +2050,30 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: StarRequest, call_next):
         limite = LIMITES_POR_RUTA.get(request.url.path)
         if limite:
-            ip = request.client.host if request.client else &quot;?&quot;
-            clave = (ip, request.url.path)
+            # AUDITORIA 2026-10-28 (A2): la IP se saca con _ip_cliente(). Antes
+            # se usaba request.client.host, que detras del tunel es 127.0.0.1
+            # para TODO el mundo: los cupos eran uno solo para la red entera y
+            # un cliente podia dejar a todos los mineros con 429.
+            ip = _ip_cliente(request)
+            ruta = request.url.path
+            clave = (ip, ruta)
+            clave_global = (&quot;*&quot;, ruta)
             ahora = time.time()
             with _rate_lock:
                 if len(_rate_hist) &gt; 5000:      # AUDITORIA: no crecer sin freno
                     for k in [k for k, v in _rate_hist.items() if not v or ahora - v[-1] &gt; RATE_WINDOW]:
                         _rate_hist.pop(k, None)
+                glob = [t for t in _rate_hist.get(clave_global, []) if ahora - t &lt; RATE_WINDOW]
+                if len(glob) &gt;= limite * LIMITE_GLOBAL_FACTOR:
+                    return JSONResponse({&quot;detail&quot;: &quot;demasiadas peticiones en la red, espera un minuto&quot;},
+                                        status_code=429)
                 hist = [t for t in _rate_hist.get(clave, []) if ahora - t &lt; RATE_WINDOW]
                 if len(hist) &gt;= limite:
                     return JSONResponse({&quot;detail&quot;: &quot;demasiadas peticiones, espera un minuto&quot;}, status_code=429)
                 hist.append(ahora)
+                glob.append(ahora)
                 _rate_hist[clave] = hist
+                _rate_hist[clave_global] = glob
         return await call_next(request)
 
 app.add_middleware(RateLimitMiddleware)
@@ -2208,10 +2396,13 @@ def _ip_cliente(req: Request) -&gt; str:
     &quot;&quot;&quot;
     host = (req.client.host if req.client else &quot;&quot;) or &quot;&quot;
     if CONFIA_PROXY_LOCAL and host in (&quot;127.0.0.1&quot;, &quot;::1&quot;, &quot;localhost&quot;):
-        for cab in (&quot;cf-connecting-ip&quot;, &quot;x-forwarded-for&quot;):
-            valor = (req.headers.get(cab) or &quot;&quot;).split(&quot;,&quot;)[0].strip()
-            if valor:
-                return valor[:64]
+        # AUDITORIA 2026-10-28 (A2): NO se acepta X-Forwarded-For. Cloudflare lo
+        # reenvia con la IP real DELANTE de la cadena que mando el cliente, asi
+        # que su primer valor lo elige quien llama: con el se saltaba cualquier
+        # cupo. CF-Connecting-IP lo escribe el borde y no se hereda del cliente.
+        valor = (req.headers.get(&quot;cf-connecting-ip&quot;) or &quot;&quot;).strip()
+        if valor:
+            return valor[:64]
     return (host or &quot;desconocida&quot;)[:64]
 
 def _cupo_registro(ip: str, pub: str) -&gt; None:
@@ -2289,15 +2480,20 @@ def registrar(n: NodoIn, req: Request):
     # Antes cada registro insertaba una fila nueva con el mismo nombre y el
     # registro se llenaba de &quot;minero_pc[cuda:0]&quot; repetidos.
     nombre_nodo = n.nombre[:64]
-    previo = None
-    if pub:
-        previo = con.execute(
-            &quot;SELECT id FROM nodos WHERE nombre=? AND clave_publica=? &quot;
-            &quot;AND COALESCE(retirado,0)=0 ORDER BY COALESCE(tareas_ok,0) DESC LIMIT 1&quot;,
-            (nombre_nodo, pub)).fetchone()
-    nid = previo[&quot;id&quot;] if previo else uuid.uuid4().hex[:12]
     ip = _ip_cliente(req)
-    with _escritura():   # AUDITORIA: antes escribia sin lock (500 con 2 GPUs)
+    nid = None
+    with _escritura(_espera_registro_s()):   # H7: en un pico, esperar el turno
+        # H2 (F2-13): el SELECT de dedupe va DENTRO de la transaccion. Antes se
+        # hacia fuera del lock, asi que dos procesos podian decidir a la vez &quot;no
+        # existe&quot; y crear dos filas con la misma identidad. `BEGIN IMMEDIATE`
+        # bloquea la base a nivel de fichero: serializa tambien entre procesos.
+        previo = None
+        if pub:
+            previo = con.execute(
+                &quot;SELECT id FROM nodos WHERE nombre=? AND clave_publica=? &quot;
+                &quot;AND COALESCE(retirado,0)=0 ORDER BY COALESCE(tareas_ok,0) DESC LIMIT 1&quot;,
+                (nombre_nodo, pub)).fetchone()
+        nid = previo[&quot;id&quot;] if previo else uuid.uuid4().hex[:12]
         _cupo_registro(ip, pub)
         if n.prueba_gpu:
             con.execute(&quot;INSERT INTO gpu_pruebas(nodo_id,prueba,creado) VALUES(?,?,?)&quot;,
@@ -2316,9 +2512,32 @@ def registrar(n: NodoIn, req: Request):
                         (vram, tier(vram), tops, 1 if n.tops_estimado else 0,
                          n.ref[:64], dir_cobro, dispositivo, nid))
         else:
-            con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto,device) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)&quot;,
-                        (nid, nombre_nodo, vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
-                         pub, 1 if n.tops_estimado else 0, dir_cobro, 0.0, dispositivo))
+            try:
+                con.execute(&quot;INSERT INTO nodos(id,nombre,vram_gb,tier,reputacion,ref,creado,tops,clave_publica,tops_estimado,direccion_cobro,visto,device) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)&quot;,
+                            (nid, nombre_nodo, vram, tier(vram), 1.0, n.ref[:64], time.ctime(), tops,
+                             pub, 1 if n.tops_estimado else 0, dir_cobro, 0.0, dispositivo))
+            except sqlite3.IntegrityError:
+                # H2: red de seguridad del indice unico. Otro proceso gano la
+                # carrera justo entre nuestro SELECT y este INSERT: se reutiliza
+                # su fila en lugar de devolver un 500 al minero.
+                fila = con.execute(
+                    &quot;SELECT id FROM nodos WHERE nombre=? AND clave_publica=? &quot;
+                    &quot;AND COALESCE(retirado,0)=0 LIMIT 1&quot;,
+                    (nombre_nodo, pub)).fetchone()
+                if not fila:
+                    raise
+                nid = fila[&quot;id&quot;]
+                con.execute(&quot;UPDATE nodos SET vram_gb=?, tier=?, tops=?, tops_estimado=?, &quot;
+                            &quot;ref=?, direccion_cobro=?, device=? WHERE id=?&quot;,
+                            (vram, tier(vram), tops, 1 if n.tops_estimado else 0,
+                             n.ref[:64], dir_cobro, dispositivo, nid))
+        # F2-36: el historial de claves nace con el nodo, DENTRO de esta misma
+        # transaccion. Antes se sembraba de forma perezosa en la primera lectura
+        # (con su propio commit), y eso metia una escritura en la autenticacion.
+        if pub:
+            con.execute(
+                &quot;INSERT OR IGNORE INTO claves_nodo(nodo_id,clave_publica,estado,desde) &quot;
+                &quot;VALUES(?,?,&#x27;active&#x27;,?)&quot;, (nid, pub.strip().lower(), time.time()))
     return {&quot;id&quot;: nid, &quot;tier&quot;: tier(vram), &quot;max_supply&quot;: MAX_SUPPLY, &quot;tops_registrados&quot;: tops,
             &quot;autenticado&quot;: bool(pub), &quot;direccion_cobro&quot;: dir_cobro}
 
@@ -2813,15 +3032,16 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
     pub = (node[&quot;clave_publica&quot;] or &quot;&quot;) if &quot;clave_publica&quot; in node.keys() else &quot;&quot;
     if EXIGIR_FIRMA_GLOBAL and not pub:
         raise HTTPException(401, &quot;nodo sin clave registrada (firma obligatoria)&quot;)
-    if pub:
-        if not firma:
-            raise HTTPException(401, &quot;falta firma del nodo (suplantacion bloqueada)&quot;)
-        try:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
-                bytes.fromhex(firma), f&quot;{tid}:{metrica}&quot;.encode())
-        except Exception:
-            raise HTTPException(401, &quot;firma invalida (suplantacion bloqueada)&quot;)
+    clave_firmada = &quot;&quot;
+    if pub or claves.clave_activa(con, nodo_id):
+        # F2-14: firma v2 ligada al nodo (F2-13), claves revocadas fuera y
+        # gracia solo para resultados. Modo: off | dual | on (por defecto dual).
+        _modo_firma = (os.environ.get(&quot;KUKIA_FIRMA_RESULTADO&quot;) or &quot;dual&quot;).strip().lower()
+        _verif = claves.verificar_firma_resultado(con, nodo_id, tid, metrica,
+                                                  firma, _modo_firma)
+        if not _verif[&quot;ok&quot;]:
+            raise HTTPException(401, f&quot;firma rechazada: {_verif[&#x27;motivo&#x27;]}&quot;)
+        clave_firmada = (_verif.get(&quot;clave&quot;) or &quot;&quot;).strip()
     # Rechazo temprano si la tarea no es pagable (evita trabajo inutil)
     if task[&quot;estado&quot;] == &quot;ok&quot;:
         raise HTTPException(409, &quot;tarea ya pagada (doble pago bloqueado)&quot;)
@@ -2960,6 +3180,17 @@ def resultado(tid: str, nodo_id: str, metrica: str, hash_res: str = &quot;&quot;
             if task2[&quot;nodo_id&quot;] and task2[&quot;nodo_id&quot;] != nodo_id:
                 _rollback_seguro()
                 raise HTTPException(409, &quot;tarea asignada a otro nodo&quot;)
+            # F2-38: el recalculo de la verificacion es trabajo real (cientos de
+            # ms en una matriz). En ese hueco el nodo pudo revocar o rotar sin
+            # gracia, y la clave muerta cobraba igual. F2-46: la revalidacion ya
+            # con el cerrojo tomado, con la MISMA regla que al firmar (una
+            # rotacion planificada en gracia sigue valiendo), pero en UNA
+            # consulta en vez de tres y sin construir el conjunto en Python.
+            if clave_firmada and not claves.clave_vigente(con, nodo_id,
+                                                         clave_firmada, &quot;resultado&quot;):
+                _rollback_seguro()
+                raise HTTPException(409, &quot;clave cambiada durante la entrega; &quot;
+                                         &quot;firma de nuevo con la clave vigente&quot;)
 
             kuki = 0.0
             info_pago = {}
@@ -3153,6 +3384,7 @@ class ReplicaIn(BaseModel):
 
 
 @app.post(&quot;/tareas/replica&quot;)
+@_reintentar_si_ocupada
 def tarea_replica(r: ReplicaIn):
     &quot;&quot;&quot;Un nodo entrega el resultado de una REPLICA (verificacion redundante).
 
@@ -3170,15 +3402,25 @@ def tarea_replica(r: ReplicaIn):
     if not node:
         raise HTTPException(404, &quot;nodo no registrado&quot;)
     pub = (node[&quot;clave_publica&quot;] or &quot;&quot;) if &quot;clave_publica&quot; in node.keys() else &quot;&quot;
-    if pub:
-        if not r.firma:
-            raise HTTPException(401, &quot;falta firma del nodo&quot;)
-        try:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-            Ed25519PublicKey.from_public_bytes(bytes.fromhex(pub)).verify(
-                bytes.fromhex(r.firma), f&quot;{r.tid}:{r.metrica}&quot;.encode())
-        except Exception:
-            raise HTTPException(401, &quot;firma invalida&quot;)
+    # F2-29 (D-09): la replica exige la MISMA autenticacion que el resultado
+    # primario. Antes esta ruta se saltaba `EXIGIR_FIRMA_GLOBAL`: un nodo sin
+    # clave podia publicar una replica sin demostrar que era el. No se paga al
+    # entregarla, pero DECIDE — reparto 70/30 y castigo del primario.
+    if EXIGIR_FIRMA_GLOBAL and not pub:
+        raise HTTPException(401, &quot;nodo sin clave registrada (firma obligatoria)&quot;)
+    clave_firmada = &quot;&quot;
+    if pub or claves.clave_activa(con, r.nodo_id):
+        # Dominio propio (replica:v2) y sin gracia: una clave sustituida no
+        # puede mover dinero ni reputacion por la via de la replica.
+        _modo_rep = (os.environ.get(&quot;KUKIA_FIRMA_REPLICA&quot;) or &quot;dual&quot;).strip().lower()
+        _verif_rep = claves.verificar_firma_replica(con, r.nodo_id, r.tid,
+                                                    r.metrica, r.firma, _modo_rep)
+        if not _verif_rep[&quot;ok&quot;]:
+            raise HTTPException(401, f&quot;firma rechazada: {_verif_rep[&#x27;motivo&#x27;]}&quot;)
+        # F2-38: se recuerda que clave valido la firma para revalidarla dentro
+        # del cerrojo. Sin esto, una clave revocada entre la firma y el UPDATE
+        # seguia entregando la replica (y con ella el reparto y el castigo).
+        clave_firmada = (_verif_rep.get(&quot;clave&quot;) or &quot;&quot;).strip()
     rep = con.execute(&quot;SELECT * FROM tareas_replica WHERE tarea_id=?&quot;, (r.tid,)).fetchone()
     if not rep:
         # AUDITORIA 21-10-2026: la fila de la replica se borra en cuanto la tarea
@@ -3212,10 +3454,22 @@ def tarea_replica(r: ReplicaIn):
     if not math.isfinite(dur) or not (0.0 &lt;= dur &lt;= 86_400_000.0):
         dur = 0.0
     with _escritura():
-        con.execute(&quot;UPDATE tareas_replica SET estado=&#x27;entregada&#x27;, metrica=?, firma=?, &quot;
-                    &quot;device=?, duracion_ms=?, ts=? WHERE tarea_id=? AND nodo_id=?&quot;,
-                    (r.metrica[:16384], r.firma[:256], device_limpio(r.device), dur,
-                     time.time(), r.tid, r.nodo_id))
+        # F2-38: la clave pudo cambiar mientras se esperaba el cerrojo. F2-47:
+        # el predicado lo construye `claves` (regla unica) y se pega DENTRO del
+        # UPDATE, asi que revalidar no cuesta una consulta mas; si la clave dejo
+        # de valer, no se toca ninguna fila.
+        sql = (&quot;UPDATE tareas_replica SET estado=&#x27;entregada&#x27;, metrica=?, firma=?, &quot;
+               &quot;device=?, duracion_ms=?, ts=? WHERE tarea_id=? AND nodo_id=?&quot;)
+        args = [r.metrica[:16384], r.firma[:256], device_limpio(r.device), dur,
+                time.time(), r.tid, r.nodo_id]
+        if clave_firmada:          # la ruta v1 entrega sin firma: sin revalidar
+            pred, pargs = claves.predicado_vigente(r.nodo_id, clave_firmada, &quot;activa&quot;)
+            sql += &quot; AND &quot; + pred
+            args.extend(pargs)
+        cur = con.execute(sql, tuple(args))
+        if int(cur.rowcount or 0) != 1:
+            raise HTTPException(409, &quot;clave cambiada durante la entrega; &quot;
+                                     &quot;firma de nuevo con la clave vigente&quot;)
         con.execute(&quot;UPDATE nodos SET visto=? WHERE id=?&quot;, (time.time(), r.nodo_id))
     return {&quot;ok&quot;: True, &quot;guardada&quot;: True}
 
@@ -3224,13 +3478,54 @@ def tarea_replica(r: ReplicaIn):
 def ledger():
     return [dict(r) for r in con.execute(&quot;SELECT * FROM ledger ORDER BY id DESC LIMIT 200&quot;).fetchall()]
 
-@app.get(&quot;/ledger/verificar&quot;)
-def verificar_ledger():
-    &quot;&quot;&quot;AUDITORIA: comprueba la cadena de hashes del ledger.
+# AUDITORIA 2026-10-28 (A1): cache con un solo calculo en vuelo.
+_auditoria_lock = threading.Lock()
+_auditoria_locks = {&quot;verificar&quot;: threading.Lock(), &quot;integridad&quot;: threading.Lock()}
+_auditoria_datos = {}
 
-    Devuelve los ids que no cuadran (alterados a mano en el .db). La cadena
-    empieza en el primer asiento que tiene hash (los anteriores, de versiones
-    sin encadenar, se ignoran).&quot;&quot;&quot;
+
+def _auditoria_cacheada(nombre: str, calcular):
+    &quot;&quot;&quot;Devuelve (datos, ts_del_calculo, cacheado).
+
+    Si el veredicto tiene menos de AUDITORIA_TTL se sirve tal cual. Si toca
+    recalcular y ya hay otro hilo haciendolo, no se lanza un segundo recorrido
+    del ledger: se sirve el anterior (marcado como viejo por `_con_fecha`). Si
+    nunca se calculo, se espera al que esta en curso.
+    &quot;&quot;&quot;
+    ahora = time.time()
+    with _auditoria_lock:
+        guardado = _auditoria_datos.get(nombre)
+        if guardado and ahora - guardado[&quot;ts&quot;] &lt; AUDITORIA_TTL:
+            return guardado[&quot;datos&quot;], guardado[&quot;ts&quot;], True
+        cerrojo = _auditoria_locks[nombre]
+    if not cerrojo.acquire(blocking=False):
+        with _auditoria_lock:
+            guardado = _auditoria_datos.get(nombre)
+        if guardado:
+            return guardado[&quot;datos&quot;], guardado[&quot;ts&quot;], True
+        cerrojo.acquire()
+    try:
+        with _auditoria_lock:
+            guardado = _auditoria_datos.get(nombre)
+            if guardado and time.time() - guardado[&quot;ts&quot;] &lt; AUDITORIA_TTL:
+                return guardado[&quot;datos&quot;], guardado[&quot;ts&quot;], True
+        datos = calcular()
+        ts = time.time()
+        with _auditoria_lock:
+            _auditoria_datos[nombre] = {&quot;datos&quot;: datos, &quot;ts&quot;: ts}
+        return datos, ts, False
+    finally:
+        cerrojo.release()
+
+
+def _con_fecha(datos: dict, ts: float, cacheado: bool) -&gt; dict:
+    &quot;&quot;&quot;Un resultado cacheado nunca se presenta como una verificacion recien hecha.&quot;&quot;&quot;
+    return {**datos, &quot;medido_en&quot;: time.ctime(ts),
+            &quot;edad_s&quot;: round(time.time() - ts, 1), &quot;cacheado&quot;: bool(cacheado)}
+
+
+def _verificar_ledger_ahora():
+    &quot;&quot;&quot;Recorre la cadena entera. Cuesta 13-15 s con 900.000 asientos.&quot;&quot;&quot;
     prev = &quot;&quot;
     n_hash = 0
     alterados = []
@@ -3246,6 +3541,22 @@ def verificar_ledger():
     return {&quot;asientos&quot;: total, &quot;encadenados&quot;: n_hash, &quot;cadena_ok&quot;: not alterados,
             &quot;ids_alterados&quot;: alterados[:20]}
 
+
+@app.get(&quot;/ledger/verificar&quot;)
+def verificar_ledger():
+    &quot;&quot;&quot;AUDITORIA: comprueba la cadena de hashes del ledger. Publico y cacheado.
+
+    Devuelve los ids que no cuadran (alterados a mano en el .db). La cadena
+    empieza en el primer asiento que tiene hash (los anteriores, de versiones
+    sin encadenar, se ignoran).
+
+    AUDITORIA 2026-10-28 (A1): el veredicto se reutiliza durante AUDITORIA_TTL
+    (300 s por defecto) y solo un hilo lo recalcula. La respuesta lleva
+    `medido_en`, `edad_s` y `cacheado`, para que nadie confunda una foto con una
+    verificacion recien hecha.&quot;&quot;&quot;
+    datos, ts, cacheado = _auditoria_cacheada(&quot;verificar&quot;, _verificar_ledger_ahora)
+    return _con_fecha(datos, ts, cacheado)
+
 @app.get(&quot;/ledger/sellos&quot;)
 def ledger_sellos(limite: int = 20):
     &quot;&quot;&quot;Ultimos sellos firmados (publico). Fijan el historial sin confiar en el Core.&quot;&quot;&quot;
@@ -3254,54 +3565,57 @@ def ledger_sellos(limite: int = 20):
     return {&quot;clave_publica&quot;: _sello_pub, &quot;total&quot;: len(sellos),
             &quot;sellos&quot;: sellos[-limite:]}
 
-_integridad_cache = {&quot;ts&quot;: 0.0, &quot;datos&quot;: None}
+def _integridad_ahora():
+    &quot;&quot;&quot;Cadena + sellos + si los pagos estan bloqueados (sin cache).&quot;&quot;&quot;
+    sellos = _sellos_leidos()
+    # 27-10-2026 (H-01, hipotesis de concurrencia): las lecturas van dentro
+    # de UNA transaccion de solo lectura. En WAL eso les da la MISMA foto del
+    # ledger; sin esto, un asiento que entra entre la pasada de la cadena y
+    # la de los sellos puede hacer que la respuesta mezcle dos estados. No
+    # frena a los escritores (WAL) y no cambia QUE se comprueba.
+    _en_tx = True
+    try:
+        con.execute(&quot;BEGIN&quot;)
+    except Exception:
+        _en_tx = False          # ya habia transaccion en este hilo: se sigue sin foto
+    try:
+        est = SELLOS.estado_ledger(con) if SELLOS else {}
+        cadena = (SELLOS.verificar_cadena_db(con) if SELLOS
+                  else {&quot;ok&quot;: False, &quot;ids_alterados&quot;: []})
+        # La cadena ya esta recorrida: verificar_sellos la reutiliza en vez
+        # de volver a pasar por el ledger entero.
+        r = (SELLOS.verificar_sellos(con, sellos, _sello_pub, cadena=cadena)
+             if SELLOS else {&quot;ok&quot;: False, &quot;problemas&quot;: []})
+    finally:
+        if _en_tx:
+            try:
+                con.execute(&quot;COMMIT&quot;)
+            except Exception:
+                try:
+                    con.execute(&quot;ROLLBACK&quot;)
+                except Exception:
+                    pass
+    return {
+        &quot;cadena_ok&quot;: bool(cadena.get(&quot;ok&quot;)),
+        &quot;ids_alterados&quot;: cadena.get(&quot;ids_alterados&quot;, [])[:20],
+        &quot;asientos_vivos&quot;: int(est.get(&quot;asientos&quot;, 0)),
+        &quot;sellos&quot;: len(sellos),
+        &quot;ultimo_sello&quot;: sellos[-1] if sellos else None,
+        &quot;sellos_ok&quot;: bool(r.get(&quot;ok&quot;)),
+        &quot;problemas&quot;: (r.get(&quot;problemas&quot;) or [])[:20],
+        &quot;pagos_bloqueados&quot;: LEDGER_ROTO,
+        &quot;clave_publica&quot;: _sello_pub,
+    }
+
 
 @app.get(&quot;/ledger/integridad&quot;)
 def ledger_integridad():
-    &quot;&quot;&quot;Cadena + sellos + si los pagos estan bloqueados (cacheado 30 s).&quot;&quot;&quot;
-    ahora = time.time()
-    if _integridad_cache[&quot;datos&quot;] is None or ahora - _integridad_cache[&quot;ts&quot;] &gt; 30:
-        sellos = _sellos_leidos()
-        # 27-10-2026 (H-01, hipotesis de concurrencia): las lecturas van dentro
-        # de UNA transaccion de solo lectura. En WAL eso les da la MISMA foto del
-        # ledger; sin esto, un asiento que entra entre la pasada de la cadena y
-        # la de los sellos puede hacer que la respuesta mezcle dos estados. No
-        # frena a los escritores (WAL) y no cambia QUE se comprueba.
-        _en_tx = True
-        try:
-            con.execute(&quot;BEGIN&quot;)
-        except Exception:
-            _en_tx = False          # ya habia transaccion en este hilo: se sigue sin foto
-        try:
-            est = SELLOS.estado_ledger(con) if SELLOS else {}
-            cadena = (SELLOS.verificar_cadena_db(con) if SELLOS
-                      else {&quot;ok&quot;: False, &quot;ids_alterados&quot;: []})
-            # La cadena ya esta recorrida: verificar_sellos la reutiliza en vez
-            # de volver a pasar por el ledger entero.
-            r = (SELLOS.verificar_sellos(con, sellos, _sello_pub, cadena=cadena)
-                 if SELLOS else {&quot;ok&quot;: False, &quot;problemas&quot;: []})
-        finally:
-            if _en_tx:
-                try:
-                    con.execute(&quot;COMMIT&quot;)
-                except Exception:
-                    try:
-                        con.execute(&quot;ROLLBACK&quot;)
-                    except Exception:
-                        pass
-        _integridad_cache[&quot;datos&quot;] = {
-            &quot;cadena_ok&quot;: bool(cadena.get(&quot;ok&quot;)),
-            &quot;ids_alterados&quot;: cadena.get(&quot;ids_alterados&quot;, [])[:20],
-            &quot;asientos_vivos&quot;: int(est.get(&quot;asientos&quot;, 0)),
-            &quot;sellos&quot;: len(sellos),
-            &quot;ultimo_sello&quot;: sellos[-1] if sellos else None,
-            &quot;sellos_ok&quot;: bool(r.get(&quot;ok&quot;)),
-            &quot;problemas&quot;: (r.get(&quot;problemas&quot;) or [])[:20],
-            &quot;pagos_bloqueados&quot;: LEDGER_ROTO,
-            &quot;clave_publica&quot;: _sello_pub,
-        }
-        _integridad_cache[&quot;ts&quot;] = ahora
-    return _integridad_cache[&quot;datos&quot;]
+    &quot;&quot;&quot;Cadena + sellos + si los pagos estan bloqueados (cacheado 300 s).
+
+    La respuesta lleva `medido_en`, `edad_s` y `cacheado`: un veredicto
+    reutilizado nunca se presenta como recien calculado.&quot;&quot;&quot;
+    datos, ts, cacheado = _auditoria_cacheada(&quot;integridad&quot;, _integridad_ahora)
+    return _con_fecha(datos, ts, cacheado)
 
 # ============================================================
 #  DIFICULTAD ADAPTATIVA (potencia de LA RED KUKIA, no mundial)
@@ -3409,15 +3723,43 @@ def dificultad() -&gt; dict:
                               max(300, int(1500 * escala * escala))),
     }
 
+# F2-35: el suministro ya NO es un contador que se suma a si mismo. El viejo
+# `meta.supply_emitido` se incrementaba con `valor = valor + kuki` en coma
+# flotante: cada asiento redondeaba sobre un total de ~1,5e7 (ULP 1,9e-9) y el
+# error se acumulaba sin volver nunca al ledger. Medido el 30-10-2026 con
+# 200.000 pagos de 0,0001 KIA (test S1): el contador queda 3,397e-05 KIA POR
+# DEBAJO de la suma de asientos, y crece con el numero de pagos. En reposo no
+# se ve porque el arranque re-ancla el contador al ledger.
+#
+# Ahora la unica fuente de verdad es el ledger, y el contador solo CACHEA el
+# resultado de sumarlo:
+#   - cada asiento ajusta la cache con el importe exacto que acaba de escribir,
+#     asi que el tope de emision (MAX_SUPPLY - supply) nunca va por detras;
+#   - pasado SUPPLY_TTL_S se vuelve a sumar el ledger y la cache se sustituye
+#     por el valor exacto. El error de la cache es, como mucho, el de los
+#     asientos de la ventana TTL (unos pocos nanokIA), nunca acumulativo.
+#
+# COSTE MEDIDO (1,2 M de asientos): SUM(ledger) = 186 ms; MAX(id) = 0,02 ms;
+# SUM(saldos_cuenta) = 0,02 ms. Por eso no se suma en cada peticion: con
+# TTL=5 s son ~4 % de un nucleo, y KUKIA_SUPPLY_TTL_S=0 lo vuelve exacto en
+# cada llamada (es lo que usan las pruebas de igualdad estricta).
+# F2-35: `SUPPLY_TTL_S` y `_supply_cache` viven arriba (junto a MAX_SUPPLY)
+# porque `genesis()` llama a `_asiento()` al importar el modulo, antes de
+# llegar aqui.
+def _supply_desde_ledger() -&gt; float:
+    fila = con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger&quot;).fetchone()
+    return float(fila[&quot;s&quot;] or 0.0)
+
+
 def supply_emitido() -&gt; float:
-    &quot;&quot;&quot;Suministro desde el total materializado (con respaldo al ledger).&quot;&quot;&quot;
-    try:
-        fila = con.execute(&quot;SELECT valor FROM meta WHERE clave=&#x27;supply_emitido&#x27;&quot;).fetchone()
-        if fila is not None:
-            return float(fila[&quot;valor&quot;] or 0.0)
-    except Exception:
-        pass
-    return float(con.execute(&quot;SELECT COALESCE(SUM(kuki),0) s FROM ledger&quot;).fetchone()[&quot;s&quot;] or 0.0)
+    &quot;&quot;&quot;Suministro emitido: suma EXACTA del ledger, cacheada TTL segundos.&quot;&quot;&quot;
+    ahora = time.time()
+    if _supply_cache[&quot;ts&quot;] and (ahora - _supply_cache[&quot;ts&quot;]) &lt; SUPPLY_TTL_S:
+        return _supply_cache[&quot;valor&quot;]
+    valor = _supply_desde_ledger()
+    _supply_cache[&quot;ts&quot;] = ahora
+    _supply_cache[&quot;valor&quot;] = valor
+    return valor
 
 def _epoch(ts: str) -&gt; float:
     try:
@@ -4823,7 +5165,9 @@ def registro(r: RegistroIn, request: Request):
 
     AUDITORIA: antes el &#x27;ref&#x27; se guardaba en la columna &#x27;ip&#x27; y la IP real no
     se guardaba nunca. Ahora cada dato va a su columna.&quot;&quot;&quot;
-    ip = request.client.host if request.client else &quot;&quot;
+    # AUDITORIA 2026-10-28 (A2): la IP real, no la del socket (que detras del
+    # tunel es 127.0.0.1 y dejaba todas las altas con la misma IP).
+    ip = _ip_cliente(request)
     with _escritura():
         con.execute(&quot;INSERT INTO registros(nombre,email,gpu,tops,ceder,ref,ip,ts) VALUES(?,?,?,?,?,?,?,?)&quot;,
                     (r.nombre[:120], r.email[:160], r.gpu[:80], r.tops[:40],
@@ -6008,6 +6352,153 @@ def cliente_ver_tarea(tid: str, c=Depends(exigir_cliente)):
 
 
 # el coordinador corre: uvicorn kukia_core:app --port 8300
+
+
+# ==========================================================================
+# F2-14 â€” ciclo de vida de claves (endpoints nuevos, NO desplegados)
+# ==========================================================================
+class ClaveRetoIn(BaseModel):
+    tipo: str = &quot;planificada&quot;
+
+
+class ClaveRotarIn(BaseModel):
+    reto: str
+    clave_vieja: str
+    clave_nueva: str
+    firma_vieja: str
+    firma_nueva: str
+    ts: float = 0
+    tipo: str = &quot;planificada&quot;
+    gracia_seg: float = 0
+
+
+class ClaveSecretoIn(BaseModel):
+    secreto: str
+
+
+class ClaveConfigurarIn(BaseModel):
+    secreto: str
+    reto: str = &quot;&quot;
+    firma: str = &quot;&quot;
+    ts: float = 0
+
+
+class ClaveRecuperarIn(BaseModel):
+    clave_nueva: str
+    firma: str
+    secreto: str
+    ts: float = 0
+    tipo: str = &quot;compromiso&quot;
+    retraso_seg: float = 0
+
+
+class ClaveConfirmarIn(BaseModel):
+    firma: str
+    ts: float = 0
+
+
+def _clave_http(motivo: str):
+    &quot;&quot;&quot;Codigos estables: 401 autenticidad, 409 conflicto, 400 entrada.&quot;&quot;&quot;
+    if motivo in (&quot;firma_clave_vieja_invalida&quot;, &quot;falta_posesion_clave_nueva&quot;,
+                  &quot;clave_invalida&quot;, &quot;falta_posesion_clave_activa&quot;,
+                  &quot;firma_invalida&quot;):
+        return HTTPException(401, motivo)
+    if motivo in (&quot;reto_invalido_o_caducado&quot;, &quot;clave_desactualizada&quot;,
+                  &quot;ya_aplicada&quot;, &quot;conflicto_concurrente&quot;, &quot;clave_ya_usada&quot;,
+                  &quot;recuperacion_ya_configurada&quot;):
+        return HTTPException(409, motivo)
+    return HTTPException(400, motivo)
+
+
+def _reto_http(out):
+    &quot;&quot;&quot;Traduce la emision de un reto a HTTP.
+
+    None = nodo sin clave activa (404). Cuota agotada = 429 con `Retry-After`.
+    Cualquier otro motivo sigue el mapa estable de `_clave_http`.
+    &quot;&quot;&quot;
+    if out is None:
+        raise HTTPException(404, &quot;nodo sin clave activa&quot;)
+    if not out.get(&quot;ok&quot;):
+        if out.get(&quot;motivo&quot;) == &quot;cuota_reto_excedida&quot;:
+            espera = max(1, int(math.ceil(float(out.get(&quot;reintentar_en&quot;) or 1.0))))
+            raise HTTPException(429, out.get(&quot;motivo&quot;, &quot;cuota_reto_excedida&quot;),
+                                headers={&quot;Retry-After&quot;: str(espera)})
+        raise _clave_http(out.get(&quot;motivo&quot;, &quot;error&quot;))
+    return out
+
+
+@app.post(&quot;/nodos/{nodo_id}/clave/reto&quot;)
+def clave_reto(nodo_id: str, r: ClaveRetoIn, req: Request):
+    &quot;&quot;&quot;Reto de un solo uso para rotar la clave. Caduca en 5 minutos.
+
+    F2-23: emision con cuota propia (`rot:`), independiente de la de
+    configuracion, para que inundar una no bloquee la otra.
+    &quot;&quot;&quot;
+    return _reto_http(claves.reto_rotacion(con, nodo_id, r.tipo,
+                                           ip=_ip_cliente(req)))
+
+
+@app.post(&quot;/nodos/{nodo_id}/clave/rotar&quot;)
+def clave_rotar(nodo_id: str, r: ClaveRotarIn):
+    &quot;&quot;&quot;Rotacion: firma de la clave vieja + posesion de la nueva, misma frase.&quot;&quot;&quot;
+    out = claves.rotar(con, nodo_id, r.reto, r.clave_vieja, r.clave_nueva,
+                       r.firma_vieja, r.firma_nueva, r.ts, r.tipo, r.gracia_seg)
+    if not out.get(&quot;ok&quot;):
+        raise _clave_http(out.get(&quot;motivo&quot;, &quot;error&quot;))
+    return out
+
+
+@app.post(&quot;/nodos/{nodo_id}/clave/reto-configuracion&quot;)
+def clave_reto_configuracion(nodo_id: str, req: Request):
+    &quot;&quot;&quot;Reto de un solo uso para inscribir el secreto. Caduca en 5 minutos.
+
+    F2-22: emision con cuota por nodo y por IP. Al agotarla responde 429 con
+    `Retry-After`.
+    &quot;&quot;&quot;
+    return _reto_http(claves.reto_configuracion(con, nodo_id,
+                                               ip=_ip_cliente(req)))
+
+
+@app.post(&quot;/nodos/{nodo_id}/clave/recuperacion&quot;)
+def clave_configurar_recuperacion(nodo_id: str, r: ClaveConfigurarIn):
+    &quot;&quot;&quot;Inscribe el secreto de recuperacion con prueba de la clave ACTIVA.&quot;&quot;&quot;
+    out = claves.configurar_recuperacion(con, nodo_id, r.secreto, reto=r.reto,
+                                         firma=r.firma, ts=r.ts)
+    if not out.get(&quot;ok&quot;):
+        raise _clave_http(out.get(&quot;motivo&quot;, &quot;error&quot;))
+    return out
+
+
+@app.post(&quot;/nodos/{nodo_id}/clave/recuperar&quot;)
+def clave_recuperar(nodo_id: str, r: ClaveRecuperarIn):
+    &quot;&quot;&quot;Recupera con el secreto + posesion de la nueva clave.
+
+    `compromiso` (por defecto) revoca la clave actual en el acto y sin gracia.
+    `perdida` deja la nueva en `recovery_pending` hasta confirmarla.
+    &quot;&quot;&quot;
+    out = claves.recuperar(con, nodo_id, r.clave_nueva, r.firma, r.secreto, r.ts,
+                           r.tipo, r.retraso_seg)
+    if not out.get(&quot;ok&quot;):
+        raise _clave_http(out.get(&quot;motivo&quot;, &quot;error&quot;))
+    return out
+
+
+@app.post(&quot;/nodos/{nodo_id}/clave/confirmar&quot;)
+def clave_confirmar(nodo_id: str, r: ClaveConfirmarIn):
+    &quot;&quot;&quot;Cierra una recuperacion por perdida (la nueva pasa a activa).&quot;&quot;&quot;
+    out = claves.confirmar_recuperacion(con, nodo_id, r.firma, r.ts)
+    if not out.get(&quot;ok&quot;):
+        raise _clave_http(out.get(&quot;motivo&quot;, &quot;error&quot;))
+    return out
+
+
+@app.post(&quot;/nodos/{nodo_id}/clave/revocar&quot;)
+def clave_revocar(nodo_id: str, r: ClaveSecretoIn):
+    &quot;&quot;&quot;Revoca sin sustituta: la identidad deja de firmar nada.&quot;&quot;&quot;
+    out = claves.revocar(con, nodo_id, r.secreto)
+    if not out.get(&quot;ok&quot;):
+        raise _clave_http(out.get(&quot;motivo&quot;, &quot;error&quot;))
+    return out
 </code></pre>
 
 <h2>Minero (Worker multi-GPU) - worker/kukia_worker.py</h2>
@@ -6045,9 +6536,26 @@ AUDITORIA 2026-10-21 (por que el minero se quedaba sin minar):
     (un 409 confirma que ya estaba pagada: no hay doble pago).
   - Cada minuto se escribe un resumen (tareas/min, KIA/min, fallos) para que
     &quot;esta minando&quot; sea un dato y no una suposicion.
+
+AUDITORIA 2026-10-30 (F2-53, la manana del dispositivo esteril):
+  - DOBLE LIBERACION: los tres caminos de error de _pedir soltaban el
+    cupo y el finally lo volvia a soltar. El contador en_vuelo es ahora la
+    fuente de verdad: liberar de mas es imposible y queda anotado.
+  - M-12: el registro del minero lo escribe y lo rota el propio proceso,
+    con cerrojo y una marca de tiempo por linea. Nadie lo trunca por
+    fuera (eso era lo que lo llenaba de bytes NUL).
+  - M-02: una cola llena ya no deja el hilo que pide colgado para
+    siempre (put con timeout), la salud avisa si falta un hilo y un
+    BaseException en el calculo o en la entrega deja rastro antes de
+    propagarse. No se anade recuperacion automatica: la causa de la
+    manana no esta demostrada y reiniciar a ciegas borra la prueba.
 &quot;&quot;&quot;
 import hashlib, json, os, queue, secrets, subprocess, sys, time, threading, socket, urllib.parse
 import requests
+try:
+    import torch          # F2-50: a nivel de modulo, no dentro de main()
+except Exception:         # sin torch el minero sigue en CPU
+    torch = None
 from datetime import date, datetime
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / &quot;ledger&quot;))
@@ -6155,6 +6663,10 @@ def _ajuste_cpu() -&gt; tuple:
 # mejora de ocupacion se enciende a mano (KUKIA_PROFUNDIDAD, KUKIA_HILOS_GPU,
 # KUKIA_EN_VUELO=8 y KUKIA_MAX_TAREAS_NODO=8 en el Core).
 PROFUNDIDAD = max(1, min(10, int(os.environ.get(&quot;KUKIA_PROFUNDIDAD&quot;, &quot;2&quot;))))
+# F2-53 (M-02): cuanto puede esperar el hilo que pide para dejar una tarea
+# en la cola. Antes esperaba PARA SIEMPRE: si el calculo se atascaba, la
+# cola se llenaba y el dispositivo quedaba mudo sin una sola linea.
+COLA_ESPERA = max(1.0, float(os.environ.get(&quot;KUKIA_COLA_ESPERA&quot;, &quot;30&quot;)))
 # Aviso de parada (Ctrl+C). Lo pone main() y lo miran el hilo peticionero y el
 # bucle de calculo, para terminar las entregas en vuelo antes de salir.
 PARAR = threading.Event()
@@ -6177,10 +6689,15 @@ MAX_OPS_MATRIZ = max(1_000_000, int(os.environ.get(&quot;KUKIA_MAX_OPS_MATRIZ&qu
 def _get(url, **kw):
     &quot;&quot;&quot;GET sin redirecciones: una redireccion podria llevarse la firma a otro host.&quot;&quot;&quot;
     kw.setdefault(&quot;allow_redirects&quot;, False)
+    # F2-52 (S-09): timeout por defecto. Antes dependia de que cada llamada lo
+    # escribiera; la primera que se olvidara colgaba un hilo para siempre (y si
+    # era el de pedir, dejaba la GPU muda sin una linea de error).
+    kw.setdefault(&quot;timeout&quot;, 10.0)
     return requests.get(url, **kw)
 
 def _post(url, **kw):
     kw.setdefault(&quot;allow_redirects&quot;, False)
+    kw.setdefault(&quot;timeout&quot;, 10.0)   # F2-52 (S-09)
     return requests.post(url, **kw)
 
 def _core_seguro(core: str) -&gt; tuple:
@@ -6232,11 +6749,16 @@ def _indice_gpu(device) -&gt; int:
     return 0
 
 def _gpu_stats(device):
-    &quot;&quot;&quot;(utilizacion %, VRAM usada MB) reales, o (None, None) si no se puede.
+    &quot;&quot;&quot;(utilizacion %, VRAM usada MB, temperatura C, VRAM libre MB) de esa GPU.
 
-    nvidia-smi es lo mas fiable y viene con el driver; torch.cuda.utilization
-    necesita nvidia-ml-py, que no siempre esta instalado. Se intenta primero
-    nvidia-smi y se cae a torch sin romper el minero.
+    Cada valor es None si el equipo no lo da. nvidia-smi es lo mas fiable y viene
+    con el driver; torch.cuda.utilization necesita nvidia-ml-py, que no siempre
+    esta instalado. Se intenta primero nvidia-smi y se cae a torch sin romper el
+    minero.
+
+    F2-54 (M-06): se anaden temperatura y VRAM LIBRE. Con solo la usada no se
+    distingue una tarjeta llena de una tarjeta atascada, y sin temperatura no se
+    ve venir un problema termico. Son datos por dispositivo, no de la maquina.
     &quot;&quot;&quot;
     idx = _indice_gpu(device)
     # FALLO REAL (21-10-2026): esto se llama desde la telemetria cada 3 s y
@@ -6248,13 +6770,26 @@ def _gpu_stats(device):
         extra[&quot;creationflags&quot;] = 0x08000000   # CREATE_NO_WINDOW
     try:
         salida = subprocess.run(
-            [&quot;nvidia-smi&quot;, &quot;--query-gpu=utilization.gpu,memory.used&quot;,
+            [&quot;nvidia-smi&quot;,
+             &quot;--query-gpu=utilization.gpu,memory.used,temperature.gpu,memory.total&quot;,
              &quot;--format=csv,noheader,nounits&quot;, &quot;-i&quot;, str(idx)],
             capture_output=True, text=True, timeout=4, **extra)
         if salida.returncode == 0 and salida.stdout.strip():
             partes = [x.strip() for x in salida.stdout.strip().splitlines()[0].split(&quot;,&quot;)]
             if len(partes) &gt;= 2:
-                return int(float(partes[0])), int(float(partes[1]))
+                def _num(txt):
+                    try:
+                        v = int(float(txt))
+                        return v if v &gt;= 0 else None
+                    except Exception:
+                        return None
+                util = _num(partes[0])
+                usada = _num(partes[1])
+                temp = _num(partes[2]) if len(partes) &gt; 2 else None
+                total = _num(partes[3]) if len(partes) &gt; 3 else None
+                libre = (total - usada) if (total is not None
+                                            and usada is not None) else None
+                return util, usada, temp, libre
     except Exception:
         pass
     try:
@@ -6262,10 +6797,10 @@ def _gpu_stats(device):
         if torch.cuda.is_available():
             util = int(torch.cuda.utilization(idx))
             libre, total = torch.cuda.mem_get_info(idx)
-            return util, int((total - libre) / 1048576)
+            return util, int((total - libre) / 1048576), None, int(libre / 1048576)
     except Exception:
         pass
-    return None, None
+    return None, None, None, None
 
 def _bucle_telemetria(nid: str, device: str, vram_gb: int, tops: float,
                       privkey: str, estado: dict) -&gt; None:
@@ -6273,13 +6808,19 @@ def _bucle_telemetria(nid: str, device: str, vram_gb: int, tops: float,
     avisado = False
     while True:
         try:
-            util, mem = _gpu_stats(device)
+            util, mem, temp, libre = _gpu_stats(device)
             datos = {&quot;device&quot;: str(device), &quot;vram_gb&quot;: int(vram_gb),
                      &quot;tops_declarados&quot;: float(tops),
                      &quot;gflops_base&quot;: _GFLOPS_BASE.get(str(device), 0.0),
                      &quot;gpu_util_pct&quot;: int(util) if util is not None else -1,
                      &quot;gpu_mem_mb&quot;: int(mem) if mem is not None else -1,
-                     &quot;tarea_ms&quot;: round(float(estado.get(&quot;ms&quot;) or 0.0), 1)}
+                     # F2-54 (M-06): por dispositivo, para ver una tarjeta
+                     # atascada o caliente sin mirar la maquina entera.
+                     &quot;gpu_temp_c&quot;: int(temp) if temp is not None else -1,
+                     &quot;vram_libre_mb&quot;: int(libre) if libre is not None else -1,
+                     &quot;tarea_ms&quot;: round(float(estado.get(&quot;ms&quot;) or 0.0), 1),
+                     # F2-52: contadores por dispositivo, firmados con el resto.
+                     &quot;cuentas&quot;: _cuentas_json(device)}
             metricas = json.dumps(datos, separators=(&quot;,&quot;, &quot;:&quot;), ensure_ascii=False)
             ts = int(time.time())
             huella = hashlib.sha256(metricas.encode()).hexdigest()
@@ -6309,6 +6850,281 @@ IDENTIDAD = Path(__file__).parent / &quot;identidad_minero.json&quot;
 # segunda ventana del minero sin querer; dos mineros se reparten el cupo de
 # tareas del nodo (4) y rinden la mitad, sin que se vea ningun error.
 LOCK = Path(__file__).parent / &quot;minero.lock&quot;
+# --- F2-52: rastro de arranque y contadores por dispositivo --------------------
+# POR QUE (F2-50 M-02/M-05/M-12): el log del minero acaba lleno de ceros y no
+# guarda el arranque, que es justo donde se ve si una GPU se detecto mal. Este
+# fichero va aparte, se escribe con append explicito y rota por tamano, nunca por
+# tiempo. Nunca escribe claves, saldos ni la contrasena de la billetera.
+ARRANQUE = Path(__file__).parent / &quot;arranque.log&quot;
+ARRANQUE_MAX = max(64 * 1024, int(os.environ.get(&quot;KUKIA_ARRANQUE_MAX&quot;,
+                                                 str(2 * 1024 * 1024))))
+_ARRANQUE_LOCK = threading.Lock()
+
+
+def _log_arranque(msg: str) -&gt; None:
+    &quot;&quot;&quot;Una linea fechada por evento, con append real y rotacion por tamano.&quot;&quot;&quot;
+    try:
+        with _ARRANQUE_LOCK:
+            if ARRANQUE.exists() and ARRANQUE.stat().st_size &gt; ARRANQUE_MAX:
+                ARRANQUE.replace(ARRANQUE.with_name(ARRANQUE.name + &quot;.1&quot;))
+            with ARRANQUE.open(&quot;a&quot;, encoding=&quot;utf-8&quot;) as f:
+                f.write(f&quot;{datetime.now():%Y-%m-%d %H:%M:%S} &quot;
+                        f&quot;[pid {os.getpid()}] {msg}\n&quot;)
+    except Exception:
+        pass
+
+
+# --- REGISTRO DEL MINERO (M-12) ----------------------------------------------
+# POR QUE (30-10-2026): `worker/minero.log` lo escribia un `cmd &gt;&gt;` del lanzador
+# y `tools/rotar_logs.py` lo truncaba por fuera. Truncar un fichero que otro
+# proceso tiene abierto hace que ese proceso siga escribiendo en su
+# desplazamiento viejo, y el hueco se rellena de bytes NUL: el 30-10-2026 habia
+# 9.515.053 NUL en 9,5 MB, o sea un log inservible para diagnosticar.
+#
+# Ahora el UNICO escritor es este modulo: un cerrojo, una marca de tiempo por
+# linea y rotacion propia (la cola pasa a .1, .1 a .2 y el vivo se trunca desde
+# dentro). Si el lanzador redirige la salida a ese mismo fichero, su descriptor
+# queda ocioso: nadie mas escribe en el.
+MINERO_LOG = Path(__file__).parent / &quot;minero.log&quot;
+_MINERO_MAX = max(256 * 1024, int(os.environ.get(&quot;KUKIA_MINERO_LOG_BYTES&quot;,
+                                                 str(5 * 1024 * 1024))))
+_MINERO_COLA = max(64 * 1024, int(os.environ.get(&quot;KUKIA_MINERO_LOG_COLA&quot;,
+                                                 str(2 * 1024 * 1024))))
+_MINERO_GEN = max(1, int(os.environ.get(&quot;KUKIA_MINERO_LOG_GENERACIONES&quot;, &quot;2&quot;)))
+
+
+class _Registro:
+    &quot;&quot;&quot;Escritor unico del registro del minero: fechado, con cerrojo y rotacion.&quot;&quot;&quot;
+
+    encoding = &quot;utf-8&quot;
+    errors = &quot;replace&quot;
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._f = None
+        self._buf = &quot;&quot;
+        self._consola = None
+        self.rotaciones = 0
+
+    def instalar(self) -&gt; None:
+        &quot;&quot;&quot;Sustituye stdout/stderr por este escritor (y espeja en la consola).&quot;&quot;&quot;
+        consola = None
+        try:
+            if sys.stdout is not None and sys.stdout.isatty():
+                consola = sys.stdout
+        except Exception:
+            consola = None
+        self._consola = consola
+        try:
+            sys.stdout = self
+            sys.stderr = self
+        except Exception:
+            pass
+
+    def write(self, texto) -&gt; int:
+        if not isinstance(texto, str):
+            texto = str(texto)
+        if self._consola is not None:
+            try:
+                self._consola.write(texto)
+                self._consola.flush()
+            except Exception:
+                pass
+        self._buf += texto
+        while &quot;\n&quot; in self._buf:
+            linea, self._buf = self._buf.split(&quot;\n&quot;, 1)
+            if linea.strip():
+                self._linea(linea)
+        return len(texto)
+
+    def flush(self) -&gt; None:
+        if self._buf:
+            linea, self._buf = self._buf, &quot;&quot;
+            if linea.strip():
+                self._linea(linea)
+        if self._consola is not None:
+            try:
+                self._consola.flush()
+            except Exception:
+                pass
+
+    def isatty(self) -&gt; bool:
+        return False
+
+    def _linea(self, texto: str) -&gt; None:
+        with self._lock:
+            try:
+                if self._f is None:
+                    self._f = MINERO_LOG.open(&quot;a&quot;, encoding=&quot;utf-8&quot;,
+                                              errors=&quot;replace&quot;)
+                self._f.write(f&quot;{datetime.now():%Y-%m-%d %H:%M:%S} {texto}\n&quot;)
+                self._f.flush()
+                if self._f.tell() &gt;= _MINERO_MAX:
+                    self._rotar()
+            except Exception:
+                pass
+
+    def _rotar(self) -&gt; None:
+        &quot;&quot;&quot;Rota desde dentro: nadie mas escribe este fichero.&quot;&quot;&quot;
+        try:
+            if self._f is not None:
+                self._f.close()
+            self._f = None
+            cola = b&quot;&quot;
+            try:
+                total = MINERO_LOG.stat().st_size
+                with MINERO_LOG.open(&quot;rb&quot;) as f:
+                    f.seek(max(0, total - _MINERO_COLA))
+                    cola = f.read()
+            except Exception:
+                cola = b&quot;&quot;
+            for i in range(_MINERO_GEN, 1, -1):
+                viejo = MINERO_LOG.with_name(f&quot;minero.log.{i - 1}&quot;)
+                nuevo = MINERO_LOG.with_name(f&quot;minero.log.{i}&quot;)
+                try:
+                    if viejo.exists():
+                        viejo.replace(nuevo)
+                except Exception:
+                    pass
+            if cola:
+                try:
+                    MINERO_LOG.with_name(&quot;minero.log.1&quot;).write_bytes(cola)
+                except Exception:
+                    pass
+            MINERO_LOG.write_bytes(b&quot;&quot;)
+            self.rotaciones += 1
+            self._f = MINERO_LOG.open(&quot;a&quot;, encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;)
+            self._f.write(f&quot;{datetime.now():%Y-%m-%d %H:%M:%S} registro rotado &quot;
+                          f&quot;({_MINERO_MAX // 1048576} MB, {_MINERO_GEN} &quot;
+                          f&quot;generaciones; en total {self.rotaciones})\n&quot;)
+            self._f.flush()
+        except Exception:
+            pass
+
+
+_REG = _Registro()
+
+
+def _log_minero(*trozos) -&gt; None:
+    &quot;&quot;&quot;Una linea fechada en el registro del minero (no pasa por la consola).&quot;&quot;&quot;
+    try:
+        _REG._linea(&quot; &quot;.join(str(t) for t in trozos))
+    except Exception:
+        pass
+
+
+CUENTAS: dict = {}
+_CUENTAS_LOCK = threading.Lock()
+CAMPOS_CUENTA = (&quot;pedidas&quot;, &quot;recibidas&quot;, &quot;ejecutadas&quot;, &quot;entregadas&quot;, &quot;rechazadas&quot;)
+
+
+def _cuenta(device) -&gt; dict:
+    d = str(device)
+    with _CUENTAS_LOCK:
+        c = CUENTAS.get(d)
+        if c is None:
+            c = {k: 0 for k in CAMPOS_CUENTA}
+            c.update({&quot;ultimo_pedido&quot;: 0.0, &quot;ultima_entrega&quot;: 0.0,
+                      &quot;bloqueado_s&quot;: 0.0})
+            CUENTAS[d] = c
+        return c
+
+
+def _cuenta_inc(device, campo: str, n: int = 1) -&gt; None:
+    c = _cuenta(device)
+    with _CUENTAS_LOCK:
+        c[campo] = int(c.get(campo) or 0) + n
+
+
+def _cuenta_marca(device, campo: str) -&gt; None:
+    c = _cuenta(device)
+    with _CUENTAS_LOCK:
+        c[campo] = time.time()
+
+
+def _cuentas_json(device) -&gt; dict:
+    &quot;&quot;&quot;Lo que viaja firmado en la telemetria: contadores y segundos sin pedir.&quot;&quot;&quot;
+    c = _cuenta(device)
+    with _CUENTAS_LOCK:
+        d = {k: int(c.get(k) or 0) for k in CAMPOS_CUENTA}
+        ult = float(c.get(&quot;ultimo_pedido&quot;) or 0.0)
+        ue = float(c.get(&quot;ultima_entrega&quot;) or 0.0)
+    d[&quot;esteril_s&quot;] = int(max(0.0, time.time() - ult)) if ult else -1
+    d[&quot;sin_entrega_s&quot;] = int(max(0.0, time.time() - ue)) if ue else -1
+    return d
+
+
+def _volcar_pilas() -&gt; None:
+    &quot;&quot;&quot;Volcado compacto de pilas (una por hilo) en arranque.log.&quot;&quot;&quot;
+    try:
+        import traceback
+        marcos = sys._current_frames()
+        trozos = []
+        for t in threading.enumerate():
+            marco = marcos.get(t.ident)
+            if marco is None:
+                continue
+            trozos.append(f&quot;--- hilo {t.name} ---\n&quot;
+                          + &quot;&quot;.join(traceback.format_stack(marco, limit=6)))
+        _log_arranque(&quot;PILAS\n&quot; + &quot;&quot;.join(trozos))
+    except Exception:
+        pass
+
+
+def _hilo_salud() -&gt; None:
+    &quot;&quot;&quot;Vigila cada dispositivo por separado y deja el diagnostico escrito.
+
+    NO reinicia nada. La causa de M-02 (un dispositivo que late pero deja de
+    pedir trabajo) no esta demostrada; reiniciar a ciegas escondería el fallo y
+    la mision pide recuperar solo despues de demostrar la causa. Esto asegura
+    que, si vuelve a pasar, quede escrito QUE hilo estaba donde.
+    &quot;&quot;&quot;
+    esteril = float(os.environ.get(&quot;KUKIA_ESTERIL_SEG&quot;, &quot;180&quot;))
+    cada = float(os.environ.get(&quot;KUKIA_SALUD_SEG&quot;, &quot;15&quot;))
+    ultimo_aviso: dict = {}
+    ultimo_dump = 0.0
+    ultimo_muerto: dict = {}
+    while True:
+        time.sleep(cada)
+        try:
+            ahora = time.time()
+            # F2-53 (M-02): un hilo muerto deja la GPU muda y el proceso vivo.
+            # Esto solo lo DETECTA y lo escribe; no reinicia nada.
+            vivos = [t.name for t in threading.enumerate()]
+            for dev in list(CUENTAS):
+                corto = str(dev).replace(&quot;:&quot;, &quot;&quot;)
+                falta = [n for n in (f&quot;pedir-{corto}&quot;, f&quot;calc-{corto}-&quot;)
+                         if not any(v == n or v.startswith(n) for v in vivos)]
+                if not falta:
+                    continue
+                if ahora - float(ultimo_muerto.get(str(dev)) or 0.0) &lt; 300:
+                    continue
+                ultimo_muerto[str(dev)] = ahora
+                _log_arranque(f&quot;HILO_MUERTO {dev}: falta {&#x27;, &#x27;.join(falta)}; &quot;
+                              f&quot;vivos={&#x27;, &#x27;.join(sorted(vivos))}&quot;)
+                _volcar_pilas()
+            for dev, c in list(CUENTAS.items()):
+                with _CUENTAS_LOCK:
+                    ult = float(c.get(&quot;ultimo_pedido&quot;) or 0.0)
+                    ped = int(c.get(&quot;pedidas&quot;) or 0)
+                    ent = int(c.get(&quot;entregadas&quot;) or 0)
+                if not ult:
+                    continue
+                seco = ahora - ult
+                if seco &lt; esteril:
+                    ultimo_aviso.pop(dev, None)
+                    continue
+                if ahora - ultimo_aviso.get(dev, 0.0) &lt; 300:
+                    continue
+                ultimo_aviso[dev] = ahora
+                vivos = &quot;, &quot;.join(sorted(t.name for t in threading.enumerate()))
+                _log_arranque(f&quot;ESTERIL {dev}: {seco:.0f} s sin pedir trabajo &quot;
+                              f&quot;(pedidas={ped} entregadas={ent}); hilos={vivos}&quot;)
+                if ahora - ultimo_dump &gt; 120:
+                    ultimo_dump = ahora
+                    _volcar_pilas()
+        except Exception as e:
+            _log_arranque(f&quot;salud: {type(e).__name__}: {e}&quot;)
 
 # BENCHMARK DE ARRANQUE (21-10-2026): antes de minar se mide la GPU con las
 # mismas cuentas que las tareas de la red. Sirve para detectar una GPU mal
@@ -7175,7 +7991,11 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
     # para tenerlas a las dos ocupadas (cada pedido tarda ~350 ms y cada tarea
     # ~120 ms). El Core tiene que permitirlo: KUKIA_MAX_TAREAS_NODO=8.
     # Defecto 4 = el de siempre; ver el comentario de PROFUNDIDAD arriba.
-    cupo_vuelo = threading.Semaphore(max(2, min(12, int(os.environ.get(&quot;KUKIA_EN_VUELO&quot;, &quot;4&quot;)))))
+    # F2-54 (M-03): BoundedSemaphore y no Semaphore. Con el acotado, liberar de
+    # mas lanza ValueError en vez de inflar el contador: el tope de tareas en
+    # vuelo no puede desaparecer ni por un camino de error que se olvide.
+    cupo_vuelo = threading.BoundedSemaphore(
+        max(2, min(12, int(os.environ.get(&quot;KUKIA_EN_VUELO&quot;, &quot;4&quot;)))))
     cola_tareas = queue.Queue(maxsize=PROFUNDIDAD)
     en_vuelo = {&quot;n&quot;: 0}
     en_vuelo_lock = threading.Lock()
@@ -7190,12 +8010,27 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
         fallo el nodo deja de minar y no lo dice. Aqui se suelta siempre por
         el mismo sitio, y se lleva la cuenta para poder esperar al parar.
         &quot;&quot;&quot;
+        # F2-53 (doble liberacion): el contador es la fuente de verdad. Solo se
+        # libera si de verdad hay una tarea en vuelo, asi que soltar de mas ya
+        # no puede inflar el semaforo (antes los tres caminos de error de
+        # _pedir lo soltaban y el finally lo volvia a soltar).
+        with en_vuelo_lock:
+            if en_vuelo[&quot;n&quot;] &lt;= 0:
+                sobran = True
+            else:
+                en_vuelo[&quot;n&quot;] -= 1
+                sobran = False
+        if sobran:
+            _log_arranque(&quot;cupo: liberacion de mas ignorada (contador en 0)&quot;)
+            return
         try:
             cupo_vuelo.release()
+        except ValueError:
+            # Con BoundedSemaphore esto es un defecto de contabilidad, no ruido:
+            # se anota con nombre y numero para poder cazarlo.
+            _log_arranque(&quot;cupo: BoundedSemaphore rechaza una liberacion de mas&quot;)
         except Exception:
             pass
-        with en_vuelo_lock:
-            en_vuelo[&quot;n&quot;] = max(0, en_vuelo[&quot;n&quot;] - 1)
 
     def _entregar(pid, tipo, metrica, duracion_ms, telemetria, es_replica, firma):
         &quot;&quot;&quot;Manda la entrega (o la verificacion) sin bloquear al dispositivo.&quot;&quot;&quot;
@@ -7277,6 +8112,8 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 return
             res = rr.json()
             if res.get(&quot;ok&quot;):
+                _cuenta_inc(device, &quot;entregadas&quot;)
+                _cuenta_marca(device, &quot;ultima_entrega&quot;)
                 with cuenta_lock:
                     cuenta[&quot;ok&quot;] += 1
                     cuenta[&quot;kuki&quot;] += float(res.get(&quot;kuki&quot;) or 0.0)
@@ -7284,13 +8121,19 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 print(f&quot;[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -&gt; OK +{res.get(&#x27;kuki&#x27;)} KIA &quot;
                       f&quot;({duracion_ms:.0f} ms)&quot;, flush=True)
             else:
+                _cuenta_inc(device, &quot;rechazadas&quot;)
                 with cuenta_lock:
                     cuenta[&quot;err&quot;] += 1
                 print(f&quot;[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -&gt; RECHAZADO &quot;
                       f&quot;(esperado {res.get(&#x27;esperado&#x27;)}, enviado {metrica[:40]})&quot;, flush=True)
-        except Exception as e:
+        except BaseException as e:
             print(f&quot;[KUKIA] {etiqueta} entrega de {pid[:8]} fallida: &quot;
                   f&quot;{type(e).__name__}: {e}&quot;, flush=True)
+            if not isinstance(e, Exception):
+                # F2-53: un BaseException en este hilo se llevaba por delante la
+                # entrega sin dejar rastro. Queda escrito antes de propagar.
+                _log_arranque(f&quot;entrega {str(device)}: {type(e).__name__}: {e}&quot;)
+                raise
         finally:
             # Se suelta SIEMPRE, con o sin exito: si no, una entrega que falle
             # deja el cupo cogido y el nodo pierde capacidad para siempre.
@@ -7320,6 +8163,7 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 if not cupo_vuelo.acquire(timeout=1.0):
                     continue
                 tengo_cupo = True
+                _cuenta_inc(device, &quot;pedidas&quot;)
                 with en_vuelo_lock:
                     en_vuelo[&quot;n&quot;] += 1
                 nid_p = ctx[&quot;nid&quot;]
@@ -7339,10 +8183,12 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                     print(f&quot;[KUKIA] {etiqueta} limitado por el Core (429), espero 20 s&quot;,
                           flush=True)
                     bloqueado[&quot;hasta&quot;] = time.time() + 20
+                    tengo_cupo = False        # F2-53: lo suelta esta rama, no el finally
                     _soltar()
                     continue
                 if rp.status_code != 200:
                     detalle = (rp.text or &quot;&quot;)[:160]
+                    tengo_cupo = False        # F2-53: exactamente una liberacion
                     _soltar()
                     if rp.status_code in (401, 404) and &quot;nodo no registrado&quot; in detalle:
                         print(f&quot;[KUKIA] {etiqueta} el Core no ve el nodo {nid_p}: lo compruebo &quot;
@@ -7360,8 +8206,12 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                     continue
                 _cuerpo = rp.json()
                 cuenta[&quot;ultimo_core_ok&quot;] = time.time()
+                _cuenta_marca(device, &quot;ultimo_pedido&quot;)
+                if _cuerpo.get(&quot;tarea&quot;):
+                    _cuenta_inc(device, &quot;recibidas&quot;)
                 if not _cuerpo.get(&quot;tarea&quot;):
                     motivo = str(_cuerpo.get(&quot;motivo&quot;) or &quot;&quot;)
+                    tengo_cupo = False        # F2-53: exactamente una liberacion
                     _soltar()
                     if &quot;limite&quot; in motivo:
                         # Cupo del nodo lleno (tareas colgadas de antes, o un
@@ -7375,10 +8225,30 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                     continue
                 # El cupo de esta tarea lo suelta quien la entregue.
                 tengo_cupo = False
-                cola_tareas.put(_cuerpo)
-            except Exception as e:
+                try:
+                    cola_tareas.put(_cuerpo, timeout=COLA_ESPERA)
+                except queue.Full:
+                    # F2-53 (M-02): antes era un put sin timeout. Con el calculo
+                    # atascado, la cola se llenaba y este hilo se quedaba aqui
+                    # para siempre: la GPU muda y el proceso vivo, sin ninguna
+                    # linea que lo delatara. Ahora se anota y el cupo vuelve.
+                    _pid = str((_cuerpo.get(&quot;tarea&quot;) or {}).get(&quot;id&quot;) or &quot;?&quot;)[:8]
+                    _log_arranque(f&quot;pedir-{device}: cola llena {COLA_ESPERA:.0f} s; &quot;
+                                  f&quot;tarea {_pid} no admitida (vence en el Core)&quot;)
+                    print(f&quot;[KUKIA] {etiqueta} la cola de calculo no admite trabajo &quot;
+                          f&quot;en {COLA_ESPERA:.0f} s; sigo pidiendo&quot;, flush=True)
+                    _soltar()
+                    time.sleep(1.0)
+                    continue
+            except BaseException as e:
+                # F2-52: BaseException y no Exception. Un BaseException mataba el
+                # hilo pedir-* en silencio y la GPU se quedaba sin trabajo sin
+                # dejar rastro (M-02). Ahora queda escrito antes de propagar.
+                _log_arranque(f&quot;pedir-{device}: {type(e).__name__}: {e}&quot;)
                 print(f&quot;[KUKIA] {etiqueta} pidiendo trabajo: {type(e).__name__}: {e} &quot;
                       f&quot;(reintento en {espera:.0f} s)&quot;, flush=True)
+                if not isinstance(e, Exception):
+                    raise
                 time.sleep(espera)
                 espera = min(60.0, espera * 1.6)
             else:
@@ -7469,6 +8339,7 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                     en_mano = False
                     time.sleep(5)
                     continue
+                _cuenta_inc(device, &quot;ejecutadas&quot;)
                 firma = WALLET.firmar(f&quot;{pid}:{metrica}&quot;, privkey) if privkey else &quot;&quot;
                 # Telemetria REAL del nodo: tiempo de la tarea, FLOPs que acaba de
                 # hacer y GFLOPS medidos en ESTA tarea. Con eso el panel dibuja la
@@ -7506,10 +8377,18 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 except Exception:
                     en_mano = True   # no llego a nacer: el cupo vuelve a nosotros
                     raise
-            except Exception as e:
+            except BaseException as e:
                 if en_mano:
                     _soltar()
                     en_mano = False
+                if not isinstance(e, Exception):
+                    # F2-53: un BaseException mataba este hilo en silencio; la
+                    # GPU dejaba de consumir, la cola se llenaba y el hilo que
+                    # pide se quedaba bloqueado (la firma exacta de M-02). Queda
+                    # escrito, con pilas, antes de propagar.
+                    _log_arranque(f&quot;calc-{device}: {type(e).__name__}: {e}&quot;)
+                    _volcar_pilas()
+                    raise
                 # Backoff: un Core caido no debe hacer que 2 GPUs lo martilleen
                 # en bucle ni llenar el log a 1000 lineas por minuto.
                 print(f&quot;[KUKIA] {etiqueta} err: {e} (reintento en {espera_error:.0f} s)&quot;, flush=True)
@@ -7701,6 +8580,8 @@ def main():
             flujo.reconfigure(encoding=&quot;utf-8&quot;, errors=&quot;replace&quot;)
         except Exception:
             pass
+    # F2-53 (M-12): a partir de aqui el registro lo escribe este proceso.
+    _REG.instalar()
     if not _tomar_lock():
         return 0
     _vigilar_direccion()
@@ -7709,7 +8590,13 @@ def main():
         print(f&quot;[KUKIA] ERROR: {motivo_core}&quot;, flush=True)
         return 2
     nombre = sys.argv[1] if len(sys.argv) &gt; 1 else &quot;worker_&quot; + socket.gethostname()
+    _log_arranque(
+        f&quot;arranque: python={sys.version.split()[0]} &quot;
+        f&quot;torch={getattr(torch, &#x27;__version__&#x27;, &#x27;ausente&#x27;)} &quot;
+        f&quot;cuda={getattr(getattr(torch, &#x27;version&#x27;, None), &#x27;cuda&#x27;, None)} &quot;
+        f&quot;core={CORE} nombre={nombre}&quot;)
     n_gpus, motivo_gpu = _detectar_gpus()
+    _log_arranque(f&quot;GPUs detectadas: {n_gpus} {motivo_gpu}&quot;.rstrip())
 
     def _esperar(hilos):
         &quot;&quot;&quot;Espera a los hilos y, si llega un Ctrl+C, para ordenadamente.&quot;&quot;&quot;
@@ -7763,9 +8650,14 @@ def main():
             # TOPS aproximados por clase de GPU (referencia NVIDIA)
             tops_est = {8: 60.0, 12: 300.0, 16: 760.0, 24: 1300.0}.get(int(vram), 100.0)
             print(f&quot;[KUKIA] GPU{g}: {props.name} ({vram} GB)&quot;, flush=True)
-        except Exception:
+            _log_arranque(f&quot;GPU{g}: {props.name} vram={vram}GB &quot;
+                          f&quot;tops={tops_est} (estimado por clase, no medido)&quot;)
+        except Exception as e:
+            _log_arranque(f&quot;GPU{g}: no se pudieron leer sus propiedades &quot;
+                          f&quot;({type(e).__name__}: {e}) -&gt; vram=0 tops=0&quot;)
             vram, tops_est = 0, 0.0
-        t = threading.Thread(target=ciclo_worker, args=(nombre, f&quot;cuda:{g}&quot;, vram, tops_est), daemon=True)
+        t = threading.Thread(target=ciclo_worker, args=(nombre, f&quot;cuda:{g}&quot;, vram, tops_est),
+                             daemon=True, name=f&quot;nodo-cuda{g}&quot;)
         t.start()
         hilos.append(t)
 
@@ -7773,8 +8665,11 @@ def main():
     usar_cpu, hilos_cpu = _ajuste_cpu()
     if usar_cpu:
         try:
-            import torch
-            torch.set_num_threads(hilos_cpu)   # no ahogar a los hilos de las GPU
+            # F2-50: antes habia aqui un &quot;import torch&quot; que convertia torch en
+            # variable LOCAL de main() y rompia la lectura de VRAM/TOPS de mas
+            # arriba (UnboundLocalError tragado por el except).
+            if torch is not None:
+                torch.set_num_threads(hilos_cpu)   # no ahogar a los hilos de las GPU
         except Exception:
             pass
         print(f&quot;[KUKIA] CPU tambien mina: {hilos_cpu} hilos &quot;
@@ -7785,10 +8680,23 @@ def main():
     else:
         print(&quot;[KUKIA] CPU en reposo (KUKIA_USAR_CPU=1 para que mine tambien)&quot;, flush=True)
 
+    threading.Thread(target=_hilo_salud, daemon=True, name=&quot;salud&quot;).start()
+    _log_arranque(&quot;hilos: &quot; + &quot;, &quot;.join(sorted(t.name for t in threading.enumerate())))
+    _log_arranque(&quot;minando&quot;)
     _esperar(hilos)
+    _log_arranque(&quot;fin: main() termino&quot;)
 
 if __name__ == &quot;__main__&quot;:
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        # F2-52: un fallo de arranque deja traceback en arranque.log, no solo un
+        # codigo de salida que nadie ve (pythonw no tiene consola).
+        import traceback
+        _log_arranque(&quot;EXCEPCION no controlada:\n&quot; + traceback.format_exc())
+        raise
 </code></pre>
 
 <h2>Validador independiente - validator/kukia_validator.py</h2>
@@ -9833,8 +10741,9 @@ Que hace, en orden:
      este escribiendo; no hay que pararlo).
   2. Copia `sellos.jsonl` RECORTADO al numero que la propia base declara en
      `meta.sellos_n` (el fichero puede ir por delante, nunca por detras).
-  3. Copia `sello_key.txt` por defecto: sin ella la copia no se puede verificar
-     sola. Con `--con-claves` copia tambien `admin_token.txt`.
+  3. Escribe `sello_pub.txt` con la clave PUBLICA del sello: con eso la copia se
+     verifica sola, sin llevarse la clave privada. La privada NO se copia salvo
+     que se pida (`--con-clave`), y el token de admin tampoco (`--con-token`).
   4. Verifica la copia: recalcula la cadena y comprueba las firmas de los
      sellos. Una copia sin verificar no es una copia.
   5. Escribe `manifest.json` con sha256, totales y resultado.
@@ -9843,7 +10752,13 @@ Que hace, en orden:
 Uso:
     python tools/backup_ledger.py                          # backups/kukia_FECHA
     python tools/backup_ledger.py --destino D:/KUKIA_backups --mantener 14
-    python tools/backup_ledger.py --sin-clave              # no copia la clave
+    python tools/backup_ledger.py --con-clave              # SI copia la privada
+
+Desde el 28-10-2026 la clave privada NO viaja en las copias por defecto: cada
+copia en D: dejaba otra copia en claro de la clave que firma los sellos, en un
+disco que no es el del Core. Las copias se verifican con `sello_pub.txt`, que
+es publico; para ARRANCAR desde una copia hace falta la clave, y esa se restaura
+desde el paquete cifrado de claves (tools/cifrar_claves.py).
 
 Salida: 0 si la copia se hizo y verifico; 2/3/4 si fallo algo.
 &quot;&quot;&quot;
@@ -9908,7 +10823,8 @@ def n_sellos_meta(db: Path) -&gt; int:
         con.close()
 
 
-def copiar_estado(carpeta: Path, con_claves: bool, sin_clave: bool) -&gt; int:
+def copiar_estado(carpeta: Path, con_clave: bool = False,
+                  con_token: bool = False) -&gt; int:
     carpeta.mkdir(parents=True, exist_ok=True)
     db = carpeta / &quot;kukia.db&quot;
     for intento in range(6):
@@ -9925,13 +10841,20 @@ def copiar_estado(carpeta: Path, con_claves: bool, sin_clave: bool) -&gt; int:
         lineas = lineas[:n_meta] if n_meta else lineas
         (carpeta / &quot;sellos.jsonl&quot;).write_text(
             &quot;\n&quot;.join(lineas) + (&quot;\n&quot; if lineas else &quot;&quot;), encoding=&quot;utf-8&quot;)
-        if not sin_clave and CLAVE.exists():
+        # Clave PUBLICA: es lo que hace falta para verificar la copia, y no es un
+        # secreto. Antes se copiaba la privada &quot;para que la copia se pudiera
+        # verificar sola&quot;; con la publica basta y no hay nada que robar.
+        if CLAVE.exists():
+            (carpeta / &quot;sello_pub.txt&quot;).write_text(
+                S.publica_de(S.leer_clave(CLAVE)), encoding=&quot;utf-8&quot;)
+        # Clave PRIVADA: solo si se pide a proposito (28-10-2026).
+        if con_clave and CLAVE.exists():
             shutil.copyfile(CLAVE, carpeta / &quot;sello_key.txt&quot;)
             try:
                 os.chmod(carpeta / &quot;sello_key.txt&quot;, 0o600)
             except Exception:
                 pass
-        if con_claves and TOKEN.exists():
+        if con_token and TOKEN.exists():
             shutil.copyfile(TOKEN, carpeta / &quot;admin_token.txt&quot;)
             try:
                 os.chmod(carpeta / &quot;admin_token.txt&quot;, 0o600)
@@ -9941,14 +10864,43 @@ def copiar_estado(carpeta: Path, con_claves: bool, sin_clave: bool) -&gt; int:
     raise RuntimeError(&quot;no se pudo copiar un estado coherente (sellos/DB)&quot;)
 
 
-def verificar(carpeta: Path, sin_clave: bool) -&gt; dict:
-    clave = carpeta / &quot;sello_key.txt&quot;
-    if not clave.exists():
-        clave = CLAVE
-    if not clave.exists():
-        return {&quot;ok&quot;: False, &quot;problemas&quot;: [&quot;falta la clave del sello&quot;],
-                &quot;sellos&quot;: 0, &quot;asientos&quot;: 0, &quot;supply&quot;: 0.0, &quot;clave_publica&quot;: &quot;&quot;}
-    pub = S.publica_de(S.leer_clave(clave))
+def clave_publica(carpeta: Path) -&gt; tuple[str, str]:
+    &quot;&quot;&quot;(publica_hex, de donde sale). Prefiere lo que no es secreto.
+
+    Orden: la publica que trae la copia, luego la privada si alguien la metio,
+    y por ultimo la del Core de esta maquina (asi una copia antigua, que no
+    trae ni una ni otra, se sigue pudiendo verificar aqui).
+    &quot;&quot;&quot;
+    f_pub = carpeta / &quot;sello_pub.txt&quot;
+    if f_pub.exists():
+        pub = f_pub.read_text(encoding=&quot;utf-8&quot;).strip()
+        if pub:
+            return pub, &quot;sello_pub.txt&quot;
+    f_priv = carpeta / &quot;sello_key.txt&quot;
+    if f_priv.exists():
+        return S.publica_de(S.leer_clave(f_priv)), &quot;sello_key.txt&quot;
+    if CLAVE.exists():
+        return S.publica_de(S.leer_clave(CLAVE)), &quot;la clave del Core&quot;
+    return &quot;&quot;, &quot;&quot;
+
+
+def verificar(carpeta: Path, publica: str = &quot;&quot;) -&gt; dict:
+    &quot;&quot;&quot;Verifica la copia contra una publica concreta, si se pasa.
+
+    `publica` existe para el caso de la replica: hay que comprobar sus sellos
+    contra la clave del ORIGINAL, no contra la que traiga ella misma, o una
+    replica de otra red cuadraria consigo misma.
+    &quot;&quot;&quot;
+    if publica:
+        pub, de_donde = publica, &quot;la clave del original&quot;
+    else:
+        pub, de_donde = clave_publica(carpeta)
+    if not pub:
+        return {&quot;ok&quot;: False,
+                &quot;problemas&quot;: [&quot;falta la clave publica del sello (sello_pub.txt) y no &quot;
+                              &quot;hay clave del Core con la que comparar&quot;],
+                &quot;sellos&quot;: 0, &quot;asientos&quot;: 0, &quot;supply&quot;: 0.0,
+                &quot;clave_publica&quot;: &quot;&quot;, &quot;clave_de&quot;: de_donde}
     con = sqlite3.connect(str(carpeta / &quot;kukia.db&quot;))
     con.row_factory = sqlite3.Row
     try:
@@ -9969,7 +10921,8 @@ def verificar(carpeta: Path, sin_clave: bool) -&gt; dict:
                                 &quot;el historial (sellos.jsonl vacio o ausente)&quot;)
         return {&quot;ok&quot;: ok, &quot;problemas&quot;: problemas[:10],
                 &quot;sellos&quot;: len(sellos), &quot;asientos&quot;: filas,
-                &quot;supply&quot;: round(supply, 6), &quot;clave_publica&quot;: pub}
+                &quot;supply&quot;: round(supply, 6), &quot;clave_publica&quot;: pub,
+                &quot;clave_de&quot;: de_donde}
     finally:
         con.close()
 
@@ -9977,10 +10930,15 @@ def verificar(carpeta: Path, sin_clave: bool) -&gt; dict:
 def main() -&gt; int:
     ap = argparse.ArgumentParser(description=&quot;Copia verificada del ledger KUKIA&quot;)
     ap.add_argument(&quot;--destino&quot;, default=&quot;&quot;, help=&quot;carpeta donde guardar las copias&quot;)
+    ap.add_argument(&quot;--con-clave&quot;, action=&quot;store_true&quot;,
+                    help=&quot;copiar sello_key.txt (la clave PRIVADA) dentro de la copia&quot;)
+    ap.add_argument(&quot;--con-token&quot;, action=&quot;store_true&quot;,
+                    help=&quot;copiar admin_token.txt dentro de la copia&quot;)
     ap.add_argument(&quot;--con-claves&quot;, action=&quot;store_true&quot;,
-                    help=&quot;copiar tambien admin_token.txt (la clave del sello va por defecto)&quot;)
+                    help=&quot;copiar la clave privada Y el token (la copia deja de ser &quot;
+                         &quot;inocua: cifrala con tools/cifrar_claves.py)&quot;)
     ap.add_argument(&quot;--sin-clave&quot;, action=&quot;store_true&quot;,
-                    help=&quot;no copiar sello_key.txt (los sellos no se podran verificar solos)&quot;)
+                    help=&quot;ya no hace nada: sin --con-clave no se copia la clave&quot;)
     ap.add_argument(&quot;--mantener&quot;, type=int, default=14, help=&quot;copias a conservar (defecto 14)&quot;)
     args = ap.parse_args()
     if not DB.exists():
@@ -9996,8 +10954,10 @@ def main() -&gt; int:
     print(f&quot;[backup] destino: {carpeta}&quot;)
 
     try:
-        n = copiar_estado(carpeta, args.con_claves, args.sin_clave)
-        r = verificar(carpeta, args.sin_clave)
+        n = copiar_estado(carpeta,
+                          con_clave=args.con_clave or args.con_claves,
+                          con_token=args.con_token or args.con_claves)
+        r = verificar(carpeta)
     except Exception as e:
         print(f&quot;[backup] ERROR copiando: {type(e).__name__}: {e}&quot;)
         return 3
@@ -10018,8 +10978,10 @@ def main() -&gt; int:
         &quot;claves_incluidas&quot;: {
             &quot;sello_key&quot;: bool((carpeta / &quot;sello_key.txt&quot;).exists()),
             &quot;admin_token&quot;: bool((carpeta / &quot;admin_token.txt&quot;).exists()),
+            &quot;sello_pub&quot;: bool((carpeta / &quot;sello_pub.txt&quot;).exists()),
         },
-        &quot;verificacion&quot;: {&quot;ok&quot;: True, &quot;problemas&quot;: []},
+        &quot;verificacion&quot;: {&quot;ok&quot;: True, &quot;problemas&quot;: [],
+                         &quot;verificada_con&quot;: r.get(&quot;clave_de&quot;) or &quot;&quot;},
         &quot;clave_publica_sello&quot;: r[&quot;clave_publica&quot;],
     }
     (carpeta / &quot;manifest.json&quot;).write_text(
@@ -10027,15 +10989,20 @@ def main() -&gt; int:
 
     print(f&quot;[backup] asientos: {r[&#x27;asientos&#x27;]} | saldo: {r[&#x27;supply&#x27;]:.6f} KIA | &quot;
           f&quot;sellos: {r[&#x27;sellos&#x27;]}&quot;)
-    print(&quot;[backup] VERIFICADA: la copia cuadra con los sellos&quot;)
+    print(f&quot;[backup] VERIFICADA con {r.get(&#x27;clave_de&#x27;) or &#x27;la clave del Core&#x27;}: &quot;
+          &quot;la copia cuadra con los sellos&quot;)
 
     if args.mantener &gt; 0:
         copias = sorted((p for p in base.glob(&quot;kukia_*&quot;) if p.is_dir()), reverse=True)
         for vieja in copias[args.mantener:]:
             shutil.rmtree(vieja, ignore_errors=True)
             print(f&quot;[backup] borrada copia antigua: {vieja.name}&quot;)
-    if not (carpeta / &quot;sello_key.txt&quot;).exists():
-        print(&quot;[backup] AVISO: copia sin clave; los sellos no se podran verificar solos.&quot;)
+    if (carpeta / &quot;sello_key.txt&quot;).exists():
+        print(&quot;[backup] AVISO: esta copia lleva la clave PRIVADA en claro. Guardala &quot;
+              &quot;cifrada con tools\\cifrar_claves.py o pasala a un paquete de claves.&quot;)
+    else:
+        print(&quot;[backup] sin clave privada (lo normal): se verifica con sello_pub.txt. &quot;
+              &quot;Para ARRANCAR desde esta copia hace falta la clave del paquete de claves.&quot;)
     return 0
 
 
@@ -10060,6 +11027,11 @@ Uso:
     python tools/probar_restauracion.py                  # ultima copia de backups/
     python tools/probar_restauracion.py --copia backups/kukia_20261020_133054
     python tools/probar_restauracion.py --dejar          # conserva la temporal
+    python tools/probar_restauracion.py --clave RUTA     # privada para el arranque
+
+Desde el 28-10-2026 las copias NO llevan la clave privada (se verifica con
+`sello_pub.txt`, que es publico). Para probar el ARRANQUE hace falta una clave:
+se usa la de la copia si la trae, si no la del Core, y si no `--clave`.
 
 Salida: 0 si la restauracion funciona; 1/2/3 si falla.
 &quot;&quot;&quot;
@@ -10120,10 +11092,22 @@ def verificar_offline(carpeta: Path) -&gt; dict:
         raise RuntimeError(&quot;el sha256 de kukia.db NO coincide con el manifiesto&quot;)
     if d.get(&quot;sellos&quot;, {}).get(&quot;sha256&quot;) and sha256(sellos) != d[&quot;sellos&quot;][&quot;sha256&quot;]:
         raise RuntimeError(&quot;el sha256 de sellos.jsonl NO coincide con el manifiesto&quot;)
-    clave = carpeta / &quot;sello_key.txt&quot;
-    if not clave.exists():
-        raise RuntimeError(&quot;la copia no incluye sello_key.txt: no se puede verificar sola&quot;)
-    pub = S.publica_de(S.leer_clave(clave))
+    # Verificar necesita la PUBLICA, no la privada: las copias nuevas traen
+    # sello_pub.txt y las antiguas la privada. Cualquiera de las dos vale.
+    f_pub = carpeta / &quot;sello_pub.txt&quot;
+    f_priv = carpeta / &quot;sello_key.txt&quot;
+    if f_pub.exists() and f_pub.read_text(encoding=&quot;utf-8&quot;).strip():
+        pub = f_pub.read_text(encoding=&quot;utf-8&quot;).strip()
+        de_donde = &quot;sello_pub.txt&quot;
+    elif f_priv.exists():
+        pub = S.publica_de(S.leer_clave(f_priv))
+        de_donde = &quot;sello_key.txt&quot;
+    elif (COORD / &quot;sello_key.txt&quot;).exists():
+        pub = S.publica_de(S.leer_clave(COORD / &quot;sello_key.txt&quot;))
+        de_donde = &quot;la clave del Core&quot;
+    else:
+        raise RuntimeError(&quot;la copia no trae sello_pub.txt ni sello_key.txt: no se &quot;
+                           &quot;puede verificar sola&quot;)
     con = sqlite3.connect(str(db))
     con.row_factory = sqlite3.Row
     try:
@@ -10134,13 +11118,17 @@ def verificar_offline(carpeta: Path) -&gt; dict:
         con.close()
     return {&quot;ok&quot;: bool(r.get(&quot;ok&quot;)), &quot;problemas&quot;: r.get(&quot;problemas&quot;) or [],
             &quot;sellos&quot;: len(S.leer_sellos(sellos)), &quot;asientos&quot;: int(asientos),
-            &quot;supply&quot;: supply, &quot;clave_publica&quot;: pub, &quot;manifest&quot;: d}
+            &quot;supply&quot;: supply, &quot;clave_publica&quot;: pub, &quot;clave_de&quot;: de_donde,
+            &quot;manifest&quot;: d}
 
 
 def main() -&gt; int:
     ap = argparse.ArgumentParser(description=&quot;Prueba de restauracion de una copia KUKIA&quot;)
     ap.add_argument(&quot;--copia&quot;, default=&quot;&quot;, help=&quot;carpeta de la copia (por defecto, la ultima)&quot;)
     ap.add_argument(&quot;--dejar&quot;, action=&quot;store_true&quot;, help=&quot;conservar la carpeta temporal&quot;)
+    ap.add_argument(&quot;--clave&quot;, default=&quot;&quot;,
+                    help=&quot;clave privada para el arranque (por defecto: la de la copia &quot;
+                         &quot;o, si no hay, coordinator/sello_key.txt)&quot;)
     args = ap.parse_args()
 
     copia = Path(args.copia) if args.copia else (
@@ -10156,15 +11144,32 @@ def main() -&gt; int:
         print(f&quot;[restauracion] ERROR verificando la copia: {type(e).__name__}: {e}&quot;)
         return 2
     print(f&quot;[restauracion] offline: {off[&#x27;sellos&#x27;]} sellos, {off[&#x27;asientos&#x27;]} asientos, &quot;
-          f&quot;{off[&#x27;supply&#x27;]:.6f} KIA, firma={&#x27;OK&#x27; if off[&#x27;ok&#x27;] else &#x27;MAL&#x27;}&quot;)
+          f&quot;{off[&#x27;supply&#x27;]:.6f} KIA, firma={&#x27;OK&#x27; if off[&#x27;ok&#x27;] else &#x27;MAL&#x27;}, &quot;
+          f&quot;verificada con {off[&#x27;clave_de&#x27;]}&quot;)
     if not off[&quot;ok&quot;]:
         print(f&quot;[restauracion] ERROR: la cadena/sellos no cuadran: {off[&#x27;problemas&#x27;][:3]}&quot;)
         return 2
 
+    # Para ARRANCAR hace falta la privada. Las copias ya no la traen, asi que se
+    # toma de --clave, de la copia (si es antigua) o del Core de esta maquina.
+    if args.clave:
+        clave_arranque = Path(args.clave)
+    elif (copia / &quot;sello_key.txt&quot;).exists():
+        clave_arranque = copia / &quot;sello_key.txt&quot;
+    else:
+        clave_arranque = COORD / &quot;sello_key.txt&quot;
+    if not clave_arranque.exists():
+        print(&quot;[restauracion] ERROR: la copia se verifica, pero no hay clave privada &quot;
+              &quot;para arrancar el Core restaurado.&quot;)
+        print(&quot;[restauracion] Es lo normal desde el 28-10-2026: la clave va en el paquete &quot;
+              &quot;cifrado. Pasala con --clave RUTA.&quot;)
+        return 3
+
     tmp = Path(tempfile.mkdtemp(prefix=&quot;kukia_restauracion_&quot;))
     try:
-        for nombre in (&quot;kukia.db&quot;, &quot;sellos.jsonl&quot;, &quot;sello_key.txt&quot;):
+        for nombre in (&quot;kukia.db&quot;, &quot;sellos.jsonl&quot;):
             shutil.copyfile(copia / nombre, tmp / nombre)
+        shutil.copyfile(clave_arranque, tmp / &quot;sello_key.txt&quot;)
         token = tmp / &quot;admin_token.txt&quot;
         token.write_text(&quot;restauracion-&quot; + os.urandom(16).hex(), encoding=&quot;utf-8&quot;)
         puerto = puerto_libre()
@@ -13816,6 +14821,13 @@ def rotar_logs_hijos(hijos: dict) -&gt; None:
     &quot;&quot;&quot;
     if rotar_logs is None:
         return
+    # F2-53 (M-12): el log del minero lo escribe y lo rota el propio worker
+    # (worker/kukia_worker.py, `_Registro`), que es el unico que puede hacerlo
+    # sin dejar huecos de bytes NUL. Rotarlo tambien desde aqui no aporta nada
+    # y duplica generaciones de 8 MB. Aplica desde el siguiente arranque de la
+    # guardia; mientras tanto la rotacion externa es inocua porque el escritor
+    # nuevo abre el fichero en modo append.
+    hijos = {k: v for k, v in hijos.items() if k != &quot;minero&quot;}
     for h in hijos.values():
         try:
             n = rotar_logs.rota_ahora(h.logfile)
@@ -14293,7 +15305,13 @@ def _tunel_con_dominio() -&gt; bool:
 def construir_hijos(sin_minero: bool) -&gt; dict:
     hijos = {}
     hijos[&quot;core&quot;] = Hijo(
-        &quot;core&quot;, [_py(), &quot;-m&quot;, &quot;uvicorn&quot;, &quot;kukia_core:app&quot;, &quot;--host&quot;, &quot;127.0.0.1&quot;, &quot;--port&quot;, &quot;8300&quot;],
+        # AUDITORIA 2026-10-28 (A2): uvicorn acepta X-Forwarded-For de
+        # 127.0.0.1 y reescribe request.client con el; detras del tunel eso
+        # permitia falsificar la IP en cada peticion y saltarse los cupos. Con
+        # --no-proxy-headers el socket manda y la unica cabecera que se mira es
+        # CF-Connecting-IP, que la pone el borde de Cloudflare.
+        &quot;core&quot;, [_py(), &quot;-m&quot;, &quot;uvicorn&quot;, &quot;kukia_core:app&quot;, &quot;--host&quot;, &quot;127.0.0.1&quot;, &quot;--port&quot;, &quot;8300&quot;,
+                 &quot;--no-proxy-headers&quot;],
         RAIZ / &quot;coordinator&quot;, LOGS / &quot;core.log&quot;)
     if (RAIZ / &quot;validator&quot; / &quot;kukia_validator.py&quot;).exists():
         ident = RAIZ / &quot;validator&quot; / &quot;identidad_validador.json&quot;
@@ -15987,7 +17005,7 @@ def compromiso(sello: dict) -&gt; str:
         f&quot;hasta      : {sello.get(&#x27;hasta&#x27;)}\n&quot;
         f&quot;asientos   : {sello.get(&#x27;asientos&#x27;)}\n&quot;
         f&quot;suma_kia   : {sello.get(&#x27;suma&#x27;)}\n&quot;
-        f&quot;hash_ultimo: {sello.get(&#x27;hash_ultimo&#x27;)}\n&quot;
+        f&quot;hash_ultimo: {sello.get(&#x27;hash&#x27;)}\n&quot;
         f&quot;firma      : {sello.get(&#x27;firma&#x27;)}\n&quot;
         f&quot;canonico   : {S.canonico(cuerpo)}\n&quot;
     )
@@ -16061,7 +17079,7 @@ def anclar() -&gt; int:
         &quot;hasta&quot;: sello.get(&quot;hasta&quot;),
         &quot;asientos&quot;: sello.get(&quot;asientos&quot;),
         &quot;suma&quot;: sello.get(&quot;suma&quot;),
-        &quot;hash_ultimo&quot;: sello.get(&quot;hash_ultimo&quot;),
+        &quot;hash_ultimo&quot;: sello.get(&quot;hash&quot;),
         &quot;digest_sha256&quot;: digest.hex(),
         &quot;calendarios&quot;: buenos,
         &quot;fichero&quot;: txt.name,
