@@ -1,0 +1,2 @@
+e005dcd06259bf3ad4ffaa08ab5b87c187e07e7ca8f9a666c2a0cda48441301a *C:/Users/kuki/Desktop/KUKIA/worker/kukia_worker.py
+eb6d1620ecec905b393a2e2b871b676363af1bdf31abf71d4fb59da293aad9b7 *C:/Users/kuki/Desktop/KUKIA/tools/rotar_logs.py

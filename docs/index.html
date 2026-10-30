@@ -1049,6 +1049,19 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
 </section>
 
 <!-- ============ FAQ ============ -->
+<section id="minero" class="bloque">
+  <div class="contenedor">
+    <div class="cabeza reveal">
+      <span class="ojo">Minero</span>
+      <h2>Minero de KUKIA · versión F2-53</h2>
+      <p>Versión publicada el 30/10/2026 y probada con dos GPU (RTX 5070 12 GB y RTX
+        5060 Ti 16 GB): requisitos, hardware verificado, configuración, diagnóstico,
+        hashes SHA-256, actualización y reversión.</p>
+      <p><a class="boton" href="minero.html">Ver el minero y descargarlo</a></p>
+    </div>
+  </div>
+</section>
+
 <section id="faq" class="bloque alt">
   <div class="contenedor">
     <div class="cabeza reveal">
@@ -1146,7 +1159,8 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
     <div class="legal">
       <span>KUKIA · KIA no tiene precio de mercado. Proyecto en fase de pruebas. Sin auditoría de seguridad independiente.</span>
       <span>Última versión de esta página: <span id="verWeb">v1.3.20-video-siempre</span>
-        · <a id="verCommit" href="https://github.com/lordkukone/kukia-node/commit/f36a30998737f719e46c459b6702f5d14260bdf6" target="_blank" rel="noopener">commit f36a309 (sin confirmar)</a>
+        · publicada desde <a id="verCommit" href="https://github.com/lordkukone/kukia-node/commit/5ebb34ae2975868c65a1606f0afa8b23f01ade54" target="_blank" rel="noopener">commit 5ebb34a (sin confirmar)</a>
+        · Core en ejecución: <span id="verCore" title="Commit que reporta el Core en /stats, leído de la última instantánea publicada en este dominio">desconocido</span>
         · Los datos de la red se leen de sus endpoints públicos.</span>
     </div>
   </div>
@@ -2373,6 +2387,25 @@ window.KUKIA_OK = true;
       }
     })
     .catch(function(){});
+})();
+/* Commit que esta EJECUTANDO el Core (29-10-2026). Hasta hoy la pagina solo
+   sabia el commit con el que se genero (version.json), que se queda viejo hasta
+   la siguiente generacion: la web decia f36a309 mientras el Core corria
+   1567730. El dato bueno ya viaja en la instantanea (stats.codigo.commit), asi
+   que se muestra al lado. Si la instantanea no lo trae, se dice «desconocido»
+   en vez de repetir el commit publicado como si fuera el que corre. */
+(function(){
+  var e=document.getElementById('verCore');
+  if(!e) return;
+  fetch('metricas_snapshot.json?_='+Date.now(),{cache:'no-store'})
+    .then(function(r){return r.ok?r.json():null;})
+    .then(function(s){
+      var st=(s&&s.stats)||{};
+      var c=(st.codigo&&st.codigo.commit)||'';
+      var v=st.version||'';
+      e.textContent = c ? ('commit '+c+(v?' · v'+v:'')) : 'desconocido';
+    })
+    .catch(function(){ e.textContent='desconocido (sin instantánea)'; });
 })();
 </script>
 

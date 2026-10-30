@@ -267,3 +267,32 @@ en la misma dirección.
   por VRAM/TOPS. Un nodo dado de alta con un minero viejo, sin `device`, sale
   del plan B —y vuelve a recibir difusiones— en cuanto manda el primer latido.
   Un minero viejo sigue minando: no hace falta actualizarlo para eso.
+
+## F2-53 (30/10/2026) — versión publicada
+
+Worker: `worker/kukia_worker.py`, SHA-256
+`e005dcd06259bf3ad4ffaa08ab5b87c187e07e7ca8f9a666c2a0cda48441301a`
+(la anterior, F2-52, queda en `informes_mainnet_20261030/f2-53_minero/respaldo/`).
+
+Qué cambia para quien mina:
+
+- **El registro ya no se llena de NUL.** `worker/minero.log` lo escribe el propio
+  minero, con fecha por línea y rotación propia (5 MB, 2 generaciones). El
+  histórico anterior está en `minero.log.1` y `minero.log.2`.
+- **La cola de cálculo no puede colgar el hilo que pide.** Espera 30 s como mucho
+  (`KUKIA_COLA_ESPERA`) y lo anota en `arranque.log`.
+- **Avisos nuevos en `worker/arranque.log`**: `ESTERIL cuda:N` (180 s sin pedir
+  trabajo) y `HILO_MUERTO` (falta el hilo que pide o el que calcula), siempre con
+  volcado `PILAS`. Ninguno reinicia nada: son para diagnóstico.
+- **El cupo de tareas en vuelo vuelve a limitar de verdad** (antes se liberaba dos
+  veces en los caminos de error).
+
+Si algo va mal, lo primero que hay que guardar es el bloque `PILAS` que sigue al
+aviso: es lo que falta para demostrar la causa de M-02.
+
+Revertir (volver al worker F2-52):
+
+```bat
+copy /Y informes_mainnet_20261030\f2-53_minero\respaldo\kukia_worker.py.f2-52 worker\kukia_worker.py
+rem cerrar solo el proceso kukia_worker.py; la guardia lo relanza con la version vieja
+```

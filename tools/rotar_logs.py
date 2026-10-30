@@ -94,7 +94,10 @@ def vigilados() -> list:
         encontrados.extend(sorted(LOGS.glob("*.log")))
     except OSError:
         pass
-    for extra in ("minero.log", "minero_visible.log", "minero_relanzado.log"):
+    # F2-53 (M-12): `minero.log` ya NO se rota desde fuera. Lo escribe el propio
+    # worker y lo rota el, con su cerrojo: truncar por fuera un fichero que otro
+    # proceso tiene abierto es justo lo que lo llenaba de bytes NUL.
+    for extra in ("minero_visible.log", "minero_relanzado.log"):
         p = RAIZ / "worker" / extra
         if p.exists():
             encontrados.append(p)

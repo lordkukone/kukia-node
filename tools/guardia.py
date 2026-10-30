@@ -161,6 +161,13 @@ def rotar_logs_hijos(hijos: dict) -> None:
     """
     if rotar_logs is None:
         return
+    # F2-53 (M-12): el log del minero lo escribe y lo rota el propio worker
+    # (worker/kukia_worker.py, `_Registro`), que es el unico que puede hacerlo
+    # sin dejar huecos de bytes NUL. Rotarlo tambien desde aqui no aporta nada
+    # y duplica generaciones de 8 MB. Aplica desde el siguiente arranque de la
+    # guardia; mientras tanto la rotacion externa es inocua porque el escritor
+    # nuevo abre el fichero en modo append.
+    hijos = {k: v for k, v in hijos.items() if k != "minero"}
     for h in hijos.values():
         try:
             n = rotar_logs.rota_ahora(h.logfile)

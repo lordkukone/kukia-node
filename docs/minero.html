@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Minero KUKIA · F2-53</title>
+<meta name="description" content="Minero de KUKIA Network: versión publicada, hardware probado, requisitos, instalación, diagnóstico, actualización y reversión. Red en TESTNET.">
+<link rel="canonical" href="https://kukia-network.surge.sh/minero.html">
+<style>
+:root{--gold:#d4af37;--navy:#081a3a;--line:#27487c;--text:#c3d1ea}
+*{box-sizing:border-box}
+body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:var(--navy);color:#fff;line-height:1.6}
+a{color:var(--gold)}
+.wrap{max-width:980px;margin:0 auto;padding:2rem 1.2rem 4rem}
+h1{font-size:2.1rem;margin:.2rem 0 .4rem}
+h2{font-size:1.3rem;margin:2.2rem 0 .6rem;border-bottom:1px solid var(--line);padding-bottom:.35rem}
+p,li{color:var(--text)}
+.aviso{border:1px solid var(--gold);border-radius:10px;padding:.9rem 1rem;background:rgba(212,175,55,.08);color:#fff}
+table{width:100%;border-collapse:collapse;margin:.6rem 0 1rem;font-size:.95rem}
+th,td{border:1px solid var(--line);padding:.5rem .6rem;text-align:left;vertical-align:top}
+th{background:rgba(39,72,124,.35);color:#fff}
+code{background:rgba(39,72,124,.4);padding:.1rem .35rem;border-radius:4px;word-break:break-all}
+pre{background:#06132b;border:1px solid var(--line);border-radius:8px;padding:.8rem;overflow:auto}
+.badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:.15rem .6rem;font-size:.8rem;color:var(--text)}
+.back{display:inline-block;margin-bottom:1rem;color:var(--text);text-decoration:none}
+small{color:#8fa6cc}
+</style>
+</head>
+<body>
+<div class="wrap">
+<a class="back" href="index.html">&larr; Volver a KUKIA</a>
+
+<h1>Minero de KUKIA</h1>
+<p class="badge">TESTNET · Proof-of-Compute · versión F2-53 · 30/10/2026</p>
+
+<p class="aviso">Esta página describe solo lo que se ha medido. KUKIA está en fase de
+pruebas: no hay auditoría de seguridad independiente ni valor de mercado de KIA, y el
+defecto <strong>M-02</strong> (un dispositivo que puede quedarse sin trabajar) sigue
+<strong>sin causa demostrada</strong>.</p>
+
+<h2>Versión publicada</h2>
+<table>
+<tr><th>Componente</th><th>Valor verificado</th></tr>
+<tr><td>Worker</td><td><code>worker/kukia_worker.py</code> · F2-53 · 2.164 líneas</td></tr>
+<tr><td>SHA-256 del worker</td><td><code>e005dcd06259bf3ad4ffaa08ab5b87c187e07e7ca8f9a666c2a0cda48441301a</code></td></tr>
+<tr><td>SHA-256 de <code>tools/rotar_logs.py</code></td><td><code>eb6d1620ecec905b393a2e2b871b676363af1bdf31abf71d4fb59da293aad9b7</code></td></tr>
+<tr><td>Core compatible</td><td>0.4.4 (rama <code>pqc-integrado-20261027</code>)</td></tr>
+<tr><td>Descarga</td><td><a href="https://github.com/lordkukone/kukia-node/releases/latest">GitHub · Releases</a> (con <code>SHA256SUMS.txt</code>)</td></tr>
+</table>
+
+<h2>Qué hace, comprobado con datos</h2>
+<ul>
+<li>Se registra con clave firmada, pide trabajo firmado con nonce y entrega el resultado; el Core lo recalcula y solo entonces paga.</li>
+<li>Usa <strong>todas</strong> las GPU a la vez: una cola por dispositivo y un hilo de petición por dispositivo.</li>
+<li>Detecta VRAM real de cada tarjeta (<code>props.total_memory</code>). Los TOPS que publica son <em>estimados por clase de tarjeta</em> y así se etiqueta; la potencia <em>medida</em> va aparte (<code>gflops_base</code>) y sale de un benchmark al arrancar.</li>
+<li>Registro propio (<code>worker/minero.log</code>) con fecha por línea, cerrojo de escritura y rotación interna; <strong>cero bytes NUL</strong> con 8 hilos escribiendo (probado).</li>
+<li>Diagnóstico de arranque (<code>worker/arranque.log</code>): versiones, GPU, hilos, errores con traceback, aviso <code>ESTERIL</code> si una GPU deja de pedir trabajo y <code>HILO_MUERTO</code> si falta un hilo, con volcado de pilas.</li>
+<li>No reinicia ni mata nada solo: los avisos son para diagnosticar, no para esconder el fallo.</li>
+</ul>
+
+<h2>Hardware realmente probado</h2>
+<table>
+<tr><th>Equipo</th><th>VRAM</th><th>Resultado</th></tr>
+<tr><td>NVIDIA GeForce RTX 5070 (<code>cuda:0</code>)</td><td>12 GB</td><td>Tareas entregadas y aceptadas; 42,99 GFLOPS medidos en el arranque</td></tr>
+<tr><td>NVIDIA GeForce RTX 5060 Ti (<code>cuda:1</code>)</td><td>16 GB</td><td>Tareas entregadas y aceptadas; 41,81 GFLOPS medidos en el arranque</td></tr>
+<tr><td>Windows 11 · Python 3.12.9 · PyTorch 2.12.1+cu130 · CUDA 13.0</td><td>—</td><td>Arranque, cálculo, entrega, reinicio y parada</td></tr>
+</table>
+<p><small>No probado: AMD (ROCm), Intel, Linux, macOS ni tarjetas de 2–8 GB. La CPU puede
+añadirse como nodo con <code>KUKIA_USAR_CPU=1</code>, pero en un PC con GPU resta rendimiento.</small></p>
+
+<h2>Requisitos</h2>
+<ul>
+<li>Windows 10/11 con Python 3.10 o superior en el PATH.</li>
+<li>PyTorch (con CUDA si hay GPU NVIDIA): sin él no se puede calcular ninguna tarea.</li>
+<li>Un Core accesible: el de este PC (<code>http://127.0.0.1:8300</code>) o uno público.</li>
+</ul>
+
+<h2>Instalación y arranque</h2>
+<pre>git clone https://github.com/lordkukone/kukia-node
+cd kukia-node
+INSTALAR_Y_MINAR.cmd   (un clic: comprueba, mide la GPU y arranca la guardia)
+ARRANCAR_MINERO.cmd    (solo el minero, en una ventana)</pre>
+<p>El primer arranque crea la billetera y deja la contraseña y las 20 palabras en
+<code>ledger/wallet/RECUPERACION_*.txt</code>. Sin ese fichero no se recupera el saldo.</p>
+
+<h2>Configuración útil</h2>
+<table>
+<tr><th>Variable</th><th>Defecto</th><th>Para qué</th></tr>
+<tr><td><code>KUKIA_CORE</code></td><td><code>http://127.0.0.1:8300</code></td><td>Core al que se pide trabajo</td></tr>
+<tr><td><code>KUKIA_EN_VUELO</code></td><td>4</td><td>Tareas simultáneas por nodo (2–12)</td></tr>
+<tr><td><code>KUKIA_HILOS_GPU</code></td><td>1</td><td>Ranuras de cálculo por tarjeta (1–4)</td></tr>
+<tr><td><code>KUKIA_COLA_ESPERA</code></td><td>30 s</td><td>Espera máxima para dejar una tarea en la cola</td></tr>
+<tr><td><code>KUKIA_MINERO_LOG_BYTES</code></td><td>5 MB</td><td>Tamaño al que el worker rota su propio registro</td></tr>
+<tr><td><code>KUKIA_ESTERIL_SEG</code></td><td>180 s</td><td>Silencio que dispara el aviso <code>ESTERIL</code></td></tr>
+<tr><td><code>KUKIA_USAR_CPU</code></td><td>apagado</td><td>Añade la CPU como un nodo más</td></tr>
+</table>
+
+<h2>Diagnóstico</h2>
+<pre>VER_MINERO.cmd                     (qué está haciendo ahora)
+type worker\arranque.log           (arranque, ESTERIL, HILO_MUERTO, pilas)
+type worker\minero.log             (una línea por tarea, con fecha)</pre>
+<p>Si aparece <code>ESTERIL cuda:N</code>, copia el bloque <code>PILAS</code> que viene
+detrás: eso es lo que hace falta para encontrar la causa de M-02.</p>
+
+<h2>Actualizar y revertir</h2>
+<pre>rem actualizar
+git pull --ff-only
+rem revertir a la version anterior del worker (guardada antes de promover)
+copy /Y informes_mainnet_20261030\f2-53_minero\respaldo\kukia_worker.py.f2-52 worker\kukia_worker.py
+rem y reiniciar solo el minero: cerrar su proceso kukia_worker.py y dejar que la guardia lo relance</pre>
+<p>El SHA-256 de la versión anterior es
+<code>9d906b828f3901445a20aba2f5918e506b4aafd06304f24c978e808bd2ad17aa</code>.</p>
+
+<h2>Historial</h2>
+<table>
+<tr><th>Versión</th><th>Fecha</th><th>Cambios</th></tr>
+<tr><td>F2-53</td><td>30/10/2026</td><td>Doble liberación del cupo corregida; registro propio con rotación interna y cero NUL; cola con timeout; aviso <code>HILO_MUERTO</code>; <code>BaseException</code> con rastro en cálculo y entrega</td></tr>
+<tr><td>F2-52</td><td>30/10/2026</td><td><code>arranque.log</code>, contadores por GPU, aviso <code>ESTERIL</code>, timeout por defecto en HTTP</td></tr>
+<tr><td>F2-51</td><td>29/10/2026</td><td>Detección correcta de dos GPU, VRAM real, TOPS etiquetados</td></tr>
+</table>
+
+<p><small>KUKIA · red en pruebas. Lo que no se ha medido no se afirma. Código completo en
+<a href="https://github.com/lordkukone/kukia-node">github.com/lordkukone/kukia-node</a>.</small></p>
+</div>
+</body>
+</html>

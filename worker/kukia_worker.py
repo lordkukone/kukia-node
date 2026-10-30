@@ -31,9 +31,26 @@ AUDITORIA 2026-10-21 (por que el minero se quedaba sin minar):
     (un 409 confirma que ya estaba pagada: no hay doble pago).
   - Cada minuto se escribe un resumen (tareas/min, KIA/min, fallos) para que
     "esta minando" sea un dato y no una suposicion.
+
+AUDITORIA 2026-10-30 (F2-53, la manana del dispositivo esteril):
+  - DOBLE LIBERACION: los tres caminos de error de _pedir soltaban el
+    cupo y el finally lo volvia a soltar. El contador en_vuelo es ahora la
+    fuente de verdad: liberar de mas es imposible y queda anotado.
+  - M-12: el registro del minero lo escribe y lo rota el propio proceso,
+    con cerrojo y una marca de tiempo por linea. Nadie lo trunca por
+    fuera (eso era lo que lo llenaba de bytes NUL).
+  - M-02: una cola llena ya no deja el hilo que pide colgado para
+    siempre (put con timeout), la salud avisa si falta un hilo y un
+    BaseException en el calculo o en la entrega deja rastro antes de
+    propagarse. No se anade recuperacion automatica: la causa de la
+    manana no esta demostrada y reiniciar a ciegas borra la prueba.
 """
 import hashlib, json, os, queue, secrets, subprocess, sys, time, threading, socket, urllib.parse
 import requests
+try:
+    import torch          # F2-50: a nivel de modulo, no dentro de main()
+except Exception:         # sin torch el minero sigue en CPU
+    torch = None
 from datetime import date, datetime
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "ledger"))
@@ -141,6 +158,10 @@ def _ajuste_cpu() -> tuple:
 # mejora de ocupacion se enciende a mano (KUKIA_PROFUNDIDAD, KUKIA_HILOS_GPU,
 # KUKIA_EN_VUELO=8 y KUKIA_MAX_TAREAS_NODO=8 en el Core).
 PROFUNDIDAD = max(1, min(10, int(os.environ.get("KUKIA_PROFUNDIDAD", "2"))))
+# F2-53 (M-02): cuanto puede esperar el hilo que pide para dejar una tarea
+# en la cola. Antes esperaba PARA SIEMPRE: si el calculo se atascaba, la
+# cola se llenaba y el dispositivo quedaba mudo sin una sola linea.
+COLA_ESPERA = max(1.0, float(os.environ.get("KUKIA_COLA_ESPERA", "30")))
 # Aviso de parada (Ctrl+C). Lo pone main() y lo miran el hilo peticionero y el
 # bucle de calculo, para terminar las entregas en vuelo antes de salir.
 PARAR = threading.Event()
@@ -163,10 +184,15 @@ MAX_OPS_MATRIZ = max(1_000_000, int(os.environ.get("KUKIA_MAX_OPS_MATRIZ", "2000
 def _get(url, **kw):
     """GET sin redirecciones: una redireccion podria llevarse la firma a otro host."""
     kw.setdefault("allow_redirects", False)
+    # F2-52 (S-09): timeout por defecto. Antes dependia de que cada llamada lo
+    # escribiera; la primera que se olvidara colgaba un hilo para siempre (y si
+    # era el de pedir, dejaba la GPU muda sin una linea de error).
+    kw.setdefault("timeout", 10.0)
     return requests.get(url, **kw)
 
 def _post(url, **kw):
     kw.setdefault("allow_redirects", False)
+    kw.setdefault("timeout", 10.0)   # F2-52 (S-09)
     return requests.post(url, **kw)
 
 def _core_seguro(core: str) -> tuple:
@@ -265,7 +291,9 @@ def _bucle_telemetria(nid: str, device: str, vram_gb: int, tops: float,
                      "gflops_base": _GFLOPS_BASE.get(str(device), 0.0),
                      "gpu_util_pct": int(util) if util is not None else -1,
                      "gpu_mem_mb": int(mem) if mem is not None else -1,
-                     "tarea_ms": round(float(estado.get("ms") or 0.0), 1)}
+                     "tarea_ms": round(float(estado.get("ms") or 0.0), 1),
+                     # F2-52: contadores por dispositivo, firmados con el resto.
+                     "cuentas": _cuentas_json(device)}
             metricas = json.dumps(datos, separators=(",", ":"), ensure_ascii=False)
             ts = int(time.time())
             huella = hashlib.sha256(metricas.encode()).hexdigest()
@@ -295,6 +323,281 @@ IDENTIDAD = Path(__file__).parent / "identidad_minero.json"
 # segunda ventana del minero sin querer; dos mineros se reparten el cupo de
 # tareas del nodo (4) y rinden la mitad, sin que se vea ningun error.
 LOCK = Path(__file__).parent / "minero.lock"
+# --- F2-52: rastro de arranque y contadores por dispositivo --------------------
+# POR QUE (F2-50 M-02/M-05/M-12): el log del minero acaba lleno de ceros y no
+# guarda el arranque, que es justo donde se ve si una GPU se detecto mal. Este
+# fichero va aparte, se escribe con append explicito y rota por tamano, nunca por
+# tiempo. Nunca escribe claves, saldos ni la contrasena de la billetera.
+ARRANQUE = Path(__file__).parent / "arranque.log"
+ARRANQUE_MAX = max(64 * 1024, int(os.environ.get("KUKIA_ARRANQUE_MAX",
+                                                 str(2 * 1024 * 1024))))
+_ARRANQUE_LOCK = threading.Lock()
+
+
+def _log_arranque(msg: str) -> None:
+    """Una linea fechada por evento, con append real y rotacion por tamano."""
+    try:
+        with _ARRANQUE_LOCK:
+            if ARRANQUE.exists() and ARRANQUE.stat().st_size > ARRANQUE_MAX:
+                ARRANQUE.replace(ARRANQUE.with_name(ARRANQUE.name + ".1"))
+            with ARRANQUE.open("a", encoding="utf-8") as f:
+                f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} "
+                        f"[pid {os.getpid()}] {msg}\n")
+    except Exception:
+        pass
+
+
+# --- REGISTRO DEL MINERO (M-12) ----------------------------------------------
+# POR QUE (30-10-2026): `worker/minero.log` lo escribia un `cmd >>` del lanzador
+# y `tools/rotar_logs.py` lo truncaba por fuera. Truncar un fichero que otro
+# proceso tiene abierto hace que ese proceso siga escribiendo en su
+# desplazamiento viejo, y el hueco se rellena de bytes NUL: el 30-10-2026 habia
+# 9.515.053 NUL en 9,5 MB, o sea un log inservible para diagnosticar.
+#
+# Ahora el UNICO escritor es este modulo: un cerrojo, una marca de tiempo por
+# linea y rotacion propia (la cola pasa a .1, .1 a .2 y el vivo se trunca desde
+# dentro). Si el lanzador redirige la salida a ese mismo fichero, su descriptor
+# queda ocioso: nadie mas escribe en el.
+MINERO_LOG = Path(__file__).parent / "minero.log"
+_MINERO_MAX = max(256 * 1024, int(os.environ.get("KUKIA_MINERO_LOG_BYTES",
+                                                 str(5 * 1024 * 1024))))
+_MINERO_COLA = max(64 * 1024, int(os.environ.get("KUKIA_MINERO_LOG_COLA",
+                                                 str(2 * 1024 * 1024))))
+_MINERO_GEN = max(1, int(os.environ.get("KUKIA_MINERO_LOG_GENERACIONES", "2")))
+
+
+class _Registro:
+    """Escritor unico del registro del minero: fechado, con cerrojo y rotacion."""
+
+    encoding = "utf-8"
+    errors = "replace"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._f = None
+        self._buf = ""
+        self._consola = None
+        self.rotaciones = 0
+
+    def instalar(self) -> None:
+        """Sustituye stdout/stderr por este escritor (y espeja en la consola)."""
+        consola = None
+        try:
+            if sys.stdout is not None and sys.stdout.isatty():
+                consola = sys.stdout
+        except Exception:
+            consola = None
+        self._consola = consola
+        try:
+            sys.stdout = self
+            sys.stderr = self
+        except Exception:
+            pass
+
+    def write(self, texto) -> int:
+        if not isinstance(texto, str):
+            texto = str(texto)
+        if self._consola is not None:
+            try:
+                self._consola.write(texto)
+                self._consola.flush()
+            except Exception:
+                pass
+        self._buf += texto
+        while "\n" in self._buf:
+            linea, self._buf = self._buf.split("\n", 1)
+            if linea.strip():
+                self._linea(linea)
+        return len(texto)
+
+    def flush(self) -> None:
+        if self._buf:
+            linea, self._buf = self._buf, ""
+            if linea.strip():
+                self._linea(linea)
+        if self._consola is not None:
+            try:
+                self._consola.flush()
+            except Exception:
+                pass
+
+    def isatty(self) -> bool:
+        return False
+
+    def _linea(self, texto: str) -> None:
+        with self._lock:
+            try:
+                if self._f is None:
+                    self._f = MINERO_LOG.open("a", encoding="utf-8",
+                                              errors="replace")
+                self._f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {texto}\n")
+                self._f.flush()
+                if self._f.tell() >= _MINERO_MAX:
+                    self._rotar()
+            except Exception:
+                pass
+
+    def _rotar(self) -> None:
+        """Rota desde dentro: nadie mas escribe este fichero."""
+        try:
+            if self._f is not None:
+                self._f.close()
+            self._f = None
+            cola = b""
+            try:
+                total = MINERO_LOG.stat().st_size
+                with MINERO_LOG.open("rb") as f:
+                    f.seek(max(0, total - _MINERO_COLA))
+                    cola = f.read()
+            except Exception:
+                cola = b""
+            for i in range(_MINERO_GEN, 1, -1):
+                viejo = MINERO_LOG.with_name(f"minero.log.{i - 1}")
+                nuevo = MINERO_LOG.with_name(f"minero.log.{i}")
+                try:
+                    if viejo.exists():
+                        viejo.replace(nuevo)
+                except Exception:
+                    pass
+            if cola:
+                try:
+                    MINERO_LOG.with_name("minero.log.1").write_bytes(cola)
+                except Exception:
+                    pass
+            MINERO_LOG.write_bytes(b"")
+            self.rotaciones += 1
+            self._f = MINERO_LOG.open("a", encoding="utf-8", errors="replace")
+            self._f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} registro rotado "
+                          f"({_MINERO_MAX // 1048576} MB, {_MINERO_GEN} "
+                          f"generaciones; en total {self.rotaciones})\n")
+            self._f.flush()
+        except Exception:
+            pass
+
+
+_REG = _Registro()
+
+
+def _log_minero(*trozos) -> None:
+    """Una linea fechada en el registro del minero (no pasa por la consola)."""
+    try:
+        _REG._linea(" ".join(str(t) for t in trozos))
+    except Exception:
+        pass
+
+
+CUENTAS: dict = {}
+_CUENTAS_LOCK = threading.Lock()
+CAMPOS_CUENTA = ("pedidas", "recibidas", "ejecutadas", "entregadas", "rechazadas")
+
+
+def _cuenta(device) -> dict:
+    d = str(device)
+    with _CUENTAS_LOCK:
+        c = CUENTAS.get(d)
+        if c is None:
+            c = {k: 0 for k in CAMPOS_CUENTA}
+            c.update({"ultimo_pedido": 0.0, "ultima_entrega": 0.0,
+                      "bloqueado_s": 0.0})
+            CUENTAS[d] = c
+        return c
+
+
+def _cuenta_inc(device, campo: str, n: int = 1) -> None:
+    c = _cuenta(device)
+    with _CUENTAS_LOCK:
+        c[campo] = int(c.get(campo) or 0) + n
+
+
+def _cuenta_marca(device, campo: str) -> None:
+    c = _cuenta(device)
+    with _CUENTAS_LOCK:
+        c[campo] = time.time()
+
+
+def _cuentas_json(device) -> dict:
+    """Lo que viaja firmado en la telemetria: contadores y segundos sin pedir."""
+    c = _cuenta(device)
+    with _CUENTAS_LOCK:
+        d = {k: int(c.get(k) or 0) for k in CAMPOS_CUENTA}
+        ult = float(c.get("ultimo_pedido") or 0.0)
+        ue = float(c.get("ultima_entrega") or 0.0)
+    d["esteril_s"] = int(max(0.0, time.time() - ult)) if ult else -1
+    d["sin_entrega_s"] = int(max(0.0, time.time() - ue)) if ue else -1
+    return d
+
+
+def _volcar_pilas() -> None:
+    """Volcado compacto de pilas (una por hilo) en arranque.log."""
+    try:
+        import traceback
+        marcos = sys._current_frames()
+        trozos = []
+        for t in threading.enumerate():
+            marco = marcos.get(t.ident)
+            if marco is None:
+                continue
+            trozos.append(f"--- hilo {t.name} ---\n"
+                          + "".join(traceback.format_stack(marco, limit=6)))
+        _log_arranque("PILAS\n" + "".join(trozos))
+    except Exception:
+        pass
+
+
+def _hilo_salud() -> None:
+    """Vigila cada dispositivo por separado y deja el diagnostico escrito.
+
+    NO reinicia nada. La causa de M-02 (un dispositivo que late pero deja de
+    pedir trabajo) no esta demostrada; reiniciar a ciegas escondería el fallo y
+    la mision pide recuperar solo despues de demostrar la causa. Esto asegura
+    que, si vuelve a pasar, quede escrito QUE hilo estaba donde.
+    """
+    esteril = float(os.environ.get("KUKIA_ESTERIL_SEG", "180"))
+    cada = float(os.environ.get("KUKIA_SALUD_SEG", "15"))
+    ultimo_aviso: dict = {}
+    ultimo_dump = 0.0
+    ultimo_muerto: dict = {}
+    while True:
+        time.sleep(cada)
+        try:
+            ahora = time.time()
+            # F2-53 (M-02): un hilo muerto deja la GPU muda y el proceso vivo.
+            # Esto solo lo DETECTA y lo escribe; no reinicia nada.
+            vivos = [t.name for t in threading.enumerate()]
+            for dev in list(CUENTAS):
+                corto = str(dev).replace(":", "")
+                falta = [n for n in (f"pedir-{corto}", f"calc-{corto}-")
+                         if not any(v == n or v.startswith(n) for v in vivos)]
+                if not falta:
+                    continue
+                if ahora - float(ultimo_muerto.get(str(dev)) or 0.0) < 300:
+                    continue
+                ultimo_muerto[str(dev)] = ahora
+                _log_arranque(f"HILO_MUERTO {dev}: falta {', '.join(falta)}; "
+                              f"vivos={', '.join(sorted(vivos))}")
+                _volcar_pilas()
+            for dev, c in list(CUENTAS.items()):
+                with _CUENTAS_LOCK:
+                    ult = float(c.get("ultimo_pedido") or 0.0)
+                    ped = int(c.get("pedidas") or 0)
+                    ent = int(c.get("entregadas") or 0)
+                if not ult:
+                    continue
+                seco = ahora - ult
+                if seco < esteril:
+                    ultimo_aviso.pop(dev, None)
+                    continue
+                if ahora - ultimo_aviso.get(dev, 0.0) < 300:
+                    continue
+                ultimo_aviso[dev] = ahora
+                vivos = ", ".join(sorted(t.name for t in threading.enumerate()))
+                _log_arranque(f"ESTERIL {dev}: {seco:.0f} s sin pedir trabajo "
+                              f"(pedidas={ped} entregadas={ent}); hilos={vivos}")
+                if ahora - ultimo_dump > 120:
+                    ultimo_dump = ahora
+                    _volcar_pilas()
+        except Exception as e:
+            _log_arranque(f"salud: {type(e).__name__}: {e}")
 
 # BENCHMARK DE ARRANQUE (21-10-2026): antes de minar se mide la GPU con las
 # mismas cuentas que las tareas de la red. Sirve para detectar una GPU mal
@@ -1176,12 +1479,23 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
         fallo el nodo deja de minar y no lo dice. Aqui se suelta siempre por
         el mismo sitio, y se lleva la cuenta para poder esperar al parar.
         """
+        # F2-53 (doble liberacion): el contador es la fuente de verdad. Solo se
+        # libera si de verdad hay una tarea en vuelo, asi que soltar de mas ya
+        # no puede inflar el semaforo (antes los tres caminos de error de
+        # _pedir lo soltaban y el finally lo volvia a soltar).
+        with en_vuelo_lock:
+            if en_vuelo["n"] <= 0:
+                sobran = True
+            else:
+                en_vuelo["n"] -= 1
+                sobran = False
+        if sobran:
+            _log_arranque("cupo: liberacion de mas ignorada (contador en 0)")
+            return
         try:
             cupo_vuelo.release()
         except Exception:
             pass
-        with en_vuelo_lock:
-            en_vuelo["n"] = max(0, en_vuelo["n"] - 1)
 
     def _entregar(pid, tipo, metrica, duracion_ms, telemetria, es_replica, firma):
         """Manda la entrega (o la verificacion) sin bloquear al dispositivo."""
@@ -1263,6 +1577,8 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 return
             res = rr.json()
             if res.get("ok"):
+                _cuenta_inc(device, "entregadas")
+                _cuenta_marca(device, "ultima_entrega")
                 with cuenta_lock:
                     cuenta["ok"] += 1
                     cuenta["kuki"] += float(res.get("kuki") or 0.0)
@@ -1270,13 +1586,19 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 print(f"[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -> OK +{res.get('kuki')} KIA "
                       f"({duracion_ms:.0f} ms)", flush=True)
             else:
+                _cuenta_inc(device, "rechazadas")
                 with cuenta_lock:
                     cuenta["err"] += 1
                 print(f"[KUKIA] {etiqueta} tarea {pid[:8]} {tipo} -> RECHAZADO "
                       f"(esperado {res.get('esperado')}, enviado {metrica[:40]})", flush=True)
-        except Exception as e:
+        except BaseException as e:
             print(f"[KUKIA] {etiqueta} entrega de {pid[:8]} fallida: "
                   f"{type(e).__name__}: {e}", flush=True)
+            if not isinstance(e, Exception):
+                # F2-53: un BaseException en este hilo se llevaba por delante la
+                # entrega sin dejar rastro. Queda escrito antes de propagar.
+                _log_arranque(f"entrega {str(device)}: {type(e).__name__}: {e}")
+                raise
         finally:
             # Se suelta SIEMPRE, con o sin exito: si no, una entrega que falle
             # deja el cupo cogido y el nodo pierde capacidad para siempre.
@@ -1306,6 +1628,7 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 if not cupo_vuelo.acquire(timeout=1.0):
                     continue
                 tengo_cupo = True
+                _cuenta_inc(device, "pedidas")
                 with en_vuelo_lock:
                     en_vuelo["n"] += 1
                 nid_p = ctx["nid"]
@@ -1325,10 +1648,12 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                     print(f"[KUKIA] {etiqueta} limitado por el Core (429), espero 20 s",
                           flush=True)
                     bloqueado["hasta"] = time.time() + 20
+                    tengo_cupo = False        # F2-53: lo suelta esta rama, no el finally
                     _soltar()
                     continue
                 if rp.status_code != 200:
                     detalle = (rp.text or "")[:160]
+                    tengo_cupo = False        # F2-53: exactamente una liberacion
                     _soltar()
                     if rp.status_code in (401, 404) and "nodo no registrado" in detalle:
                         print(f"[KUKIA] {etiqueta} el Core no ve el nodo {nid_p}: lo compruebo "
@@ -1346,8 +1671,12 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                     continue
                 _cuerpo = rp.json()
                 cuenta["ultimo_core_ok"] = time.time()
+                _cuenta_marca(device, "ultimo_pedido")
+                if _cuerpo.get("tarea"):
+                    _cuenta_inc(device, "recibidas")
                 if not _cuerpo.get("tarea"):
                     motivo = str(_cuerpo.get("motivo") or "")
+                    tengo_cupo = False        # F2-53: exactamente una liberacion
                     _soltar()
                     if "limite" in motivo:
                         # Cupo del nodo lleno (tareas colgadas de antes, o un
@@ -1361,10 +1690,30 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                     continue
                 # El cupo de esta tarea lo suelta quien la entregue.
                 tengo_cupo = False
-                cola_tareas.put(_cuerpo)
-            except Exception as e:
+                try:
+                    cola_tareas.put(_cuerpo, timeout=COLA_ESPERA)
+                except queue.Full:
+                    # F2-53 (M-02): antes era un put sin timeout. Con el calculo
+                    # atascado, la cola se llenaba y este hilo se quedaba aqui
+                    # para siempre: la GPU muda y el proceso vivo, sin ninguna
+                    # linea que lo delatara. Ahora se anota y el cupo vuelve.
+                    _pid = str((_cuerpo.get("tarea") or {}).get("id") or "?")[:8]
+                    _log_arranque(f"pedir-{device}: cola llena {COLA_ESPERA:.0f} s; "
+                                  f"tarea {_pid} no admitida (vence en el Core)")
+                    print(f"[KUKIA] {etiqueta} la cola de calculo no admite trabajo "
+                          f"en {COLA_ESPERA:.0f} s; sigo pidiendo", flush=True)
+                    _soltar()
+                    time.sleep(1.0)
+                    continue
+            except BaseException as e:
+                # F2-52: BaseException y no Exception. Un BaseException mataba el
+                # hilo pedir-* en silencio y la GPU se quedaba sin trabajo sin
+                # dejar rastro (M-02). Ahora queda escrito antes de propagar.
+                _log_arranque(f"pedir-{device}: {type(e).__name__}: {e}")
                 print(f"[KUKIA] {etiqueta} pidiendo trabajo: {type(e).__name__}: {e} "
                       f"(reintento en {espera:.0f} s)", flush=True)
+                if not isinstance(e, Exception):
+                    raise
                 time.sleep(espera)
                 espera = min(60.0, espera * 1.6)
             else:
@@ -1455,6 +1804,7 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                     en_mano = False
                     time.sleep(5)
                     continue
+                _cuenta_inc(device, "ejecutadas")
                 firma = WALLET.firmar(f"{pid}:{metrica}", privkey) if privkey else ""
                 # Telemetria REAL del nodo: tiempo de la tarea, FLOPs que acaba de
                 # hacer y GFLOPS medidos en ESTA tarea. Con eso el panel dibuja la
@@ -1492,10 +1842,18 @@ def ciclo_worker(nombre: str, device: str, vram_gb: int, tops: float):
                 except Exception:
                     en_mano = True   # no llego a nacer: el cupo vuelve a nosotros
                     raise
-            except Exception as e:
+            except BaseException as e:
                 if en_mano:
                     _soltar()
                     en_mano = False
+                if not isinstance(e, Exception):
+                    # F2-53: un BaseException mataba este hilo en silencio; la
+                    # GPU dejaba de consumir, la cola se llenaba y el hilo que
+                    # pide se quedaba bloqueado (la firma exacta de M-02). Queda
+                    # escrito, con pilas, antes de propagar.
+                    _log_arranque(f"calc-{device}: {type(e).__name__}: {e}")
+                    _volcar_pilas()
+                    raise
                 # Backoff: un Core caido no debe hacer que 2 GPUs lo martilleen
                 # en bucle ni llenar el log a 1000 lineas por minuto.
                 print(f"[KUKIA] {etiqueta} err: {e} (reintento en {espera_error:.0f} s)", flush=True)
@@ -1687,6 +2045,8 @@ def main():
             flujo.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
+    # F2-53 (M-12): a partir de aqui el registro lo escribe este proceso.
+    _REG.instalar()
     if not _tomar_lock():
         return 0
     _vigilar_direccion()
@@ -1695,7 +2055,13 @@ def main():
         print(f"[KUKIA] ERROR: {motivo_core}", flush=True)
         return 2
     nombre = sys.argv[1] if len(sys.argv) > 1 else "worker_" + socket.gethostname()
+    _log_arranque(
+        f"arranque: python={sys.version.split()[0]} "
+        f"torch={getattr(torch, '__version__', 'ausente')} "
+        f"cuda={getattr(getattr(torch, 'version', None), 'cuda', None)} "
+        f"core={CORE} nombre={nombre}")
     n_gpus, motivo_gpu = _detectar_gpus()
+    _log_arranque(f"GPUs detectadas: {n_gpus} {motivo_gpu}".rstrip())
 
     def _esperar(hilos):
         """Espera a los hilos y, si llega un Ctrl+C, para ordenadamente."""
@@ -1749,9 +2115,14 @@ def main():
             # TOPS aproximados por clase de GPU (referencia NVIDIA)
             tops_est = {8: 60.0, 12: 300.0, 16: 760.0, 24: 1300.0}.get(int(vram), 100.0)
             print(f"[KUKIA] GPU{g}: {props.name} ({vram} GB)", flush=True)
-        except Exception:
+            _log_arranque(f"GPU{g}: {props.name} vram={vram}GB "
+                          f"tops={tops_est} (estimado por clase, no medido)")
+        except Exception as e:
+            _log_arranque(f"GPU{g}: no se pudieron leer sus propiedades "
+                          f"({type(e).__name__}: {e}) -> vram=0 tops=0")
             vram, tops_est = 0, 0.0
-        t = threading.Thread(target=ciclo_worker, args=(nombre, f"cuda:{g}", vram, tops_est), daemon=True)
+        t = threading.Thread(target=ciclo_worker, args=(nombre, f"cuda:{g}", vram, tops_est),
+                             daemon=True, name=f"nodo-cuda{g}")
         t.start()
         hilos.append(t)
 
@@ -1759,8 +2130,11 @@ def main():
     usar_cpu, hilos_cpu = _ajuste_cpu()
     if usar_cpu:
         try:
-            import torch
-            torch.set_num_threads(hilos_cpu)   # no ahogar a los hilos de las GPU
+            # F2-50: antes habia aqui un "import torch" que convertia torch en
+            # variable LOCAL de main() y rompia la lectura de VRAM/TOPS de mas
+            # arriba (UnboundLocalError tragado por el except).
+            if torch is not None:
+                torch.set_num_threads(hilos_cpu)   # no ahogar a los hilos de las GPU
         except Exception:
             pass
         print(f"[KUKIA] CPU tambien mina: {hilos_cpu} hilos "
@@ -1771,7 +2145,20 @@ def main():
     else:
         print("[KUKIA] CPU en reposo (KUKIA_USAR_CPU=1 para que mine tambien)", flush=True)
 
+    threading.Thread(target=_hilo_salud, daemon=True, name="salud").start()
+    _log_arranque("hilos: " + ", ".join(sorted(t.name for t in threading.enumerate())))
+    _log_arranque("minando")
     _esperar(hilos)
+    _log_arranque("fin: main() termino")
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        # F2-52: un fallo de arranque deja traceback en arranque.log, no solo un
+        # codigo de salida que nadie ve (pythonw no tiene consola).
+        import traceback
+        _log_arranque("EXCEPCION no controlada:\n" + traceback.format_exc())
+        raise
