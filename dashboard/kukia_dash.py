@@ -287,6 +287,9 @@ footer{margin:1.4rem 0 .4rem;color:var(--muted);font-size:.7rem;line-height:1.6;
     <div class="k">Tareas verificadas</div>
     <div class="v" id="kTasks">—</div>
     <div class="sub" id="kTasksSub">— por minuto</div>
+    <!-- Desglose de lo archivado: el total mezclaba 'ok' y 'fallo' y la suma
+         no cuadraba. Aqui se ve de donde sale cada numero. -->
+    <div class="sub" id="kTasksArch">— en tabla · — archivadas (— ok · — fallo)</div>
   </div>
   <div class="card">
     <div class="k">Nodos activos</div>
@@ -559,6 +562,10 @@ function pintar(d){
   var ult5 = pts.slice(-5);
   var rate = ult5.length ? ult5.reduce(function(a, p){ return a + Number(p.tareas || 0); }, 0) / ult5.length : 0;
   document.getElementById('kTasksSub').textContent = n(rate, 1) + ' por minuto (5 min)';
+  document.getElementById('kTasksArch').textContent =
+    n(st.tareas_ok_en_tabla, 0) + ' en tabla · ' + n(st.tareas_archivadas, 0) +
+    ' archivadas (' + n(st.tareas_ok_archivadas, 0) + ' ok · ' +
+    n(st.tareas_fallo_archivadas, 0) + ' fallo)';
   var ahora = Date.now() / 1000;
   var activos = nodos.filter(function(x){ return x.visto && (ahora - Number(x.visto)) < 86400; });
   document.getElementById('kNodes').textContent = n(activos.length, 0);
