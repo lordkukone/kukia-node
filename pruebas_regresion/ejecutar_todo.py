@@ -1,7 +1,8 @@
 """Ejecuta la bateria de regresion de KUKIA y devuelve 0 solo si pasa todo.
 
 Uso:
-    python pruebas_regresion/ejecutar_todo.py            # todo
+    python pruebas_regresion/ejecutar_todo.py            # todo lo rapido
+    python pruebas_regresion/ejecutar_todo.py --con-ab   # y la A/B de /stats (~1 min mas)
     python pruebas_regresion/ejecutar_todo.py --solo-suite   # solo las de aqui
     python pruebas_regresion/ejecutar_todo.py -k stats   # filtra por nombre
 
@@ -13,6 +14,7 @@ aqui se guarda el registro completo en un directorio temporal.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tempfile
@@ -29,6 +31,13 @@ SUITE = [
     ("core: identidad de /stats y huella de /version", "pruebas_regresion/prueba_identidad_stats.py"),
 ]
 
+# La A/B se queda fuera de la pasada rapida: arranca DOS Cores y mide 12 s en
+# cada uno. Su invariante ya la cubre prueba_identidad_stats.py; esto es la
+# prueba de que el defecto existia (antes) y de que ya no (despues).
+AB = [
+    ("core: A/B de coherencia de /stats (F2-59)", "pruebas_regresion/ab_stats/prueba_ab_stats.py"),
+]
+
 VERSIONADAS = [
     ("minero: NUL, rotacion y cupo (F2-53)", "informes_mainnet_20261030/f2-53_minero/pruebas_f2_53.py"),
     ("minero: aviso HILO_MUERTO (F2-53)", "informes_mainnet_20261030/f2-53_minero/prueba_salud_f253.py"),
@@ -42,7 +51,11 @@ def correr(nombre: str, rel: str, registro: Path) -> tuple[bool, float, str]:
     if not ruta.exists():
         return False, 0.0, f"no existe {rel}"
     t0 = time.time()
-    p = subprocess.run([sys.executable, str(ruta)], cwd=str(RAIZ),
+    # PYTHONIOENCODING/PYTHONUTF8: sin esto, una prueba que imprime un caracter
+    # fuera de cp1252 revienta al escribir en la tuberia y el lanzador solo ve
+    # un codigo 2 con la salida vacia (paso con pruebas_f2_54 el 31-10-2026).
+    entorno = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
+    p = subprocess.run([sys.executable, str(ruta)], cwd=str(RAIZ), env=entorno,
                        capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=1800)
     dur = time.time() - t0
@@ -56,6 +69,10 @@ def correr(nombre: str, rel: str, registro: Path) -> tuple[bool, float, str]:
         if s.startswith("{"):
             resumen = s
             break
+    if not resumen and p.returncode != 0:
+        # Sin resumen y con error: lo util es la ultima linea, no el silencio.
+        lineas = [l.strip() for l in salida.splitlines() if l.strip()]
+        resumen = lineas[-1][:120] if lineas else f"sin salida (codigo {p.returncode})"
     if not resumen:
         resumen = next((l.strip() for l in reversed(salida.splitlines())
                         if "PASS" in l or "FAIL" in l), "")
@@ -66,10 +83,15 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--solo-suite", action="store_true",
                     help="no ejecutar las pruebas de informes_mainnet_20261030")
+    ap.add_argument("--con-ab", action="store_true",
+                    help="incluir la A/B de coherencia de /stats (2 Cores, ~1 min)")
     ap.add_argument("-k", "--filtro", default="", help="solo las que contengan este texto")
     args = ap.parse_args()
 
     lista = list(SUITE) if args.solo_suite else SUITE + VERSIONADAS
+    # Con --con-ab entra la A/B; con -k tambien, para poder pedir solo esa.
+    if args.con_ab or args.filtro:
+        lista = lista + AB
     if args.filtro:
         lista = [t for t in lista if args.filtro.lower() in t[0].lower()]
 

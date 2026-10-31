@@ -5,7 +5,8 @@ ya corregidos no vuelven. Nació porque las pruebas del Core se quedaban en
 `informes_mainnet_20261029/` (fuera de git) y se perdían al limpiar el disco.
 
 ```bash
-python pruebas_regresion/ejecutar_todo.py              # todo (7 pruebas, ~30 s en un PC normal)
+python pruebas_regresion/ejecutar_todo.py              # todo lo rápido (7 pruebas, ~45 s)
+python pruebas_regresion/ejecutar_todo.py --con-ab     # y la A/B de /stats (~1 min más)
 python pruebas_regresion/ejecutar_todo.py --solo-suite # solo las de esta carpeta
 python pruebas_regresion/ejecutar_todo.py -k stats     # filtra por nombre
 ```
@@ -28,6 +29,7 @@ sintética y puerto efímero, o solo leen ficheros.
 | [prueba_identidad_stats.py](prueba_identidad_stats.py) | **F2-57** (un solo contador de archivadas daba 7 de desfase) y **F2-58/59** (cada contador en su consulta: la foto de `/stats` mezclaba dos instantes) | lote mixto 7 ok / 3 fallo + archivado, y 3 escritores concurrentes mientras se piden 150+ fotos de `/stats`: cero descuadres en las dos identidades | Core aislado (uvicorn), ~10 s |
 | [prueba_regla_claves.py](prueba_regla_claves.py) | **F2-47** (la regla de vigencia de claves duplicada en el Core y en SQL podría divergir) | guarda estática (el Core no contiene copias), matriz de 27 decisiones en las dos bocas, y cambiar `_REGLA` en caliente mueve las tres a la vez | solo `coordinator/`, ~1 s |
 | [prueba_detector_esteril.py](prueba_detector_esteril.py) | **F2-52 / M-02** (una GPU podía quedarse sin trabajar y el fallo era invisible) | ejecuta el `_hilo_salud` real (extraído con `ast`) y comprueba `ESTERIL` + volcado `PILAS` + sin falsos positivos | solo `worker/`, ~1 s |
+| [ab_stats/prueba_ab_stats.py](ab_stats/prueba_ab_stats.py) | **F2-59** con su **A/B**: antes (cada contador en su consulta) vs después (una sola foto) | mismo esquema y misma carga en las dos variantes; solo cambia el fichero del Core. Exige 0 descuadres después y **al menos uno antes**, o no demuestra nada | 2 Cores, ~1 min (`--con-ab`) |
 | [ejecutar_todo.py](ejecutar_todo.py) | — | lanzador: corre las de arriba y las de `informes_mainnet_20261030/` | — |
 
 El lanzador incluye además estas, que ya estaban versionadas:
@@ -39,20 +41,43 @@ El lanzador incluye además estas, que ya estaban versionadas:
 | `informes_mainnet_20261030/f2-54_minero_1_0/pruebas_f2_54.py` | telemetría real por GPU, `BoundedSemaphore` que no se infla, instancia única (F2-54) |
 | `informes_mainnet_20261030/f2-57_desglose_archivadas/prueba_f2_57.py` | desglose ok/fallo de archivadas en 5 rondas seguidas y resiembra de contadores (F2-57) |
 
+## La A/B de `/stats` y su resultado
+
+[ab_stats/](ab_stats) es la única prueba de la batería que necesita una copia de
+un Core **anterior**, y por eso se versiona con su fixture:
+
+| Fichero | Qué es |
+|---|---|
+| [ab_stats/prueba_ab_stats.py](ab_stats/prueba_ab_stats.py) | el arnés A/B: mide la variante de antes y la de ahora con la misma carga |
+| [ab_stats/respaldo/core_pre_f259.py](ab_stats/respaldo/core_pre_f259.py) | el Core de F2-58 (antes del parche), como fixture. SHA-256 `6463fe89…`. No se llama `kukia_core_*` porque `.gitignore` ignora `KUKIA_*` y se quedaría fuera sin avisar |
+| [ab_stats/resultado_referencia_20261030.json](ab_stats/resultado_referencia_20261030.json) | el resultado que validó F2-59 el 30/10/2026: **10 descuadres de 2.247** muestras antes, **0 de 2.791** después |
+
+En la pasada del 31/10/2026 reprodujo lo mismo: **10 descuadres de 2.927**
+muestras antes (siempre con desvío +1, que es la firma del commit que cae entre
+dos lecturas) y **0 de 2.524** después. Las ejecuciones nuevas no pisan esos
+ficheros: van a `salidas/resultado_ab_stats_<marca>.json`.
+
 ## Lo que NO está aquí, y por qué
 
 Los arneses A/B de `informes_mainnet_20261029/` (F2-29, F2-35, F2-36, F2-38,
-F2-42, F2-44, F2-46, F2-47, F2-48, F2-49) y los de `informes_mainnet_20261030/`
-(F2-55, F2-59) comparan
-**dos versiones del Core**: la de antes y la de después, cada una en su carpeta
-`combined/`. Esas carpetas nunca se versionaron (son copias completas del
+F2-42, F2-44, F2-46, F2-47, F2-48, F2-49), el de `informes_mainnet_20261030/`
+F2-55 y los de latencia (F2-39, F2-41, F2-43, F2-45) comparan **dos versiones
+del Core**, cada una en su carpeta `combined/` o contra una copia de 300 KB como
+la de F2-59. Esas carpetas nunca se versionaron (son copias completas del
 coordinador, una por fase) y sin ellas el arnés no arranca. Por eso se quedan en
-el disco: son la medición que justificó cada parche, no una prueba repetible.
+el disco: son la medición que justificó cada parche.
 
-Lo que sí se ha traído es su **invariante**, reescrito contra el código de hoy:
-es el caso de la identidad de `/stats` (antes F2-59 medía el antes/después; aquí
-se exige que nunca haya descuadre) y el de la regla de claves (antes F2-47
-comparaba contra una copia; aquí se ejecuta contra `coordinator/`).
+Han entrado dos cosas de ahí, porque su fixture cabe en el repositorio:
+
+- la **A/B de `/stats`** (F2-59), con su respaldo de 300 KB y su resultado
+  ([ab_stats/](ab_stats)), que es la prueba de que el defecto existía;
+- los **invariantes**, reescritos contra el código de hoy: la identidad de
+  `/stats` ([prueba_identidad_stats.py](prueba_identidad_stats.py)) y la regla de
+  claves de F2-47 ([prueba_regla_claves.py](prueba_regla_claves.py)), que antes
+  se comprobaban contra una copia y ahora contra `coordinator/`.
+
+Las A/B de latencia (F2-39, F2-41, F2-44, F2-45, F2-46) siguen fuera: necesitan
+el árbol entero de cada fase, no un fichero.
 
 ## Añadir una prueba
 
@@ -65,5 +90,7 @@ Un script suelto, sin dependencias nuevas, que:
    (`<nombre>_AAAAMMDD_HHMMSS.json`), nunca junto al script ni en un fichero
    versionado, y no toque la base operativa.
 
-Después se añade a la lista `SUITE` (o `VERSIONADAS`) de
-[ejecutar_todo.py](ejecutar_todo.py) y a la tabla de arriba.
+Después se añade a la lista `SUITE`, `VERSIONADAS` o `AB` de
+[ejecutar_todo.py](ejecutar_todo.py) y a la tabla de arriba. Si la prueba necesita
+un Core anterior, va a la lista `AB` (se ejecuta con `--con-ab`) y su fixture se
+versiona junto a ella, nunca en `salidas/`.

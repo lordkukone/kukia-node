@@ -1,0 +1,73 @@
+{
+  "antes": {
+    "etiqueta": "antes",
+    "muestras": 2247,
+    "escrituras": 1838,
+    "descuadres": 10,
+    "errores": 0,
+    "ejemplos": [
+      {
+        "ok": 17,
+        "en_tabla": 18,
+        "desvio": 1
+      },
+      {
+        "ok": 820,
+        "en_tabla": 821,
+        "desvio": 1
+      },
+      {
+        "ok": 1664,
+        "en_tabla": 1665,
+        "desvio": 1
+      },
+      {
+        "ok": 2060,
+        "en_tabla": 2061,
+        "desvio": 1
+      },
+      {
+        "ok": 2396,
+        "en_tabla": 2397,
+        "desvio": 1
+      }
+    ]
+  },
+  "despues": {
+    "etiqueta": "despues",
+    "muestras": 2791,
+    "escrituras": 1978,
+    "descuadres": 0,
+    "errores": 0,
+    "ejemplos": []
+  },
+  "pruebas": [
+    {
+      "prueba": "la carga genero escrituras de verdad",
+      "pasa": true,
+      "detalle": "1838 / 1978"
+    },
+    {
+      "prueba": "DESPUES: cero descuadres en la identidad",
+      "pasa": true,
+      "detalle": "0 de 2791 muestras"
+    },
+    {
+      "prueba": "DESPUES: ninguna peticion fallo",
+      "pasa": true,
+      "detalle": "0 errores"
+    },
+    {
+      "prueba": "DESPUES: la foto sigue cuadrando al final",
+      "pasa": true,
+      "detalle": "2791 muestras"
+    },
+    {
+      "prueba": "ANTES: el descuadre existia (medido, no supuesto)",
+      "pasa": true,
+      "detalle": "10 de 2247 muestras"
+    }
+  ],
+  "pass": 5,
+  "total": 5
+}
