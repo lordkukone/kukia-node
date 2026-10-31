@@ -19,6 +19,11 @@ base sintetica y puerto efimero (nunca 8300 ni 8301), y verifica:
      1,1 M archivadas).
 
 No toca la base real, ni el Core operativo, ni los puertos 8300/8301.
+
+El resultado se escribe en pruebas_regresion/salidas/ (ignorada por git) con
+marca de tiempo, para no dejar el arbol sucio al ejecutarla. El
+resultado_f2_57.json que sigue versionado es la foto de la pasada que valido
+F2-57; no se reescribe.
 """
 import atexit
 import json
@@ -335,10 +340,20 @@ def main() -> int:
 
     fallos = [r for r in RES if not r["pasa"]]
     print(f"\n[F2-57] {len(RES) - len(fallos)}/{len(RES)} PASS")
-    (AQUI / "resultado_f2_57.json").write_text(
-        json.dumps({"pruebas": RES, "pass": len(RES) - len(fallos), "total": len(RES)}, indent=2),
+    # El resultado NO se escribe junto a la prueba: ese fichero estaba versionado
+    # y cada pasada dejaba el arbol sucio (y pisaba la medicion anterior). Va a
+    # pruebas_regresion/salidas/, que esta ignorada, con marca de tiempo.
+    salidas = RAIZ / "pruebas_regresion" / "salidas"
+    salidas.mkdir(parents=True, exist_ok=True)
+    ahora = time.strftime("%Y%m%d_%H%M%S")
+    destino = salidas / f"resultado_f2_57_{ahora}.json"
+    destino.write_text(
+        json.dumps({"cuando": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "prueba": "F2-57 desglose de archivadas",
+                    "pruebas": RES, "pass": len(RES) - len(fallos),
+                    "total": len(RES)}, indent=2, ensure_ascii=False),
         encoding="utf-8")
-    print(f"[F2-57] artefacto: {AQUI / 'resultado_f2_57.json'}")
+    print(f"[F2-57] artefacto: {destino}")
     return 0 if not fallos else 1
 
 

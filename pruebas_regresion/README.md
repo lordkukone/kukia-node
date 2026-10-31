@@ -13,6 +13,10 @@ python pruebas_regresion/ejecutar_todo.py -k stats     # filtra por nombre
 Devuelve `0` solo si pasa todo. El registro completo de la última ejecución se
 guarda en un directorio temporal (la ruta se imprime al final).
 
+Los resultados de cada prueba van a [salidas/](salidas), **ignorada por git y con
+marca de tiempo** (`resultado_f2_57_20261031_104512.json`): correr la batería no
+deja el árbol sucio y nunca pisa la medición anterior.
+
 Ninguna prueba toca el Core operativo, la base real, el ledger, los saldos, las
 claves ni los puertos 8300/8301: todas trabajan en un árbol temporal con base
 sintética y puerto efímero, o solo leen ficheros.
@@ -57,7 +61,9 @@ Un script suelto, sin dependencias nuevas, que:
 1. imprima una línea `[PASS]`/`[FAIL]` por comprobación;
 2. termine con un JSON de una línea `{"total": N, "pass": N, "fail": N, ...}`;
 3. devuelva `0` si pasa y `1` si no;
-4. no escriba fuera de un directorio temporal ni toque la base operativa.
+4. escriba su resultado en `pruebas_regresion/salidas/` con marca de tiempo
+   (`<nombre>_AAAAMMDD_HHMMSS.json`), nunca junto al script ni en un fichero
+   versionado, y no toque la base operativa.
 
 Después se añade a la lista `SUITE` (o `VERSIONADAS`) de
 [ejecutar_todo.py](ejecutar_todo.py) y a la tabla de arriba.

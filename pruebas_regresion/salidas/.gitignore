@@ -1,0 +1,7 @@
+# Resultados de las pruebas de regresion.
+#
+# Cada pasada escribe aqui su JSON con marca de tiempo. La carpeta se versiona
+# (para que exista en un clon limpio) pero su contenido no: asi correr la
+# bateria no deja el arbol sucio ni pisa la medicion anterior.
+*
+!.gitignore

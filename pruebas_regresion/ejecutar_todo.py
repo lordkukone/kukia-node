@@ -75,6 +75,8 @@ def main() -> int:
 
     tmp = Path(tempfile.mkdtemp(prefix="kukia_regresion_"))
     registro = tmp / "registro.txt"
+    salidas = AQUI / "salidas"
+    inicio = time.time()
     print(f"[regresion] {len(lista)} pruebas | registro: {registro}\n")
 
     filas = []
@@ -92,6 +94,14 @@ def main() -> int:
     fallos = [f for f in filas if not f[0]]
     print("=" * 78)
     print(f"{len(filas) - len(fallos)}/{len(filas)} pruebas PASS")
+    # Artefactos de esta pasada: las pruebas escriben en salidas/ (ignorada por
+    # git) con marca de tiempo, asi que correr la bateria no ensucia el arbol.
+    nuevas = sorted(p.name for p in salidas.glob("*")
+                    if p.is_file() and p.stat().st_mtime >= inicio) if salidas.exists() else []
+    if nuevas:
+        print(f"artefactos en {salidas}:")
+        for n in nuevas:
+            print(f"  {n}")
     if fallos:
         print("fallan: " + ", ".join(f[1] for f in fallos))
         print(f"detalle en {registro}")
