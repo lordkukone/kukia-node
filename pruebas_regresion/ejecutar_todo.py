@@ -29,6 +29,7 @@ SUITE = [
     ("minero: detector de dispositivo esteril (M-02)", "pruebas_regresion/prueba_detector_esteril.py"),
     ("claves: la regla de vigencia vive en un solo sitio", "pruebas_regresion/prueba_regla_claves.py"),
     ("core: identidad de /stats y huella de /version", "pruebas_regresion/prueba_identidad_stats.py"),
+    ("panel: desglose ok/fallo de las archivadas", "pruebas_regresion/prueba_panel_desglose.py"),
 ]
 
 # La A/B se queda fuera de la pasada rapida: arranca DOS Cores y mide 12 s en
