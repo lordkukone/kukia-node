@@ -17,6 +17,7 @@ Arranque:
 Variables:
     KUKIA_CORE   URL del Core (defecto http://127.0.0.1:8300)
 """
+import concurrent.futures
 import json
 import os
 import threading
@@ -33,16 +34,30 @@ CACHE_SEG = max(0.5, float(os.environ.get("KUKIA_DASH_CACHE", "2")))
 CACHE_INTEGRIDAD = max(5.0, float(os.environ.get("KUKIA_DASH_INTEGRIDAD", "60")))
 
 app = FastAPI(title="KUKIA Dashboard", version="1.0.0")
-_sesion = requests.Session()
+_local = threading.local()          # una sesion HTTP por hilo (las peticiones van en paralelo)
 _lock = threading.Lock()
 _cache = {"ts": 0.0, "datos": None}
 _int_cache = {"ts": 0.0, "datos": None}
+_int_refresco = {"en_curso": False}
+# Cerrojo PROPIO para el refresco de integridad: `_integridad()` se llama desde
+# `_resumen()`, que ya tiene `_lock`; con el mismo cerrojo se autobloqueaba
+# (medido: el panel dejaba de contestar y no volvia nunca).
+_int_lock = threading.Lock()
 _ultimo_bueno = {"ts": 0.0, "datos": None}
+
+
+def _sesion_hilo() -> requests.Session:
+    """Sesion POR HILO: `requests.Session` no es segura compartida entre hilos."""
+    s = getattr(_local, "sesion", None)
+    if s is None:
+        s = requests.Session()
+        _local.sesion = s
+    return s
 
 
 def _get(ruta: str, defecto=None, timeout: float = None):
     try:
-        r = _sesion.get(f"{CORE}{ruta}", timeout=timeout or TIMEOUT)
+        r = _sesion_hilo().get(f"{CORE}{ruta}", timeout=timeout or TIMEOUT)
         if r.status_code != 200:
             return defecto
         return r.json()
@@ -50,15 +65,53 @@ def _get(ruta: str, defecto=None, timeout: float = None):
         return defecto
 
 
+def _get_varios(pedidos: dict) -> dict:
+    """Pide varias rutas a la VEZ: en serie, /api/resumen pagaba la suma.
+
+    MEDIDO (31-10-2026, Core con 1,4 M de asientos y 20.000 telemetrias):
+    /red/serie_gpu 195 ms, /stats 12 ms, /red/telemetria 12 ms, /ledger 5 ms,
+    /nodos 4 ms, /red/serie 2 ms... En serie eso es la suma; en paralelo, el
+    mayor de todos.
+    """
+    def uno(item):
+        clave, (ruta, defecto, timeout) = item
+        return clave, _get(ruta, defecto, timeout)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(pedidos))) as ex:
+        return dict(ex.map(uno, pedidos.items()))
+
+
+def _refrescar_integridad():
+    try:
+        d = _get("/ledger/integridad", None, timeout=max(TIMEOUT, 15.0))
+        if d is not None:
+            _int_cache.update({"ts": time.time(), "datos": d})
+    finally:
+        _int_refresco["en_curso"] = False
+
+
 def _integridad():
-    """La verificacion completa de la cadena es cara: se cachea 60 s."""
+    """Sirve la ultima verificacion y refresca en segundo plano (nunca bloquea).
+
+    FALLO REAL (31-10-2026): /ledger/integridad recorre la cadena entera del
+    ledger y en frio tarda 1-10 s (medido: p50 1,7 ms con la cache del Core
+    caliente, max 10.747 ms en frio). Estaba EN el camino de /api/resumen, asi
+    que cada vez que caducaba la cache de 60 s el panel se quedaba 2,4 s
+    esperando. Ahora se devuelve lo ultimo bueno al instante y el refresco va
+    en un hilo aparte; el panel ensena el bloque un ciclo despues.
+    """
     ahora = time.time()
-    if _int_cache["datos"] is not None and ahora - _int_cache["ts"] < CACHE_INTEGRIDAD:
-        return _int_cache["datos"]
-    d = _get("/ledger/integridad", None, timeout=max(TIMEOUT, 15.0))
-    if d is not None:
-        _int_cache.update({"ts": ahora, "datos": d})
-    return d if d is not None else _int_cache["datos"] or {}
+    guardado = _int_cache["datos"]
+    fresco = guardado is not None and ahora - _int_cache["ts"] < CACHE_INTEGRIDAD
+    if not fresco:
+        with _int_lock:
+            lanzar = not _int_refresco["en_curso"]
+            if lanzar:
+                _int_refresco["en_curso"] = True
+        if lanzar:
+            threading.Thread(target=_refrescar_integridad, name="integridad",
+                             daemon=True).start()
+    return guardado or {}
 
 
 def _potencia_real(telemetria, nodos, serie) -> dict:
@@ -129,16 +182,27 @@ def _resumen():
             _cache.update({"ts": ahora, "datos": datos})
             return datos
 
-        # La lista esta acotada en el Core; el total real viene de /stats.
-        nodos = _get("/nodos?limite=500", []) or []
-        serie = _get("/red/serie?minutos=60", {}) or {}
-        # Potencia y latencia MEDIDAS en cada GPU (no la media del Core): es lo
-        # que el minero manda en cada tarea.
-        serie_gpu = _get("/red/serie_gpu?minutos=60", {}) or {}
+        # Todas las lecturas a la vez: en serie era la SUMA de sus latencias
+        # (2,4 s medidos en el panel real con el Core ocupado).
+        partes = _get_varios({
+            # La lista esta acotada en el Core; el total real viene de /stats.
+            "nodos": ("/nodos?limite=500", [], None),
+            "serie": ("/red/serie?minutos=60", {}, None),
+            # Potencia y latencia MEDIDAS en cada GPU (no la media del Core): es
+            # lo que el minero manda en cada tarea.
+            "serie_gpu": ("/red/serie_gpu?minutos=60", {}, None),
+            "ledger": ("/ledger", [], None),
+            "telemetria": ("/red/telemetria", {}, None),
+            "validadores": ("/validador/estado", {}, None),
+        })
+        nodos = partes["nodos"] or []
+        serie = partes["serie"] or {}
+        serie_gpu = partes["serie_gpu"] or {}
+        led = partes["ledger"] or []
+        tele = partes["telemetria"] or {}
+        validadores = partes["validadores"] or {}
+        # Verificacion de la cadena: se sirve la cache y el refresco va aparte.
         integridad = _integridad()
-        led = _get("/ledger", []) or []
-        tele = _get("/red/telemetria", {}) or {}
-        validadores = _get("/validador/estado", {}) or {}
         datos = {
             "ok": True,
             "ts": int(time.time()),
