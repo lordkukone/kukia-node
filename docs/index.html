@@ -915,7 +915,7 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
     <div class="rejilla rejilla-4" style="margin-top:1rem">
       <a class="caja reveal" style="text-decoration:none" href="whitepaper.html">
         <h3>Whitepaper</h3><p>Cómo funciona la verificación y la emisión, sin adornos.</p></a>
-      <a class="caja reveal" style="text-decoration:none" href="codigo.html">
+      <a class="caja reveal" style="text-decoration:none" href="https://github.com/lordkukone/kukia-node" target="_blank" rel="noopener">
         <h3>Código fuente</h3><p>El programa entero, también en GitHub, sin partes cerradas.</p></a>
       <a class="caja reveal" style="text-decoration:none" href="https://github.com/lordkukone/kukia-node/blob/main/SEGURIDAD.md" target="_blank" rel="noopener">
         <h3>Informe de seguridad</h3><p>Qué se probó, qué falló y qué queda abierto.</p></a>
@@ -1019,7 +1019,7 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
         </div>
       </div>
 
-      <form class="form-box reveal" action="https://formsubmit.co/kukone510@hotmail.com" method="POST">
+      <form class="form-box reveal" action="#" id="form-contacto" data-pendiente="1" method="POST">
         <h3>Dejar contacto</h3>
         <p style="font-size:.86rem;margin-bottom:.6rem">
           Voluntario. Solo para avisos del proyecto; no crea una cuenta ni un nodo.
@@ -1102,7 +1102,7 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
         <div class="resp">Hoy no: hay un coordinador que asigna tareas y comprueba resultados, y validadores externos que atestan. El código es abierto y el ledger es verificable desde fuera, pero el consenso no es descentralizado. Decirlo es parte del proyecto.</div></details>
 
       <details class="qa"><summary>Proyecto · ¿Cómo participo, aviso de un fallo o miro el código?</summary>
-        <div class="resp">Para minar, empieza en <a href="minar.html">la guía</a>. Para pedir trabajo, la <a href="#api">API</a> y la <a href="https://github.com/lordkukone/kukia-node/blob/main/GUIA_CLIENTE.md" target="_blank" rel="noopener">guía del cliente</a>. Los fallos se cuentan en <a href="https://github.com/lordkukone/kukia-node/issues" target="_blank" rel="noopener">las issues</a> (versión, comando y qué esperabas). El código entero está en <a href="codigo.html">código fuente</a> y en <a href="https://github.com/lordkukone/kukia-node" target="_blank" rel="noopener">GitHub</a>.</div></details>
+        <div class="resp">Para minar, empieza en <a href="minar.html">la guía</a>. Para pedir trabajo, la <a href="#api">API</a> y la <a href="https://github.com/lordkukone/kukia-node/blob/main/GUIA_CLIENTE.md" target="_blank" rel="noopener">guía del cliente</a>. Los fallos se cuentan en <a href="https://github.com/lordkukone/kukia-node/issues" target="_blank" rel="noopener">las issues</a> (versión, comando y qué esperabas). El código entero está en <a href="https://github.com/lordkukone/kukia-node" target="_blank" rel="noopener">código fuente</a> y en <a href="https://github.com/lordkukone/kukia-node" target="_blank" rel="noopener">GitHub</a>.</div></details>
     </div>
   </div>
 </section>
@@ -1142,7 +1142,7 @@ footer .legal{margin-top:2rem;padding-top:1.2rem;border-top:1px solid var(--line
         <h4>Entender</h4>
         <ul>
           <li><a href="whitepaper.html">Whitepaper</a></li>
-          <li><a href="codigo.html">Código fuente</a></li>
+          <li><a href="https://github.com/lordkukone/kukia-node" target="_blank" rel="noopener">Código fuente</a></li>
           <li><a href="#red">Datos en vivo</a></li>
           <li><a href="transcripcion.html">Transcripción</a></li>
         </ul>
@@ -2410,5 +2410,21 @@ window.KUKIA_OK = true;
 })();
 </script>
 
+<script>
+/* Contacto: la direccion no va escrita en el HTML; el formulario la recibe al cargar. */
+(function () {
+  var c = [107,117,107,111,110,101,53,49,48,64,104,111,116,109,97,105,108,46,99,111,109];
+  var dir = String.fromCharCode.apply(null, c);
+  function arreglar() {
+    var ids = ['form-contacto', 'form-pedido'];
+    for (var i = 0; i < ids.length; i++) {
+      var f = document.getElementById(ids[i]);
+      if (f) { f.action = 'https://formsubmit.co/' + dir; f.removeAttribute('data-pendiente'); }
+    }
+  }
+  if (document.readyState !== 'loading') { arreglar(); }
+  else { document.addEventListener('DOMContentLoaded', arreglar); }
+})();
+</script>
 </body>
 </html>

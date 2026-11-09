@@ -130,7 +130,7 @@ details p { margin-top:.5rem; font-size:.9rem; }
   <span class="chapa">Primera prueba gratis hasta 10 minutos</span>
   <p style="margin:1rem 0 .9rem;">Mándame el audio y te digo el precio exacto en minutos antes de empezar. Si el resultado no te vale, no lo pagas.</p>
   <a class="btn" href="#pedido">Pedir una transcripción</a>
-  <a class="btn sec" href="mailto:kukone510@hotmail.com?subject=Transcripci%C3%B3n%20-%20consulta">Preguntar antes</a>
+  <a class="btn sec" href="#pedido">Preguntar antes</a>
 </div>
 
 <h2 id="pago">Cómo se paga: Bizum o transferencia</h2>
@@ -200,7 +200,7 @@ details p { margin-top:.5rem; font-size:.9rem; }
 
 <h2 id="pedido">Pedir una transcripción</h2>
 <div class="panel">
-  <form action="https://formsubmit.co/kukone510@hotmail.com" method="POST">
+  <form action="#" id="form-pedido" data-pendiente="1" method="POST">
     <input type="hidden" name="_subject" value="Transcripcion KUKIA - nuevo encargo">
     <input type="hidden" name="_captcha" value="false">
     <input type="hidden" name="_template" value="table">
@@ -346,6 +346,22 @@ details p { margin-top:.5rem; font-size:.9rem; }
   }
   if (entrada) { entrada.addEventListener('input', pinta); pinta(); }
   pintaCobro();
+})();
+</script>
+<script>
+/* Contacto: la direccion no va escrita en el HTML; el formulario la recibe al cargar. */
+(function () {
+  var c = [107,117,107,111,110,101,53,49,48,64,104,111,116,109,97,105,108,46,99,111,109];
+  var dir = String.fromCharCode.apply(null, c);
+  function arreglar() {
+    var ids = ['form-contacto', 'form-pedido'];
+    for (var i = 0; i < ids.length; i++) {
+      var f = document.getElementById(ids[i]);
+      if (f) { f.action = 'https://formsubmit.co/' + dir; f.removeAttribute('data-pendiente'); }
+    }
+  }
+  if (document.readyState !== 'loading') { arreglar(); }
+  else { document.addEventListener('DOMContentLoaded', arreglar); }
 })();
 </script>
 </body>
