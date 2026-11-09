@@ -15,12 +15,15 @@ Que comprueba:
   5. Sin token de admin no se anota (403), y un importe 0 o negativo tampoco (400).
   6. La lista publica no saca el nombre del cliente; la de admin si.
   7. `cobros.py` (la herramienta) anota el .json de una transcripcion de verdad.
+  8. El registro local de intentos: el 403 de la herramienta (token equivocado y
+     token ausente) queda apuntado con su sha8, y el cobro bueno tambien.
 
 Uso:
   python tools/prueba_ingresos.py
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -227,9 +230,13 @@ def main() -> int:
             "precio_eur": 3.8, "palabras": 3980, "motor": "faster-whisper/cuda",
             "modelo": "fw-small"}, ensure_ascii=False), encoding="utf-8")
         import cobros
+        registro = tmp / "cobros_registro.jsonl"
         entorno_cobro = dict(os.environ)
         os.environ["KUKIA_CORE"] = base
         os.environ["KUKIA_ADMIN_TOKEN"] = str(tmp / "admin_token.txt")
+        # El registro tambien va a la carpeta temporal: si no, un intento de
+        # prueba apareceria en el registro real como si fuera un cobro de hoy.
+        os.environ["KUKIA_COBROS_REGISTRO"] = str(registro)
         try:
             r = cobros.anotar(trabajo.name, "Gestoria Perez", 25.31, 3.8,
                               detalle={"fichero": trabajo.name}, core=base)
@@ -240,6 +247,67 @@ def main() -> int:
         c, s3 = pedir(base, "GET", "/stats")
         check("el total acumula los dos trabajos (9,41 EUR)",
               abs(float(s3["ingresos"]["total_eur"]) - 9.41) < 1e-9, str(s3["ingresos"]))
+
+        # 8) el registro local de intentos y el 403 de la herramienta
+        #    (el 403 de arriba es a pelo; este pasa por cobros.anotar())
+        token_malo = tmp / "token_malo.txt"
+        token_malo.write_text("m" * 64, encoding="utf-8")
+        sha_malo = hashlib.sha256(("m" * 64).encode()).hexdigest()[:8]
+
+        def lineas_registro() -> list:
+            if not registro.is_file():
+                return []
+            return [json.loads(l) for l in
+                    registro.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+        def cobrar(trabajo, cliente, minutos, precio, token_path):
+            """cobros.anotar() con su propio token y su propio registro."""
+            previo = dict(os.environ)
+            os.environ["KUKIA_ADMIN_TOKEN"] = str(token_path)
+            os.environ["KUKIA_COBROS_REGISTRO"] = str(registro)
+            os.environ.pop("KUKIA_ADMIN_TOKEN_TEXTO", None)
+            try:
+                return cobros.anotar(trabajo, cliente, minutos, precio, core=base)
+            finally:
+                os.environ.clear()
+                os.environ.update(previo)
+
+        r403 = cobrar("token_malo.mp3", "Cliente 403", 10.0, 2.5, token_malo)
+        check("cobros.anotar() con token equivocado recibe 403",
+              r403["ok"] is False and r403["estado"] == 403, str(r403.get("estado")))
+        check("el 403 de la herramienta dice sha8 y origen",
+              f"sha8={sha_malo}" in r403["mensaje"] and "origen=fichero" in r403["mensaje"],
+              r403["mensaje"])
+        reg = lineas_registro()
+        check("el fallo queda apuntado en el registro",
+              bool(reg) and reg[-1]["estado"] == 403 and
+              reg[-1]["motivo"] == "token_rechazado", str(reg[-1] if reg else None)[:200])
+        check("el registro guarda el sha8 y nunca el token",
+              bool(reg) and reg[-1]["token_sha8"] == sha_malo and
+              ("m" * 64) not in json.dumps(reg, ensure_ascii=False),
+              str(reg[-1] if reg else None)[:200])
+
+        r_sin = cobrar("sin_token.mp3", "Cliente sin token", 4.0, 1.0,
+                       tmp / "no_existe.txt")
+        check("sin fichero de token el motivo es sin_token",
+              r_sin["estado"] == 403 and r_sin.get("motivo") == "sin_token",
+              str(r_sin.get("motivo")))
+        check("y el mensaje no culpa al Core",
+              "no se envio token" in r_sin["mensaje"], r_sin["mensaje"])
+        reg = lineas_registro()
+        check("el registro distingue el token ausente",
+              [u["motivo"] for u in reg[-2:]] == ["token_rechazado", "sin_token"] and
+              reg[-1]["token_sha8"] == "", str(reg[-1] if reg else None)[:200])
+
+        r_ok = cobrar("registro_ok.mp3", "Gestoria Perez", 12.0, 2.2,
+                      tmp / "admin_token.txt")
+        check("el cobro bueno tambien se apunta", r_ok["ok"] is True)
+        reg = lineas_registro()
+        check("registro: ok=True, estado=200 y motivo anotado",
+              reg[-1]["ok"] is True and reg[-1]["estado"] == 200 and
+              reg[-1]["motivo"] == "anotado", str(reg[-1] if reg else None)[:200])
+        check("el registro no lleva el token bueno",
+              token not in json.dumps(reg, ensure_ascii=False))
 
         # y el reinicio del Core no pierde ni cambia los ingresos
         c, r2 = pedir(base, "GET", "/ingresos")

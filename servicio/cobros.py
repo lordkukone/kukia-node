@@ -13,6 +13,10 @@ POR QUE EXISTE
   El Core tiene que estar arrancado (127.0.0.1:8300). El token de admin se lee
   de `coordinator/admin_token.txt` o de KUKIA_ADMIN_TOKEN; nunca se imprime.
 
+  Cada intento (entre o no en el ledger) queda apuntado en
+  `servicio/cobros_registro.jsonl` con el sha8 del token, nunca el token: un
+  403 o un Core caido se puede leer despues en vez de perderse en la consola.
+
 USO
   # anotar el trabajo a partir del .json que deja transcribir.py
   python servicio/cobros.py --trabajo servicio/entregas/20261025/charla.json \
@@ -24,6 +28,10 @@ USO
   # cuanto se ha cobrado hasta hoy (lo mismo que publica /ingresos)
   python servicio/cobros.py --resumen
 
+  # lo que se intento y no entro, y volver a mandarlo (una a una, a mano)
+  python servicio/cobros.py --pendientes
+  python servicio/cobros.py --reintentar
+
   # lo que queda anotado en el Core, con nombres (necesita el token)
   python servicio/cobros.py --lista
 
@@ -34,9 +42,11 @@ euro contado dos veces dejaria de ser prueba de nada.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -55,15 +65,113 @@ def archivo_token() -> Path:
                 or (RAIZ / "coordinator" / "admin_token.txt"))
 
 
-def token_admin() -> str:
-    """Token del Core (mismo fichero que usa para administrarse). Vacio si no hay."""
+def _sha8(valor: str) -> str:
+    """Huella corta del token: compara dos tokens sin enseñar ninguno."""
+    if not valor:
+        return ""
+    return hashlib.sha256(valor.encode("utf-8")).hexdigest()[:8]
+
+
+def token_diagnostico() -> dict:
+    """De donde sale el token y por que, sin enseñar el valor.
+
+    Devuelve {token, origen, error, sha8}. `origen` es "fichero", "env" o
+    "ninguno". Antes todo esto era un `except Exception: pass`, asi que un 403
+    no distinguia "no mande token" de "mande uno viejo": las dos cosas se
+    arreglan de forma distinta y ahora se pueden separar.
+    """
+    error = ""
     try:
         f = archivo_token()
         if f.is_file():
-            return f.read_text(encoding="utf-8").strip()
+            t = f.read_text(encoding="utf-8").strip()
+            if t:
+                return {"token": t, "origen": "fichero", "error": "", "sha8": _sha8(t)}
+            error = "el fichero del token esta vacio"
+        else:
+            error = "el fichero del token no existe"
+    except Exception as e:
+        error = f"no se pudo leer el token ({type(e).__name__}: {e})"
+    t = os.environ.get("KUKIA_ADMIN_TOKEN_TEXTO", "").strip()
+    if t:
+        return {"token": t, "origen": "env", "error": error, "sha8": _sha8(t)}
+    return {"token": "", "origen": "ninguno", "error": error, "sha8": ""}
+
+
+def token_admin() -> str:
+    """Token del Core (mismo fichero que usa para administrarse). Vacio si no hay."""
+    return token_diagnostico()["token"]
+
+
+def registro_cobros() -> Path:
+    """Donde se apunta cada intento de cobro (se mira en CADA llamada).
+
+    El registro es local y no sustituye al ledger: el ledger dice lo que ENTRO;
+    esto dice lo que se INTENTO, para que un 403 o un Core caido no se quede en
+    una linea de consola que nadie lee. Lleva nombres de cliente, asi que no se
+    publica ni se sube al repositorio.
+    """
+    return Path(os.environ.get("KUKIA_COBROS_REGISTRO")
+                or (RAIZ / "servicio" / "cobros_registro.jsonl"))
+
+
+def intentos() -> list:
+    """Lee el registro local de intentos (una linea JSON por intento).
+
+    Si el fichero no existe o una linea esta rota, se ignora: el registro es
+    una ayuda, no la fuente de verdad (esa es el ledger del Core).
+    """
+    ruta = registro_cobros()
+    if not ruta.is_file():
+        return []
+    salida = []
+    try:
+        for linea in ruta.read_text(encoding="utf-8").splitlines():
+            linea = linea.strip()
+            if not linea:
+                continue
+            try:
+                u = json.loads(linea)
+            except Exception:
+                continue
+            if isinstance(u, dict):
+                salida.append(u)
     except Exception:
-        pass
-    return os.environ.get("KUKIA_ADMIN_TOKEN_TEXTO", "").strip()
+        return salida
+    return salida
+
+
+def _clave(u: dict) -> tuple:
+    """Identidad del cobro: la misma que usa el Core para no contar dos veces."""
+    try:
+        precio = round(float(u.get("precio_eur") or 0.0), 2)
+    except (TypeError, ValueError):
+        precio = 0.0
+    return (u.get("servicio") or "transcripcion", u.get("cliente") or "",
+            u.get("trabajo") or "", precio)
+
+
+def pendientes() -> list:
+    """Cobros que se intentaron y NO entraron en el ledger.
+
+    Manda el ULTIMO intento de cada cobro: si ese entro (200) o el Core dijo
+    que ya estaba (409), el euro esta dentro y no se repite. Asi un reintento
+    que funciono no vuelve a aparecer por culpa de los fallos anteriores.
+    """
+    ultimo = {}
+    orden = []
+    for u in intentos():
+        k = _clave(u)
+        if k not in ultimo:
+            orden.append(k)
+        ultimo[k] = u
+    fuera = []
+    for k in orden:
+        u = ultimo[k]
+        if u.get("ok") is True or u.get("ya_estaba") or u.get("estado") in (200, 409):
+            continue
+        fuera.append(u)
+    return fuera
 
 
 def _llamar(metodo: str, ruta: str, cuerpo: dict | None = None,
@@ -95,41 +203,86 @@ def leer_trabajo(ruta: Path) -> dict:
     return d
 
 
-def anotar(trabajo: str, cliente: str, minutos: float, precio_eur: float,
-           servicio: str = "transcripcion", detalle: dict | None = None,
-           core: str = CORE) -> dict:
-    """Manda el ingreso al Core. Devuelve {ok, estado, mensaje, id}."""
-    cuerpo = {"servicio": servicio, "cliente": cliente, "trabajo": trabajo,
-              "minutos": round(float(minutos), 2),
-              "precio_eur": round(float(precio_eur), 2),
-              "detalle": detalle or {}}
-    codigo, datos = _llamar("POST", "/admin/ingresos", cuerpo,
-                            core=core, token=token_admin())
+def _apuntar(registro: dict) -> None:
+    """Deja constancia en disco de un intento de cobro. Nunca lanza.
+
+    El cobro no puede romper el trabajo, asi que esto va lo ultimo y cualquier
+    fallo (disco lleno, permisos, ruta rara) se ignora: el trabajo ya esta
+    entregado y su .json sigue ahi para volver a anotarlo a mano.
+    """
+    try:
+        ruta = registro_cobros()
+        ruta.parent.mkdir(parents=True, exist_ok=True)
+        with ruta.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(registro, ensure_ascii=False) + "\n")
+            f.flush()
+    except Exception:
+        pass
+
+
+def _resultado(codigo: int, datos: dict, diag: dict, core: str) -> dict:
+    """Traduce la respuesta del Core a algo legible y registrable."""
+    base = {"estado": codigo, "token_origen": diag["origen"],
+            "token_sha8": diag["sha8"]}
     if codigo == 200:
-        return {"ok": True, "estado": codigo,
+        return {**base, "ok": True, "motivo": "anotado",
                 "mensaje": (f"ingreso #{datos.get('id')} anotado: "
                             f"{datos.get('precio_eur')} EUR, asiento "
                             f"{(datos.get('asiento_hash') or '')[:12]}…"),
                 "datos": datos, "id": datos.get("id")}
     if codigo == 409:
-        return {"ok": False, "estado": codigo, "ya_estaba": True,
+        return {**base, "ok": False, "motivo": "ya_estaba", "ya_estaba": True,
                 "mensaje": f"ya estaba anotado: {datos.get('detail', '')}"}
     if codigo == 403:
-        return {"ok": False, "estado": codigo,
-                "mensaje": "el Core no acepta el token de admin "
-                           "(¿has arrancado el Core con otro fichero?)"}
+        # El 403 tiene DOS causas que antes se confundian: no mandar token (el
+        # fichero no existe, esta vacio o no se puede leer) o mandar uno que el
+        # Core no tiene en memoria. El sha8 las separa sin enseñar el secreto.
+        if not diag["sha8"]:
+            return {**base, "ok": False, "motivo": "sin_token",
+                    "mensaje": (f"no se envio token al Core ({diag['error'] or 'sin token'}); "
+                                f"revisa {archivo_token()} o KUKIA_ADMIN_TOKEN")}
+        return {**base, "ok": False, "motivo": "token_rechazado",
+                "mensaje": (f"el Core rechaza el token enviado "
+                            f"(sha8={diag['sha8']}, origen={diag['origen']}): si lo has "
+                            f"rotado, el Core sigue con el viejo en memoria hasta "
+                            f"que lo reinicies")}
     if codigo == 0:
-        return {"ok": False, "estado": 0,
-                "mensaje": f"el Core no responde en {core}: "
-                           f"{datos.get('detail', '')}"}
+        return {**base, "ok": False, "motivo": "core_no_responde",
+                "mensaje": f"el Core no responde en {core}: {datos.get('detail', '')}"}
     if codigo == 404:
         # El Core esta vivo pero es el codigo viejo: /admin/ingresos aun no
         # existe en el proceso que corre. Hay que reiniciarlo.
-        return {"ok": False, "estado": 404,
+        return {**base, "ok": False, "motivo": "core_sin_ingresos",
                 "mensaje": "el Core que esta corriendo no tiene los ingresos "
                            "todavia: reinicialo con el codigo nuevo"}
-    return {"ok": False, "estado": codigo,
+    return {**base, "ok": False, "motivo": "otro",
             "mensaje": f"el Core respondio {codigo}: {datos.get('detail', datos)}"}
+
+
+def anotar(trabajo: str, cliente: str, minutos: float, precio_eur: float,
+           servicio: str = "transcripcion", detalle: dict | None = None,
+           core: str = CORE) -> dict:
+    """Manda el ingreso al Core. Devuelve {ok, estado, motivo, mensaje, id}."""
+    cuerpo = {"servicio": servicio, "cliente": cliente, "trabajo": trabajo,
+              "minutos": round(float(minutos), 2),
+              "precio_eur": round(float(precio_eur), 2),
+              "detalle": detalle or {}}
+    diag = token_diagnostico()
+    codigo, datos = _llamar("POST", "/admin/ingresos", cuerpo,
+                            core=core, token=diag["token"])
+    r = _resultado(codigo, datos, diag, core)
+    # Constancia local: se apunta el intento entre o no en el ledger. El sha8
+    # del token sirve para comparar con el que tiene el Core; el token, nunca.
+    _apuntar({"fecha": time.strftime("%Y-%m-%dT%H:%M:%S"),
+              "ok": r["ok"], "estado": codigo, "motivo": r.get("motivo", ""),
+              "servicio": servicio, "trabajo": trabajo, "cliente": cliente,
+              "minutos": round(float(minutos), 2),
+              "precio_eur": round(float(precio_eur), 2), "core": core,
+              "detalle": detalle or {},
+              "token_origen": diag["origen"], "token_sha8": diag["sha8"],
+              "token_error": diag["error"],
+              "mensaje": str(r.get("mensaje", ""))[:300]})
+    return r
 
 
 def resumen(core: str = CORE) -> tuple:
@@ -152,6 +305,10 @@ def main(argv=None) -> int:
                     help="cuanto se ha cobrado (lo que publica /ingresos)")
     ap.add_argument("--lista", action="store_true",
                     help="lista con nombres (necesita el token de admin)")
+    ap.add_argument("--pendientes", action="store_true",
+                    help="cobros intentados que NO entraron en el ledger")
+    ap.add_argument("--reintentar", action="store_true",
+                    help="vuelve a mandar los pendientes, uno a uno (manual)")
     args = ap.parse_args(argv)
 
     if args.resumen:
@@ -187,8 +344,46 @@ def main(argv=None) -> int:
                   f"{r['trabajo']}  asiento {(r['asiento_hash'] or '')[:12]}")
         return 0
 
+    if args.pendientes:
+        cola = pendientes()
+        if not cola:
+            print("no hay cobros pendientes: todo lo intentado esta en el ledger")
+            return 0
+        print(f"{len(cola)} cobro(s) intentado(s) y no anotado(s):")
+        total = 0.0
+        for u in cola:
+            total += float(u.get("precio_eur") or 0.0)
+            print(f"  {u.get('fecha', '?')}  {float(u.get('precio_eur') or 0):7.2f} EUR  "
+                  f"estado {u.get('estado')} ({u.get('motivo') or '?'})  "
+                  f"{u.get('trabajo') or '(sin nombre)'}  ·  "
+                  f"{u.get('cliente') or '(sin cliente)'}")
+        print(f"  total sin anotar: {total:.2f} EUR")
+        return 0
+
+    if args.reintentar:
+        cola = pendientes()
+        if not cola:
+            print("no hay cobros pendientes: nada que reintentar")
+            return 0
+        print(f"reintentando {len(cola)} cobro(s) contra {args.core}…")
+        bien = mal = 0
+        for u in cola:
+            r = anotar(u.get("trabajo") or "transcripcion", u.get("cliente") or "",
+                       float(u.get("minutos") or 0.0),
+                       float(u.get("precio_eur") or 0.0),
+                       u.get("servicio") or "transcripcion",
+                       u.get("detalle") or {}, args.core)
+            if r["ok"] or r.get("ya_estaba"):
+                bien += 1
+                print(f"  [ok] {u.get('trabajo')}: {r['mensaje']}")
+            else:
+                mal += 1
+                print(f"  [aviso] {u.get('trabajo')}: {r['mensaje']}")
+        print(f"\n{bien} resuelto(s), {mal} sigue(n) fuera")
+        return 0 if mal == 0 else 1
+
     if not args.trabajo:
-        ap.error("hace falta --trabajo (o --resumen / --lista)")
+        ap.error("hace falta --trabajo (o --resumen / --lista / --pendientes / --reintentar)")
 
     ruta = Path(args.trabajo)
     minutos, precio, detalle, nombre = args.minutos, args.importe, {}, args.trabajo

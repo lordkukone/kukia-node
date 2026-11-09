@@ -192,3 +192,6 @@ PRUEBA_LOCAL.html
 # Decision del 27-10-2026: sigue en el disco y se verifica en el nodo; la web
 # publica el resumen (moneda.json) y los anclajes siguen en anclas/.
 coordinator/sellos.jsonl
+
+# registro local de intentos de cobro (lleva nombres de cliente)
+servicio/cobros_registro.jsonl
