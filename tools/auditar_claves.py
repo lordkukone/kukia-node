@@ -32,7 +32,8 @@ SALTAR_DIR = {".git", "__pycache__", "node_modules", ".wrangler"}
 BILLETERA_COPIADA = re.compile(
     r'"(?:clave_privada_cifrada|mnemonico_cifrado)"\s*:\s*"[A-Za-z0-9+/=]{40,}"')
 # Rutas que la web publica sirve y conviene revisar.
-WEB_RUTAS = ["", "index.html", "wallet.html", "codigo.html", "minar.html",
+# codigo.html salio el 09-11-2026: el sitio enlaza al repositorio de GitHub.
+WEB_RUTAS = ["", "index.html", "wallet.html", "minar.html",
              "whitepaper.html", "metricas.json", "sw.js", "manifest.json",
              "kukia-node.zip"]
 

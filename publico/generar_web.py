@@ -1,8 +1,13 @@
-"""Regenera docs/codigo.html y docs/kukia-node.zip desde el codigo real.
+"""Regenera docs/kukia-node.zip y los datos de la web desde el codigo real.
 
-Antes estas dos piezas se actualizaban a mano y se quedaron con el codigo
-viejo (sin el arreglo de cobro). Este script las reconstruye siempre desde los
-ficheros de disco, asi que lo publicado es lo que corre.
+Antes el zip se actualizaba a mano y se quedo con el codigo viejo (sin el
+arreglo de cobro). Este script lo reconstruye siempre desde los ficheros de
+disco, asi que lo publicado es lo que corre.
+
+La pagina docs/codigo.html ya NO se genera (09-11-2026): repetia el codigo
+entero en una copia que se quedaba vieja, y el sitio enlaza al repositorio de
+GitHub. Si alguien vuelve a pedir esa pagina, que sea una decision aparte, no
+un efecto de regenerar la web.
 
 Uso:
   python publico/generar_web.py            # escribe en docs/
@@ -49,35 +54,6 @@ DESTINO = RAIZ / "docs"
 # tocar el codigo el dia que haya dominio propio apuntando de verdad.
 CANONICO = "https://site-1ea296595daa4ba7935f1574ab9a5a13.freebuff.page"
 
-FUENTES = [
-    ("Coordinador (Core)", "coordinator/kukia_core.py"),
-    ("Minero (Worker multi-GPU)", "worker/kukia_worker.py"),
-    ("Validador independiente", "validator/kukia_validator.py"),
-    ("Billetera", "ledger/kukia_wallet.py"),
-    ("Sellos del ledger (integridad)", "ledger/sellos.py"),
-    ("Auditor de sellos", "publico/verificar_sellos.py"),
-    ("Rescate de saldos antiguos", "tools/rescatar_saldos.py"),
-    ("Salud de la moneda", "tools/salud.py"),
-    ("Calculadora de valor (supuestos a la vista)", "tools/calculadora_valor.py"),
-    ("Copia de seguridad verificada", "tools/backup_ledger.py"),
-    ("Restauracion probada", "tools/probar_restauracion.py"),
-    ("Prueba del rele (sin red)", "publico/probar_relay.mjs"),
-    ("Dashboard (panel de operaciones)", "dashboard/kukia_dash.py"),
-    ("Pruebas de integracion (copia del ledger)", "tools/pruebas_seguridad.py"),
-    ("Rele publico (metricas)", "publico/relay.js"),
-    ("Publicador local", "publico/publicar_metricas.py"),
-    ("Programar la copia diaria", "tools/programar_backup.ps1"),
-    ("Guardia (procesos siempre vivos)", "tools/guardia.py"),
-    ("Direccion estable del Core (tunel)", "tools/core_destino.py"),
-    ("Tunel publico con direccion estable", "tools/tunel_estable.py"),
-    ("Tunel con nombre (dominio propio)", "tools/tunel_dominio.py"),
-    ("Anclaje en Bitcoin (OpenTimestamps)", "tools/anclar_ots.py"),
-    ("Anclaje: como se verifica", "ANCLAJE.md"),
-    ("Benchmark real de la GPU", "tools/benchmark_gpu.py"),
-    ("Comprobador del entorno del minero", "tools/instalar_minero.py"),
-    ("Estrategia: contra Bitcoin y plan del minero", "ESTRATEGIA.md"),
-    ("Multisig: diseno y migracion", "MULTISIG.md"),
-]
 
 EN_ZIP = [
     "coordinator/kukia_core.py",
@@ -171,66 +147,6 @@ EN_ZIP = [
     "requirements.txt",
 ]
 
-CABECERA = """<!DOCTYPE html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<link rel="canonical" href="{canonico}/codigo.html">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KUKIA | Codigo fuente completo - Transparencia total</title>
-<meta name="description" content="Codigo fuente completo de KUKIA: core, worker, billetera y dashboard. Todo legible y verificable.">
-<style>
-:root {{ --gold:#d4af37; --navy:#081a3a; --line:#27487c; --text:#c3d1ea; }}
-* {{ margin:0; padding:0; box-sizing:border-box; }}
-/* AUDITORIA 24-10-2026: foco visible para quien navega con el teclado. */
-a:focus-visible, summary:focus-visible, button:focus-visible {{ outline:3px solid #d4af37; outline-offset:2px; border-radius:4px; }}
-body {{ font-family:'Segoe UI',system-ui,sans-serif; background:var(--navy); color:#fff; line-height:1.6; }}
-.wrap {{ max-width:1000px; margin:0 auto; padding:3rem 1.5rem; }}
-h1 {{ color:var(--gold); font-size:2.2rem; margin-bottom:.4rem; }}
-.sub {{ color:var(--text); margin-bottom:1rem; font-style:italic; }}
-.intro {{ background:rgba(18,48,94,.4); border-left:3px solid var(--gold); padding:1rem 1.3rem; border-radius:0 10px 10px 0; margin:1.5rem 0 2.5rem; color:var(--text); font-size:.95rem; }}
-h2 {{ color:var(--gold); font-size:1.2rem; margin:2.5rem 0 .8rem; border-bottom:1px solid var(--line); padding-bottom:.5rem; }}
-.huella {{ color:var(--text); font-size:.8rem; line-height:1.7; margin:-.4rem 0 1rem; word-break:break-all; }}
-.huella code {{ color:#d4af37; font-size:.78rem; white-space:normal; }}
-pre {{ background:#050f22; border:1px solid var(--line); border-radius:12px; padding:1.2rem; overflow-x:auto; }}
-code {{ font-family:'Cascadia Code',Consolas,monospace; font-size:.82rem; color:#c8d6f0; white-space:pre; }}
-.back {{ display:inline-block; margin-bottom:2rem; color:var(--gold); text-decoration:none; }}
-.back:hover {{ text-decoration:underline; }}
-.foot {{ margin-top:3rem; color:#789; font-size:.85rem; }}
-</style>
-</head>
-<body>
-<div class="wrap">
-<a class="back" href="index.html">&larr; Volver a KUKIA</a>
-<h1>Codigo fuente completo</h1>
-<div class="sub">Transparencia total: todo el software de KUKIA a la vista. Nada oculto.</div>
-<div class="intro">Este es el codigo exacto que corre la red: el coordinador (Core), el minero (Worker), la billetera, el dashboard
-y el rele que publica las metricas de esta web. Cualquiera puede leerlo, copiarlo y auditarlo. Si encuentras un error o mejoras,
-se corrigen. Tambien puedes descargarlo empaquetado en <a href="kukia-node.zip" style="color:var(--gold);">kukia-node.zip</a>
-(huella SHA-256: <code>{hash_zip}</code>, tambien en <a href="kukia-node.zip.sha256" style="color:var(--gold);">kukia-node.zip.sha256</a>).
-<br><br>El paquete <b>no lleva ninguna clave, ninguna billetera y ningun dato de nadie</b>: solo el programa. La billetera se crea en tu PC
-en la primera vuelta y su clave privada queda cifrada con tu usuario de Windows. Comprueba la huella antes de ejecutarlo: si no coincide, no es el nuestro.
-<br><br>Generado desde los ficheros reales el {fecha}. Si no coincide con lo que descargas, es un fallo: dilo y se arregla.</div>
-"""
-
-# 30-10-2026 (F2-61): las dos huellas de cada fichero se publican JUNTAS en la
-# pagina de codigo. Antes solo salia el SHA-256 del paquete y, para el codigo,
-# habia que ir a /version: quien descargaba el fichero de GitHub y lo comparaba
-# con el de disco veia distinto SIEMPRE (en Windows el fichero de trabajo lleva
-# CRLF y el repositorio sirve LF), y parecia que alguien habia tocado el codigo.
-DOS_HUELLAS = """<div class="intro" style="margin-top:-1rem"><b>Dos huellas por fichero.</b>
-La <b>cruda</b> es de los bytes exactos del fichero que corre en este PC: en Windows los finales de linea son CRLF.
-La <b>LF</b> es del mismo texto con los finales de linea pasados a LF, que es como lo guarda y lo sirve GitHub.
-Si descargas un fichero del repositorio y no te cuadra la cruda, no es un error: compara con la LF.
-Si no cuadra ninguna de las dos, lo que hay aqui no es lo que esta en el repositorio, y eso si es un fallo.</div>
-"""
-
-PIE = """<div class="foot">KUKIA Network - prototipo en fase de pruebas. Sin auditoria externa todavia. Sin precio hasta demanda real.</div>
-</div>
-</body>
-</html>
-"""
-
 
 def dos_huellas(datos: bytes) -> tuple[str, str]:
     """(cruda, LF) de un fichero.
@@ -318,32 +234,6 @@ def publicar_huellas_minero(destino: Path) -> int:
     nuevo = texto[:i] + bloque + texto[j + len(fin):]
     ruta.write_bytes(nuevo.replace("\n", eol).encode("utf-8"))
     return len(huellas)
-
-
-def generar_codigo(destino: Path, fecha: str, hash_zip: str = "",
-                   canonico: str = CANONICO) -> Path:
-    partes = [CABECERA.format(fecha=fecha, hash_zip=hash_zip or "(pendiente)",
-                              canonico=canonico), DOS_HUELLAS]
-    for titulo, rel in FUENTES:
-        ruta = RAIZ / rel
-        if not ruta.exists():
-            continue
-        datos = ruta.read_bytes()
-        # El texto se publica con los saltos ya normalizados a LF: si se colara
-        # el CRLF del disco, la escritura en modo texto lo volveria a traducir y
-        # el codigo saldria con una linea en blanco entre cada linea. Las
-        # huellas NO se toman de 'texto', sino de 'datos' (los bytes reales).
-        texto = datos.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "\n")
-        cruda, lf = dos_huellas(datos)
-        partes.append(f"<h2>{html.escape(titulo)} - {html.escape(rel)}</h2>\n")
-        partes.append(
-            '<p class="huella">SHA-256 cruda: <code>' + cruda +
-            '</code><br>SHA-256 LF: <code>' + lf + '</code></p>\n')
-        partes.append("<pre><code>" + html.escape(texto) + "</code></pre>\n")
-    partes.append(PIE)
-    salida = destino / "codigo.html"
-    salida.write_text("\n".join(partes), encoding="utf-8")
-    return salida
 
 
 # Nada de esto puede acabar NUNCA en el paquete publico: son claves, bases de
@@ -624,7 +514,7 @@ def generar_version(destino: Path, canonico: str = CANONICO,
 def url_limpia(canonico: str, rel: str) -> str:
     """URL final de una pagina, sin `.html`.
 
-    El sitio de Freebuff responde `307 /codigo.html -> /codigo` (URLs limpias).
+    El sitio de Freebuff responde `307 /minar.html -> /minar` (URLs limpias).
     Declarar la canonica con `.html` mandaria a Google a una redireccion
     temporal en vez de a la pagina buena, asi que se publica la forma final.
     """
@@ -852,8 +742,7 @@ def generar_seo(destino: Path, canonico: str = CANONICO):
     # prioridad y frecuencia por pagina (la portada primero: es la que importa).
     plan = {"index.html": (1.0, "daily"), "minar.html": (0.9, "weekly"),
             "whitepaper.html": (0.8, "monthly"), "wallet.html": (0.7, "weekly"),
-            "transcripcion.html": (0.7, "weekly"),
-            "codigo.html": (0.6, "monthly")}
+            "transcripcion.html": (0.7, "weekly")}
     paginas = []
     for ruta in sorted(destino.glob("*.html")):
         # Los ficheros de verificacion NO son paginas: no van en el sitemap.
@@ -924,7 +813,7 @@ def main() -> int:
     destino.mkdir(parents=True, exist_ok=True)
     # La foto de git se toma ANTES de escribir nada (27-10-2026). Antes se tomaba
     # al final y el vigilante se disparaba a si mismo el pie: el generador
-    # reescribe codigo.html, el zip, la huella y las paginas, y al preguntar
+    # reescribe el zip, la huella y las paginas, y al preguntar
     # despues `git status` esas escrituras ya salian como cambios, asi que la web
     # decia «(sin confirmar)» AUNQUE EL ARBOL ESTUVIERA LIMPIO al empezar. Con la
     # foto al principio, `sucio` dice la verdad: lo que estuviera sin confirmar
@@ -937,7 +826,6 @@ def main() -> int:
     # encontraba. El fichero de huella tiene que ser identico en Linux y Windows.
     (destino / "kukia-node.zip.sha256").write_text(
         f"{huella}  kukia-node.zip\n", encoding="ascii", newline="\n")
-    h = generar_codigo(destino, args.fecha, huella, canonico)
     n_hue = publicar_huellas_minero(destino)
     n_html = fijar_canonico(destino, canonico)
     n_seo = inyectar_seo(destino, canonico)
@@ -947,7 +835,6 @@ def main() -> int:
     n_ver = fijar_version_visible(destino, version, info)
     # version.json va EL ULTIMO: asi sus hashes son los de los ficheros finales.
     v = generar_version(destino, canonico, info)
-    print(f"codigo.html {h.stat().st_size} bytes")
     print(f"kukia-node.zip {z.stat().st_size} bytes | sha256 {huella}")
     print(f"version.json {json.loads(v.read_text(encoding='utf-8'))['v']}")
     print(f"robots.txt {r.stat().st_size} bytes / sitemap.xml {s.stat().st_size} bytes")
