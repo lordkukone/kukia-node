@@ -1,0 +1,3 @@
+# La base del cerebro es estado local, no codigo: se reconstruye con --indexar.
+estado/
+__pycache__/
